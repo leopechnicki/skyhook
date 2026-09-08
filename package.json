@@ -1,0 +1,21 @@
+{
+  "name": "skyhook",
+  "version": "1.0.0",
+  "description": "SKYHOOK - a one-touch neon climbing arcade game. Hook, swing, release. Zero dependencies, zero build step, runs from file://.",
+  "license": "MIT",
+  "private": false,
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve .",
+    "test": "node test/smoke.mjs",
+    "test:smoke": "node test/smoke.mjs",
+    "test:headed": "node test/smoke.mjs --headed",
+    "test:balance": "node test/balance.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.0"
+  },
+  "keywords": ["game", "arcade", "canvas", "html5", "one-touch", "no-build", "vanilla-js"],
+  "repository": { "type": "git", "url": "https://github.com/leopechnicki/skyhook.git" },
+  "homepage": "https://leopechnicki.github.io/skyhook/"
+}

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#060713">
+<meta name="description" content="SKYHOOK - a one-touch neon climbing arcade game. Hook, swing, release. How high can you get?">
+<title>SKYHOOK</title>
+<meta property="og:type" content="website">
+<meta property="og:title" content="SKYHOOK">
+<meta property="og:description" content="A one-touch neon climbing arcade game. Hook, swing, release. How high can you get?">
+<meta property="og:url" content="https://leopechnicki.github.io/skyhook/">
+<meta property="og:image" content="https://leopechnicki.github.io/skyhook/docs/screenshot-playing.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2335e6ff' stroke-width='2'/%3E%3Ccircle cx='16' cy='3.5' r='3.5' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ===== GAME STAGE ===== -->
+  <div id="stage">
+    <canvas id="game" width="480" height="880" aria-label="Skyhook game canvas" role="img"></canvas>
+    <noscript>
+      <p class="noscript">SKYHOOK needs JavaScript enabled to run.</p>
+    </noscript>
+  </div>
+
+  <!-- =========================================================
+       AD SLOT  -  PLACEHOLDER ONLY
+       ---------------------------------------------------------
+       This is the ONLY place an ad unit should ever be inserted.
+       It is intentionally EMPTY: no ad network code, no publisher
+       IDs, no external scripts. See README.md > "Ad slot".
+
+       When an ad account exists, replace the contents of
+       #ad-slot-inner with the ad unit markup, and add the network
+       loader script at the bottom of <body>.
+
+       The slot reserves a fixed height (50px mobile / 90px wide)
+       so dropping in a banner causes zero layout shift (CLS).
+       ========================================================= -->
+  <aside id="ad-slot" data-ad-slot="bottom-banner"
+         data-sizes="320x50,468x60,728x90"
+         aria-label="Advertisement area">
+    <div id="ad-slot-inner">
+      <span class="ad-placeholder-label">AD SLOT &middot; 320&times;50 / 728&times;90 &middot; placeholder</span>
+    </div>
+  </aside>
+
+</div>
+
+<script src="js/utils.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+<!-- Ad network loader script (e.g. AdSense) would go here, after the game scripts. -->
+</body>
+</html>

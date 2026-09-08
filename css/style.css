@@ -1,0 +1,116 @@
+/* SKYHOOK - layout only. All game visuals are drawn on the canvas. */
+
+:root {
+  --bg: #060713;
+  --bg-2: #0a0c1e;
+  --cyan: #35e6ff;
+  --ad-h: 54px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: #cfe9ff;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* Kill mobile scroll / pull-to-refresh / double-tap zoom over the game. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* Respect iOS notches / home indicator. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background:
+    radial-gradient(120% 80% at 50% 0%, #131a3a 0%, rgba(19,26,58,0) 60%),
+    linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%);
+}
+
+#stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#game {
+  display: block;
+  touch-action: none;
+  border-radius: 10px;
+  /* Neon frame so the portrait column reads as a device screen on desktop. */
+  box-shadow:
+    0 0 0 1px rgba(53, 230, 255, 0.18),
+    0 0 34px rgba(53, 230, 255, 0.10),
+    0 18px 60px rgba(0, 0, 0, 0.65);
+  image-rendering: auto;
+}
+
+.noscript {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 24px;
+  font-size: 16px;
+}
+
+/* ===== Ad slot placeholder =====
+   Fixed height => no layout shift when a real banner is dropped in. */
+#ad-slot {
+  flex: 0 0 auto;
+  height: var(--ad-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.015);
+  border-top: 1px solid rgba(53, 230, 255, 0.10);
+}
+
+#ad-slot-inner {
+  width: 320px;
+  max-width: 100%;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(120, 150, 190, 0.30);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ad-placeholder-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(150, 180, 210, 0.42);
+  white-space: nowrap;
+}
+
+/* Wider viewports can host a leaderboard unit. */
+@media (min-width: 760px) and (min-height: 620px) {
+  :root { --ad-h: 96px; }
+  #ad-slot-inner { width: 728px; height: 90px; }
+}
+
+/* Very short screens: give every pixel to the game. */
+@media (max-height: 460px) {
+  #ad-slot { display: none; }
+}
