@@ -5,13 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#060713">
 <meta name="description" content="SKYHOOK - a one-touch neon climbing arcade game. Hook, swing, release. How high can you get?">
-<title>SKYHOOK</title>
+<link rel="canonical" href="https://leopechnicki.github.io/skyhook/">
 <meta property="og:type" content="website">
-<meta property="og:title" content="SKYHOOK">
-<meta property="og:description" content="A one-touch neon climbing arcade game. Hook, swing, release. How high can you get?">
+<meta property="og:site_name" content="SKYHOOK">
+<meta property="og:title" content="SKYHOOK - one-touch neon climbing arcade">
+<meta property="og:description" content="Hook onto a node, swing on your tether, release to fly. Latch on before the rising rift takes you. One input, no install.">
 <meta property="og:url" content="https://leopechnicki.github.io/skyhook/">
-<meta property="og:image" content="https://leopechnicki.github.io/skyhook/docs/screenshot-playing.png">
+<meta property="og:image" content="https://leopechnicki.github.io/skyhook/screenshot.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="SKYHOOK title screen - a glowing cyan node with a tether against a dark neon sky.">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="SKYHOOK - one-touch neon climbing arcade">
+<meta name="twitter:description" content="Hook, swing, release. How high can you get?">
+<meta name="twitter:image" content="https://leopechnicki.github.io/skyhook/screenshot.png">
+<title>SKYHOOK</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2335e6ff' stroke-width='2'/%3E%3Ccircle cx='16' cy='3.5' r='3.5' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -28,25 +36,24 @@
   </div>
 
   <!-- =========================================================
-       AD SLOT  -  PLACEHOLDER ONLY
+       AD SLOT  -  INACTIVE / HIDDEN BY DEFAULT
        ---------------------------------------------------------
        This is the ONLY place an ad unit should ever be inserted.
        It is intentionally EMPTY: no ad network code, no publisher
-       IDs, no external scripts. See README.md > "Ad slot".
+       IDs, no external scripts. It is also hidden (CSS: #ad-slot
+       { display: none }) so the shipped game shows no empty ad
+       furniture. See README.md > "Ad slot".
 
-       When an ad account exists, replace the contents of
-       #ad-slot-inner with the ad unit markup, and add the network
-       loader script at the bottom of <body>.
-
-       The slot reserves a fixed height (50px mobile / 90px wide)
-       so dropping in a banner causes zero layout shift (CLS).
+       To activate: delete the `display: none` line in css/style.css,
+       put the ad unit markup inside #ad-slot-inner, and add the
+       network loader script at the bottom of <body>. The slot then
+       reserves a fixed height (54px mobile / 96px wide) so the
+       banner causes zero layout shift (CLS).
        ========================================================= -->
   <aside id="ad-slot" data-ad-slot="bottom-banner"
          data-sizes="320x50,468x60,728x90"
          aria-label="Advertisement area">
-    <div id="ad-slot-inner">
-      <span class="ad-placeholder-label">AD SLOT &middot; 320&times;50 / 728&times;90 &middot; placeholder</span>
-    </div>
+    <div id="ad-slot-inner"></div>
   </aside>
 
 </div>

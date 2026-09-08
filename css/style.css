@@ -72,8 +72,11 @@ body {
   font-size: 16px;
 }
 
-/* ===== Ad slot placeholder =====
-   Fixed height => no layout shift when a real banner is dropped in. */
+/* ===== Ad slot =====
+   INACTIVE. No ad unit ships with the game, so the slot is hidden and the
+   game gets the full viewport. To activate a banner: delete the
+   `display: none` below and put the ad markup inside #ad-slot-inner. The
+   reserved fixed height then prevents any layout shift (CLS). */
 #ad-slot {
   flex: 0 0 auto;
   height: var(--ad-h);
@@ -84,6 +87,9 @@ body {
   border-top: 1px solid rgba(53, 230, 255, 0.10);
 }
 
+/* Slot is inactive - delete this one rule to switch the banner area on. */
+#ad-slot { display: none; }
+
 #ad-slot-inner {
   width: 320px;
   max-width: 100%;
@@ -91,17 +97,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px dashed rgba(120, 150, 190, 0.30);
-  border-radius: 6px;
   overflow: hidden;
-}
-
-.ad-placeholder-label {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: rgba(150, 180, 210, 0.42);
-  white-space: nowrap;
 }
 
 /* Wider viewports can host a leaderboard unit. */
@@ -112,5 +108,5 @@ body {
 
 /* Very short screens: give every pixel to the game. */
 @media (max-height: 460px) {
-  #ad-slot { display: none; }
+  #ad-slot { display: none !important; }
 }

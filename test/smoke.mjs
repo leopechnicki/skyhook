@@ -8,6 +8,7 @@
  * Flags:  --headed   show the browser
  *
  * Requires Playwright:  npm install && npx playwright install chromium
+ *                       (uses Google Chrome when installed, else bundled Chromium)
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -118,13 +119,18 @@ async function main() {
   const base = `http://127.0.0.1:${server.address().port}/`;
   const errors = [];
 
-  // Use the locally installed Google Chrome (Leo's standing preference for
-  // Playwright work) rather than a downloaded Chromium build.
-  const browser = await chromium.launch({
-    channel: 'chrome',
+  // Prefer a locally installed Google Chrome; fall back to Playwright's
+  // bundled Chromium so the test also runs on a clean checkout.
+  const launchOpts = {
     headless: !HEADED,
     args: ['--mute-audio', '--autoplay-policy=no-user-gesture-required']
-  });
+  };
+  let browser;
+  try {
+    browser = await chromium.launch({ channel: 'chrome', ...launchOpts });
+  } catch {
+    browser = await chromium.launch(launchOpts);
+  }
 
   try {
     /* ---------- 1. desktop, over http ---------- */
@@ -142,12 +148,16 @@ async function main() {
     const canvasBox = await page.locator('#game').boundingBox();
     check('canvas has a real size', canvasBox.width > 200 && canvasBox.height > 200,
       `${Math.round(canvasBox.width)}x${Math.round(canvasBox.height)}`);
+    // The ad slot ships INACTIVE: markup present for future use, but hidden
+    // so no empty banner furniture is visible, and carrying no network code.
     const adBox = await page.locator('#ad-slot').boundingBox();
-    check('ad slot is present and reserves space', !!adBox && adBox.height >= 50,
-      `${Math.round(adBox.width)}x${Math.round(adBox.height)}`);
+    check('ad slot is hidden (no visible placeholder)', adBox === null,
+      adBox ? `visible ${Math.round(adBox.width)}x${Math.round(adBox.height)}` : 'not rendered');
     const adHtml = await page.locator('#ad-slot').innerHTML();
     check('ad slot contains no ad-network code',
       !/adsbygoogle|pagead|ca-pub-|googlesyndication/i.test(adHtml));
+    check('ad slot markup still available for future use',
+      (await page.locator('#ad-slot-inner').count()) === 1);
 
     await wait(700);
     await page.screenshot({ path: path.join(SHOTS, '01-title.png') });

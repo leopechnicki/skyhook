@@ -23,7 +23,7 @@ You orbit a glowing node on a tether. Tap (or press Space) to release -- you fly
 **Hazards:**
 
 - **The Rift** -- A rising wall of energy that accelerates over time. If it catches you, the run ends.
-- **Mines** -- Red spiked orbs that drift across gaps starting around node 13.
+- **Mines** -- Red spiked orbs that appear from about the 12th node up. They sit *off* the direct line between two nodes (bobbing on a small arc), so a clean release is always safe -- only a sloppy wide swing or a greedy detour for a shard clips one.
 - **Amber nodes** -- Decaying nodes that crumble after ~1.5 seconds, forcing an early release.
 - **Drift timeout** -- If you fly for more than 1.5 seconds without hooking, your tether loses charge.
 
@@ -79,33 +79,33 @@ SKYHOOK is a fully static site -- four JS files, one CSS file, one HTML file. No
 
 ## Ad slot
 
-The ad banner placeholder is the `<aside id="ad-slot">` element at the bottom of `index.html`. It reserves a fixed height (54px on mobile, 96px on wide screens) so inserting a real ad causes zero layout shift.
+The game ships with **no ads and no ad-network code**. There is a single reserved
+mount point -- the `<aside id="ad-slot">` element at the bottom of `index.html` --
+and it is **hidden by default** (`#ad-slot { display: none; }` in `css/style.css`),
+so the shipped game shows no empty banner furniture.
 
-```html
-<!-- in index.html -->
-<aside id="ad-slot" data-ad-slot="bottom-banner"
-       data-sizes="320x50,468x60,728x90"
-       aria-label="Advertisement area">
-  <div id="ad-slot-inner">
-    <!-- Replace this span with your ad unit markup -->
-    <span class="ad-placeholder-label">AD SLOT ...</span>
-  </div>
-</aside>
-```
+To activate a banner later:
 
-To activate: replace the contents of `#ad-slot-inner` with your ad network's unit markup (e.g. AdSense `<ins>` tag), and add the network's loader script at the bottom of `<body>` after the game scripts. The slot is intentionally empty -- no publisher IDs, no external scripts, no ad-network code is included.
+1. Delete the `#ad-slot { display: none; }` rule in `css/style.css`.
+2. Put your ad unit markup inside `#ad-slot-inner`.
+3. Add the ad network's loader script at the bottom of `<body>`, after the game scripts.
+
+The slot then reserves a fixed height (54px on mobile, 96px on wide screens), so the
+banner appears with zero layout shift (CLS). It is the only place an ad unit should
+ever be inserted -- no publisher IDs, no external scripts, and nothing tracking-related
+exists anywhere else in the codebase.
 
 ## Architecture
 
 | File | Lines | Purpose |
 |---|---|---|
-| `index.html` | 60 | Shell: canvas, ad slot, script loading |
+| `index.html` | 71 | Shell: canvas, ad slot, script loading |
 | `css/style.css` | 116 | Layout only (all game visuals are canvas-drawn) |
 | `js/utils.js` | 145 | Math helpers, PRNG, localStorage wrapper, particle system, glow sprites |
 | `js/audio.js` | 159 | Fully synthesized audio via Web Audio API (no sample files) |
 | `js/game.js` | 1050 | Core game: nodes, orbiting, flying, latching, rift, mines, shards, rendering |
 | `js/main.js` | 142 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
-| `test/smoke.mjs` | 299 | Playwright end-to-end smoke test (20 checks) |
+| `test/smoke.mjs` | 309 | Playwright end-to-end smoke test (21 checks) |
 | `test/balance.mjs` | 153 | Headless difficulty/balance harness (no browser) |
 
 Runtime dependencies: none. The only dev dependency is Playwright, and only for the smoke test.
@@ -116,12 +116,12 @@ Runtime dependencies: none. The only dev dependency is Playwright, and only for 
 npm install          # only needed once, pulls Playwright for the smoke test
 npx playwright install chromium
 
-npm run test:smoke     # node test/smoke.mjs          - 20 end-to-end checks
+npm run test:smoke     # node test/smoke.mjs          - 21 end-to-end checks
 npm run test:headed    # node test/smoke.mjs --headed - watch the bot play
 npm run test:balance   # node test/balance.mjs        - difficulty sweep
 ```
 
-`test/smoke.mjs` spins up a local HTTP server, boots the game in Chromium, runs an in-page bot that plays through the real input path, and verifies the full lifecycle: title screen, gameplay (hooks, scoring, combos), game over, restart, localStorage persistence, mute toggle, mobile viewport, `file://` protocol, and a clean console. It writes screenshots to `test/screenshots/` (git-ignored).
+`test/smoke.mjs` spins up a local HTTP server, boots the game in a real browser (Google Chrome if installed, otherwise Playwright's bundled Chromium), runs an in-page bot that plays through the real input path, and verifies the full lifecycle: title screen, gameplay (hooks, scoring, combos), game over, restart, localStorage persistence, mute toggle, ad slot hidden and ad-code-free, mobile viewport, `file://` protocol, and a clean console. It writes screenshots to `test/screenshots/` (git-ignored).
 
 `test/balance.mjs` loads the real game logic into a DOM stub and simulates hundreds of runs at fixed 60 Hz across four synthetic skill profiles, then prints score distributions, death causes, and run lengths. It is a reporting tool, not a pass/fail gate.
 
