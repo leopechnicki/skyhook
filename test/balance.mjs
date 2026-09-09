@@ -181,10 +181,19 @@ function shouldRelease(g, skill) {
      - the MIN_R floor on the divisor, per-body in the gravity build
      - dt = 1/60, the harness's decision granularity (input is queued and
        consumed at the head of the next tick, so the release fires at exactly
-       the p.ang we are evaluating here). */
+       the p.ang we are evaluating here).
+
+     A build that predates the speed ramp has no p.speed at all (the currently
+     live main integrates with the module-level SPEED constant). Reading the
+     missing field gave `undefined / r` = NaN, so `soon.perp >= now.perp` was
+     always false and the expert profile NEVER released: 0.0 hooks/min and a
+     ~9 s median life, which reads as a catastrophic game defect and is purely
+     an artefact of this harness. Fall back to the constant the build actually
+     uses before dividing. */
+  const linSpeed = Number.isFinite(p.speed) ? p.speed : K.SPEED;
   const rate = typeof g.angRate === 'function'
     ? g.angRate(p)                                  // prototype exposes it
-    : p.dir * (p.speed / Math.max(p.r, minRFor(p.node)));
+    : p.dir * (linSpeed / Math.max(p.r, minRFor(p.node)));
   const step = rate * (1 / 60);
 
   const now = aim(p.ang);
@@ -208,20 +217,71 @@ function shouldRelease(g, skill) {
   return false;
 }
 
-const CAP_SECONDS = 240;
+/* ---------------------------------------------------------------------------
+ * ENDLESS-MODE TERMINATION MODEL (2026-09-09, Crew)
+ *
+ * The rift and the flight timer are gone on purpose: a run now lasts as long
+ * as the player keeps the ball on screen. That breaks every per-run TOTAL this
+ * harness used to print. "Median score 47813" was really "median score of a
+ * population where 57% of runs were stopped by our own stopwatch mid-flight" -
+ * a censored total, which is not a statistic about the game at all. The old
+ * code knew something was wrong (it printed MEASUREMENT INVALID) but had no
+ * model to replace it with, so it just refused to answer.
+ *
+ * The cap is not a failure and not a win. It is RIGHT-CENSORING: we know the
+ * run lasted AT LEAST 240 s and we stopped watching. That is a solved problem,
+ * so use the standard tools instead of inventing one:
+ *
+ *   1. Kaplan-Meier survival curve  - the fraction still alive at time t,
+ *      with censored runs correctly removed from the risk set rather than
+ *      counted as deaths (which deflates survival) or dropped entirely
+ *      (which inflates it). Gives S(30s), S(60s)... and a median when the
+ *      curve actually reaches 0.5.
+ *   2. Hazard rate = deaths / total exposure time. Unbiased under censoring
+ *      because every second any run spent alive counts as exposure whether or
+ *      not that run ended. This is THE headline number for an endless game:
+ *      "how dangerous is a second of play to this player".
+ *   3. Exponential-fit median (ln2 / hazard) - reports an expected run length
+ *      even when most runs outlive the cap, which is exactly the case the old
+ *      harness gave up on. Only trustworthy when the hazard is roughly flat
+ *      over time, so hazard-by-phase is printed next to it and the estimate is
+ *      labelled when the hazard is climbing.
+ *   4. Progress RATES (score/min, hooks/min) pooled over exposure. A rate is
+ *      censoring-proof; a total is not.
+ *   5. Score AT fixed checkpoints, conditional on still being alive. Answers
+ *      "what does a 60-second run look like" without any cap contamination.
+ *
+ * Consequence: a high cap-survival percentage is no longer an error. The thing
+ * that actually invalidates the measurement is too few OBSERVED DEATHS, since
+ * that is what the hazard estimate is built from - so that is what the
+ * validity verdict now checks.
+ * ------------------------------------------------------------------------- */
+const CAP_SECONDS = parseFloat(flag('cap', '240'));
+const CHECKPOINTS = [30, 60, 120, 240].filter(t => t <= CAP_SECONDS);
 
 function playOne(SK, skill, seed) {
   const g = new SK.Game();
-  /* The game ships this hook specifically for us (game.js:404). Without it the
-     first run of a sweep - and only the first - plays the tutorial. */
-  g.skipTutorial(false);
+  /* The game ships this hook specifically for us (game.js:546). Without it the
+     first run of a sweep - and only the first - plays the tutorial.
+     Guarded because --game= is advertised for A/B against another build, and
+     any build WITHOUT a tutorial (e.g. the currently-live main) has no such
+     hook - an unguarded call made the A/B mode throw instead of measuring. */
+  if (typeof g.skipTutorial === 'function') g.skipTutorial(false);
   g.start(seed);
   let frames = 0;
-  const capFrames = 60 * CAP_SECONDS;
+  const capFrames = Math.round(60 * CAP_SECONDS);
+  /* Sample progress while the run is alive, so "score at 60 s" is a real
+     observation and not something reconstructed from a truncated total. */
+  const at = {};
+  let nextCp = 0;
   while (g.state === 'playing' && frames < capFrames) {
     if (shouldRelease(g, skill)) g.action();
     g.update(1 / 60);
     frames++;
+    while (nextCp < CHECKPOINTS.length && frames >= CHECKPOINTS[nextCp] * 60) {
+      at[CHECKPOINTS[nextCp]] = { score: g.score, hooks: g.hooks };
+      nextCp++;
+    }
   }
   /* F4: a capped run is NOT a death. Reporting it as g.cause laundered every
      survivor into the constructor's default cause ('rift'). */
@@ -230,8 +290,56 @@ function playOne(SK, skill, seed) {
     score: g.score, hooks: g.hooks, altitude: g.altitude,
     cause: capped ? 'CAP' : g.cause,
     capped,
-    seconds: frames / 60
+    seconds: frames / 60,
+    at
   };
+}
+
+/* ---- survival analysis over right-censored run lengths ------------------ */
+
+/* Kaplan-Meier. `died` runs are events; `capped` runs leave the risk set
+   without an event. */
+function kaplanMeier(runs) {
+  const pts = runs.map(r => ({ t: r.seconds, died: !r.capped }))
+                  .sort((a, b) => a.t - b.t);
+  let atRisk = pts.length, S = 1;
+  const curve = [{ t: 0, S: 1 }];
+  for (let i = 0; i < pts.length;) {
+    const t = pts[i].t;
+    let d = 0, c = 0;
+    while (i < pts.length && pts[i].t === t) { pts[i].died ? d++ : c++; i++; }
+    if (d > 0 && atRisk > 0) { S *= (1 - d / atRisk); curve.push({ t, S }); }
+    atRisk -= (d + c);
+  }
+  return curve;
+}
+function survivalAt(curve, t) {
+  let S = 1;
+  for (const p of curve) { if (p.t <= t) S = p.S; else break; }
+  return S;
+}
+/* The median is only "reached" if the curve actually crosses 0.5 before the
+   cap. Otherwise say so instead of printing the cap as if it were an answer. */
+function kmMedian(curve) {
+  for (const p of curve) if (p.S <= 0.5) return p.t;
+  return null;
+}
+
+/* Deaths per minute of play, and how that changes as a run gets longer.
+   A flat hazard means run length is exponential and ln2/lambda is a real
+   median; a rising hazard means the difficulty ramp is biting. */
+function hazardByPhase(runs, edges) {
+  const out = [];
+  for (let i = 0; i < edges.length - 1; i++) {
+    const lo = edges[i], hi = edges[i + 1];
+    let exposure = 0, deaths = 0;
+    for (const r of runs) {
+      exposure += Math.max(0, Math.min(r.seconds, hi) - lo);
+      if (!r.capped && r.seconds > lo && r.seconds <= hi) deaths++;
+    }
+    out.push({ lo, hi, deaths, exposure, rate: exposure > 0 ? deaths / (exposure / 60) : null });
+  }
+  return out;
 }
 
 function stats(arr) {
@@ -252,22 +360,70 @@ function report(label, runs) {
   const causes = {};
   died.forEach(r => { causes[r.cause] = (causes[r.cause] || 0) + 1; });
 
-  console.log(`\n=== ${label}  (${runs.length} runs) ===`);
-  console.log(`  score    min ${sc.min}  p25 ${sc.p25}  median ${sc.median}  p75 ${sc.p75}  p90 ${sc.p90}  max ${sc.max}`);
-  console.log(`  hooks    min ${hk.min}  median ${hk.median}  p90 ${hk.p90}  max ${hk.max}`);
-  console.log(`  run len  median ${tm.median.toFixed(1)}s   max ${tm.max.toFixed(1)}s`);
-  /* F4: survivors are reported on their own line, never folded into a cause. */
+  /* Exposure: every second any run spent alive. The denominator that makes
+     the rest of this block immune to where we put the cap. */
+  const exposure = runs.reduce((a, r) => a + r.seconds, 0);
+  const hazard = exposure > 0 ? died.length / (exposure / 60) : 0;   // deaths/min
+  const meanLife = hazard > 0 ? 1 / hazard : Infinity;               // minutes
+  const expMedian = hazard > 0 ? Math.LN2 / hazard : Infinity;       // minutes
+
+  const km = kaplanMeier(runs);
+  const kmMed = kmMedian(km);
+  const phases = hazardByPhase(runs, [0, 30, 60, 120, CAP_SECONDS].filter((v, i, a) => a.indexOf(v) === i && v <= CAP_SECONDS));
+  const rated = phases.filter(p => p.rate !== null && p.exposure > 30);
+  const rising = rated.length >= 2 && rated[rated.length - 1].rate > rated[0].rate * 1.5;
+
   const capPct = (capped.length / runs.length * 100);
-  console.log(`  SURVIVED ${CAP_SECONDS}s cap: ${capped.length}/${runs.length} (${capPct.toFixed(1)}%)`);
+
+  console.log(`\n=== ${label}  (${runs.length} runs) ===`);
+  console.log(`  exposure ${(exposure / 60).toFixed(1)} min    deaths ${died.length}    reached ${CAP_SECONDS}s cap ${capped.length} (${capPct.toFixed(1)}%)`);
+
+  /* -- survival: the cap is censoring, not an outcome -- */
+  console.log(`  -- survival (right-censored at the ${CAP_SECONDS}s cap) --`);
+  console.log(`    still alive at   ` + CHECKPOINTS
+    .map(t => `${t}s ${(survivalAt(km, t) * 100).toFixed(0)}%`).join('   '));
+  console.log(`    median run length  ${kmMed !== null
+    ? `${kmMed.toFixed(1)}s (Kaplan-Meier)`
+    : `not reached within the cap; exponential fit ${(expMedian * 60).toFixed(0)}s${rising ? ' (hazard is RISING, so this is an over-estimate)' : ''}`}`);
+  console.log(`    hazard  ${hazard.toFixed(3)} deaths/min   mean run ${meanLife === Infinity ? 'infinite' : (meanLife * 60).toFixed(0) + 's'}`);
+  console.log(`    hazard by phase  ` + phases.map(p =>
+    `${p.lo}-${p.hi}s ${p.rate === null ? '--' : p.rate.toFixed(2)}`).join('  ') +
+    `  deaths/min${rising ? '   [RISING - difficulty ramp is biting]' : ''}`);
+
+  /* -- rates: censoring-proof, unlike per-run totals -- */
+  console.log(`  -- progress rate (pooled over exposure; cap-independent) --`);
+  console.log(`    ${(runs.reduce((a, r) => a + r.score, 0) / (exposure / 60)).toFixed(0)} score/min` +
+    `    ${(runs.reduce((a, r) => a + r.hooks, 0) / (exposure / 60)).toFixed(1)} hooks/min`);
+
+  /* -- what a run of a given length actually looks like -- */
+  const cps = CHECKPOINTS.map(t => {
+    const alive = runs.filter(r => r.at[t]);
+    if (!alive.length) return `${t}s n=0`;
+    return `${t}s ${stats(alive.map(r => r.at[t].score)).median} (n=${alive.length})`;
+  });
+  console.log(`  -- median score among runs still alive --`);
+  console.log(`    ${cps.join('   ')}`);
+
+  /* Totals are kept, but flagged: for capped runs they are a LOWER BOUND. */
+  console.log(`  final score (censored: capped runs are lower bounds)  median ${sc.median}  p90 ${sc.p90}  max ${sc.max}`);
+
   if (died.length) {
-    const dl = stats(died.map(r => r.seconds));
-    console.log(`  time-to-death (deaths only)  median ${dl.median.toFixed(1)}s  p90 ${dl.p90.toFixed(1)}s  max ${dl.max.toFixed(1)}s`);
     console.log(`  deaths   ${Object.entries(causes).sort((a, b) => b[1] - a[1])
       .map(([k, v]) => `${k} ${Math.round(v / died.length * 100)}%`).join('  ')}   (n=${died.length})`);
   } else {
-    console.log('  deaths   NONE - every run hit the cap');
+    console.log(`  deaths   NONE observed - this player is unkillable within ${CAP_SECONDS}s`);
   }
-  return { sc, hk, tm, capPct, causes, nDied: died.length, deathTm: died.length ? stats(died.map(r => r.seconds)) : null };
+  return {
+    sc, hk, tm, capPct, causes, nDied: died.length,
+    deathTm: died.length ? stats(died.map(r => r.seconds)) : null,
+    exposure, hazard, meanLife, expMedian, km, kmMed, phases, rising,
+    scorePerMin: runs.reduce((a, r) => a + r.score, 0) / (exposure / 60),
+    survAt: Object.fromEntries(CHECKPOINTS.map(t => [t, survivalAt(km, t)])),
+    /* Median run length in seconds, from KM when it is observed and from the
+       exponential fit when the cap hid it. This is the number the health
+       checks below consume, so they never read a censored median again. */
+    medianLife: kmMed !== null ? kmMed : expMedian * 60
+  };
 }
 
 const N = parseInt(argv.find(a => /^\d+$/.test(a)) || '150', 10);
@@ -312,28 +468,52 @@ for (const [label, skill] of profiles) {
 }
 
 /* A casual arcade game wants: first runs short (a few seconds), a clear
-   skill gradient, and a long tail so mastery keeps paying out. */
-console.log('\n--- health checks ---');
-const g1 = out['first-timer'].tm.median, g2 = out['expert'].sc.median;
-const gradient = out['expert'].sc.median / Math.max(1, out['first-timer'].sc.median);
+   skill gradient, and a long tail so mastery keeps paying out.
+   All three are now measured on cap-independent quantities. */
+console.log('\n--- health checks (endless mode: rates and survival, never censored totals) ---');
+const g1 = out['first-timer'].medianLife;
+/* Gradient on score-per-minute, not on final score. Final score is censored
+   for exactly the profile that matters most (expert), so the old gradient was
+   biased DOWNWARD by the cap - it flattered a change that made experts die
+   sooner, because dying sooner uncaps the total. */
+const gradient = out['expert'].scorePerMin / Math.max(1, out['first-timer'].scorePerMin);
+/* Second gradient: how much longer mastery keeps you alive. */
+const lifeGradient = out['expert'].medianLife / Math.max(0.1, out['first-timer'].medianLife);
 console.log(`  first run length (median): ${g1.toFixed(1)}s  ${g1 >= 4 && g1 <= 30 ? 'OK' : 'OUT OF RANGE'}`);
-console.log(`  skill gradient expert/first-timer score: ${gradient.toFixed(1)}x  ${gradient >= 3 ? 'OK' : 'TOO FLAT'}`);
-console.log(`  expert median score: ${g2}`);
+console.log(`  skill gradient expert/first-timer score RATE: ${gradient.toFixed(1)}x  ${gradient >= 3 ? 'OK' : 'TOO FLAT'}`);
+console.log(`  survival gradient expert/first-timer median life: ${lifeGradient.toFixed(1)}x  ${lifeGradient >= 3 ? 'OK' : 'TOO FLAT'}`);
+console.log(`  expert: ${out['expert'].scorePerMin.toFixed(0)} score/min, median life ${out['expert'].medianLife.toFixed(0)}s`);
 
-/* F4 follow-through: the cap is a measurement boundary, so say out loud when
-   it is distorting the numbers instead of burying it in a percentile. */
-console.log('\n--- cap pressure (a capped run is an unfinished measurement, not a win) ---');
+/* The cap no longer decides validity - the number of OBSERVED DEATHS does,
+   because that is what the hazard estimate is built from. An endless game is
+   SUPPOSED to have runs that outlive the stopwatch. */
+console.log('\n--- measurement validity (endless game: the cap censors, it does not fail) ---');
 for (const [label] of profiles) {
   const o = out[label];
-  const verdict = o.capPct >= 50 ? 'MEASUREMENT INVALID - most runs never ended'
-    : o.capPct >= 15 ? 'DISTORTED - raise the cap or the game is too easy'
+  const verdict = o.nDied === 0
+    ? `NO DEATHS - cannot estimate hazard; this player is unkillable within ${CAP_SECONDS}s`
+    : o.nDied < 10 ? 'INSUFFICIENT - too few deaths to estimate hazard; raise --cap or run count'
+    : o.nDied < 30 ? 'THIN - hazard estimate is noisy; raise --cap or run count'
     : 'ok';
-  console.log(`  ${label.padEnd(12)} capped ${o.capPct.toFixed(1).padStart(5)}%   ${verdict}`);
+  console.log(`  ${label.padEnd(12)} deaths ${String(o.nDied).padStart(4)}   capped ${o.capPct.toFixed(1).padStart(5)}%   ${verdict}`);
 }
-const mediocreImmortal = out['casual'].capPct >= 50;
-if (mediocreImmortal) {
-  console.log('\n  !! LOSABILITY FAILURE: the "casual" profile survives the cap in most runs.');
-  console.log('     A mediocre player cannot lose. This is a design failure regardless of');
-  console.log('     what the difficulty numbers look like.');
+
+/* Losability, restated for an endless game. "Survives our stopwatch" was never
+   the right question - a good player SHOULD outlive a 4-minute cap. The real
+   question is whether a mediocre player faces meaningful risk in a normal
+   sitting, so ask the survival curve directly. */
+const casualSurvives2min = out['casual'].survAt[120] !== undefined
+  ? out['casual'].survAt[120] : survivalAt(out['casual'].km, 120);
+console.log(`\n  losability: a "casual" player still alive after 2 min: ${(casualSurvives2min * 100).toFixed(1)}%  ` +
+  `${casualSurvives2min < 0.5 ? 'OK' : 'FAILURE'}`);
+if (casualSurvives2min >= 0.5 || out['casual'].nDied === 0) {
+  console.log('  !! LOSABILITY FAILURE: a mediocre player is more likely than not to still be');
+  console.log('     alive after two minutes. Endless is not the same as consequence-free.');
+}
+/* The mirror-image failure, which the old harness could not express at all:
+   a game with no ceiling. If even a deliberately clumsy profile has ~zero
+   hazard, the endless mode has stopped being a game. */
+if (out['expert'].nDied > 0 && out['expert'].hazard < 0.01) {
+  console.log('  !! CEILING WARNING: expert hazard is near zero - mastery ends the challenge.');
 }
 if (has('json')) console.log('\nJSON ' + JSON.stringify(out));

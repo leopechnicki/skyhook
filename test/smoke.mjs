@@ -50,6 +50,43 @@ function startServer() {
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
+/* ---------------------------------------------------------------------------
+ * 2026-09-09 (Crew): the desktop half of this file was testing nothing.
+ *
+ * Every desktop "tap" was a hand-built `new PointerEvent('pointerdown', ...)`.
+ * That constructor defaults `isPrimary` to FALSE and `pointerType` to ''.
+ * main.js:87 correctly drops non-primary pointers (secondary fingers in a
+ * multi-touch gesture are not gameplay input), so the game never saw a single
+ * desktop tap: 10 checks failed with state=title, hooks=0, score=0.
+ *
+ * Proven in a real browser, not read off the source:
+ *   synthetic PointerEvent  -> isTrusted=false isPrimary=false type=''
+ *                              -> state stays "title"
+ *   page.mouse.click()      -> isTrusted=true  isPrimary=true  type='mouse'
+ *                              -> state becomes "playing"
+ * The game is fine. A human with a mouse was never affected. The harness was
+ * synthesising an event no browser ever emits.
+ *
+ * Fix, in two parts:
+ *   1. Discrete taps (start / restart / mute / file://) now go through
+ *      page.mouse.click - real trusted input from the browser's own input
+ *      stack. This is what a player does, so it is what we test.
+ *   2. The in-page bot still dispatches its own event, because it must decide
+ *      and fire inside a single animation frame and a round-trip to the driver
+ *      cannot hit that window. It now emits a FAITHFUL primary mouse pointer,
+ *      matching what Chrome actually delivers (verified field-by-field above).
+ * ------------------------------------------------------------------------- */
+
+/* Fields Chrome sets on a real primary mouse pointerdown. Omitting these is
+   what broke this harness; keep them together so nobody drops one again. */
+const PRIMARY_POINTER = `isPrimary: true, pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1,`;
+
+/* A real desktop click, driven by the browser rather than dispatched by us. */
+async function tapCenter(page) {
+  const box = await page.locator('#game').boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+}
+
 /* An in-page bot that plays for real: it waits for the orbit angle where
    releasing aims closest at the next node, then dispatches a genuine
    pointerdown on the stage. Same code path a human thumb uses. */
@@ -63,6 +100,22 @@ window.__bot = { on: true, taps: 0 };
   if (!g || g.state !== 'playing') return;
   var p = g.player;
   if (p.mode !== 'orbit' || !p.node) return;
+
+  function tap() {
+    var r = window.__SKYHOOK.canvas.getBoundingClientRect();
+    window.__SKYHOOK.stage.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, cancelable: true, ${PRIMARY_POINTER}
+      clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+    }));
+    B.taps++;
+  }
+
+  /* The tutorial FREEZES the orbit on tutHold and puts "TAP NOW" on screen.
+     A bot that only fires on a changing angle waits there forever - which is
+     exactly what it did: 26 s, 0 hooks, altitude stuck at 7 m. When the game
+     tells the player to tap, tap. This is the real first-run path a human
+     walks, so the suite should walk it too rather than skipping the tutorial. */
+  if (g.tutHold) { tap(); return; }
 
   var target = null, bd = 1e9;
   for (var i = 0; i < g.nodes.length; i++) {
@@ -81,26 +134,25 @@ window.__bot = { on: true, taps: 0 };
     return { along: tx * vx + ty * vy, perp: Math.abs(tx * vy - ty * vx) };
   }
 
-  var step = p.dir * (468 / p.r) * (1 / 60);
+  /* Ask the game for its own angular rate instead of restating it. The old
+     hardcoded 468/p.r was wrong twice over - speed ramps 360 -> 468 with
+     hooks, and the divisor is floored at the body's resting minimum - so the
+     one-frame lookahead that decides the release was aiming at a phantom.
+     (Same defect balance.mjs logged as F3a/F3b.) */
+  var rate = (typeof g.angRate === 'function')
+    ? g.angRate(p)
+    : p.dir * (p.speed / Math.max(p.r, 60));
+  var step = rate * (1 / 60);
+
+  /* Tolerance scales with the TARGET's own latch ring, so "close enough"
+     means the same thing on a small planet and on a big star. */
+  var tol = 70 * ((target.captureR || 92) / 92);
+
   var now = aimAt(p.ang);
   var soon = aimAt(p.ang + step);
-  if (now.along > 0 && now.perp < 70 && soon.perp >= now.perp) {
-    var r = window.__SKYHOOK.canvas.getBoundingClientRect();
-    window.__SKYHOOK.stage.dispatchEvent(new PointerEvent('pointerdown', {
-      bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
-    }));
-    B.taps++;
-  }
+  if (now.along > 0 && now.perp < tol && soon.perp >= now.perp) tap();
 })();
 `;
-
-const TAP_CENTER = `(() => {
-  const r = window.__SKYHOOK.canvas.getBoundingClientRect();
-  window.__SKYHOOK.stage.dispatchEvent(new PointerEvent('pointerdown', {
-    bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
-  }));
-  return true;
-})()`;
 
 function attachLogs(page, bucket, label) {
   page.on('console', m => { if (m.type() === 'error') bucket.push(`[${label}] console: ${m.text()}`); });
@@ -162,11 +214,28 @@ async function main() {
     await wait(700);
     await page.screenshot({ path: path.join(SHOTS, '01-title.png') });
 
+    /* ---------- 1b. input guard: only primary pointers are gameplay -------
+       This is the exact trap that made this file green-blind for two commits.
+       A hand-built PointerEvent is non-primary, and main.js is RIGHT to drop
+       it - a second finger in a pinch is not a release. Pin the behaviour so
+       the guard cannot be quietly deleted, and so the next person who reaches
+       for dispatchEvent finds out here why nothing happens. */
+    const ignoredNonPrimary = await page.evaluate(`(() => {
+      const r = window.__SKYHOOK.canvas.getBoundingClientRect();
+      window.__SKYHOOK.stage.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, isPrimary: false,
+        clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+      }));
+      return window.__SKYHOOK.game.state;
+    })()`);
+    check('non-primary pointers are ignored (multi-touch guard holds)',
+      ignoredNonPrimary === 'title', `state=${ignoredNonPrimary}`);
+
     /* ---------- 2. start + play for real ---------- */
-    await page.evaluate(TAP_CENTER);
+    await tapCenter(page);
     await wait(120);
     s = await page.evaluate('window.__SKYHOOK.snapshot()');
-    check('tap starts the run', s.state === 'playing', `state=${s.state}`);
+    check('real desktop mouse click starts the run', s.state === 'playing', `state=${s.state}`);
 
     await page.evaluate(BOT);
 
@@ -185,7 +254,7 @@ async function main() {
         if (peak.hooks === 14) await page.screenshot({ path: path.join(SHOTS, '02-playing.png') });
       } else if (s.state !== 'playing' && peak.hooks > 0) {
         // bot died; restart it so we measure a full sustained run
-        if (s.state === 'over') { await page.evaluate(TAP_CENTER); }
+        if (s.state === 'over') { await tapCenter(page); }
       }
     }
     if (!fs.existsSync(path.join(SHOTS, '02-playing.png'))) {
@@ -204,12 +273,12 @@ async function main() {
        end a run. Death is caused by a bad release, so provoke one - spam
        untimed taps until the ball leaves the screen. */
     s = await page.evaluate('window.__SKYHOOK.snapshot()');
-    if (s.state !== 'playing') { await page.evaluate(TAP_CENTER); await wait(200); }
+    if (s.state !== 'playing') { await tapCenter(page); await wait(200); }
 
     const scoreBeforeDeath = (await page.evaluate('window.__SKYHOOK.snapshot()')).score;
     let died = false;
     for (let i = 0; i < 90; i++) {
-      await page.evaluate(TAP_CENTER);
+      await tapCenter(page);
       await wait(160);
       s = await page.evaluate('window.__SKYHOOK.snapshot()');
       if (s.state === 'over') { died = true; break; }
@@ -223,7 +292,7 @@ async function main() {
       `stored=${stored} scoreAtDeath=${scoreBeforeDeath}`);
 
     /* ---------- 4. restart ---------- */
-    await page.evaluate(TAP_CENTER);
+    await tapCenter(page);
     await wait(200);
     s = await page.evaluate('window.__SKYHOOK.snapshot()');
     check('tap on game over restarts cleanly', s.state === 'playing' && s.score === 0 && s.hooks === 0,
@@ -236,14 +305,11 @@ async function main() {
     check('high score survives a reload', s.best === Number(stored), `best=${s.best} stored=${stored}`);
 
     /* ---------- 6. mute toggle ---------- */
-    await page.evaluate(`(() => {
-      const r = window.__SKYHOOK.canvas.getBoundingClientRect();
-      const scale = r.width / 480;
-      window.__SKYHOOK.stage.dispatchEvent(new PointerEvent('pointerdown', {
-        bubbles: true, cancelable: true,
-        clientX: r.left + (480 - 36) * scale, clientY: r.top + 36 * scale
-      }));
-    })()`);
+    /* Real click on the mute glyph, in page coordinates derived from the
+       canvas box - the button lives at logical (480-36, 36). */
+    const muteBox = await page.locator('#game').boundingBox();
+    const muteScale = muteBox.width / 480;
+    await page.mouse.click(muteBox.x + (480 - 36) * muteScale, muteBox.y + 36 * muteScale);
     await wait(100);
     const muted = await page.evaluate('window.__SKYHOOK.game.muted');
     const stillTitle = await page.evaluate('window.__SKYHOOK.game.state');
@@ -282,7 +348,7 @@ async function main() {
     await fpage.goto(pathToFileURL(path.join(ROOT, 'index.html')).href, { waitUntil: 'load' });
     await fpage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
     const fs1 = await fpage.evaluate('window.__SKYHOOK.snapshot()');
-    await fpage.evaluate(TAP_CENTER);
+    await tapCenter(fpage);
     await wait(1200);
     const fs2 = await fpage.evaluate('window.__SKYHOOK.snapshot()');
     check('runs from file:// with no server (title screen)', fs1.state === 'title');
