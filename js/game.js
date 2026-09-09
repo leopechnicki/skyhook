@@ -12,13 +12,23 @@
   var W = 480, H = 880;
 
   /* ---- tuning ------------------------------------------------------ */
-  var SPEED        = 468;   // constant linear speed, orbiting AND flying
-  var MIN_R        = 46;    // tightest tether - below this the player disc
-                            // visually merges with the node it is orbiting
+  /* Linear speed is no longer one constant. A brand new player used to be
+     dropped straight into 468 px/s, and - worse - a *tight* catch pinned the
+     tether at MIN_R, which halved the next timing window (0.62 s orbit at
+     r=46 vs 1.24 s at r=92). The game's most celebrated action was silently
+     its harshest punishment. Speed now ramps with demonstrated skill and
+     MIN_R is wide enough that a bullseye no longer costs you the next hook. */
+  var SPEED        = 468;   // top linear speed, orbiting AND flying
+  var SPEED_START  = 360;   // speed through the first few hooks
+  var SPEED_RAMP_A = 3;     // ...held until this many hooks
+  var SPEED_RAMP_B = 20;    // ...reaching SPEED at this many hooks
+  var TUTOR_SPEED  = 300;   // deliberately slow while the tutorial teaches
+  var MIN_R        = 60;    // tightest resting tether (was 46)
   var MAX_R        = 92;    // widest tether == latch range
   var CAPTURE_R    = 92;
   var TIGHT_D      = 52;    // latch closer than this = tight hook (combo up)
-  var LOOSE_D      = 78;    // latch further than this = sloppy (combo reset)
+  var LOOSE_D      = 78;    // latch further than this = sloppy (combo down)
+  var SETTLE_RATE  = 240;   // px/s the tether eases out to its resting length
   var FLIGHT_MAX   = 1.5;   // seconds adrift before the hook loses charge
   var PLAYER_R     = 8;
   var NODE_R       = 12;
@@ -28,7 +38,23 @@
   var DEATH_PAD    = 64;    // how far off-column before you are gone
   var DECAY_TIME   = 1.55;  // amber nodes burn out this fast
   var CAM_OFFSET   = 0.62;  // player sits this far down the screen
-  var STEP         = 1 / 120;
+
+  /* ---- simulation --------------------------------------------------- */
+  var STEP         = 1 / 120;  // TRUE fixed step. Never subdivided.
+  var MAX_TICKS    = 12;       // ...per rendered frame, then drop the backlog
+  var STALL_MAX    = 0.25;     // a longer gap is a stall, not slow rendering
+  var ACT_DEBOUNCE = 0.12;     // seconds; measured on the SIM clock, not wall
+  var GUIDE_LEN    = 220;      // release guide length (was 132)
+  var LABEL_LIFE   = 0.65;
+  var DEATH_ANIM   = 0.40;     // was 0.7
+  var RETRY_LOCK   = 0.20;     // was 0.5
+
+  /* Tutorial: three scripted hooks, no hazards, frozen rift. Offsets are
+     relative to the starting node so they survive any change to H. */
+  var TUTOR_NODES  = [ { x: 144, dy: -156 }, { x: 300, dy: -312 }, { x: 180, dy: -468 } ];
+  var TUTOR_HOOKS  = TUTOR_NODES.length;
+  var TUTOR_AIM    = 52;    // prompt "TAP NOW" once the guide is this close
+  var TUTOR_RESET  = 0.25;  // an assisted miss rewinds this fast
 
   var COL = {
     node:   [53, 230, 255],
@@ -46,14 +72,29 @@
     edge:  'YOU LEFT THE COLUMN'
   };
 
+  /* A postmortem that only names the consequence teaches nothing. Every
+     death now ships the one correction that would have prevented it. */
+  var FIX = {
+    rift:   'Keep moving - every hook buys height on the rift',
+    mine:   'Mines sit off the direct line - a clean release clears them',
+    drift:  'Wait until the guide crosses a ring before you let go',
+    edge:   'Release near the top of the swing, not out to the side',
+    decay:  'Amber anchors release you when their timer expires'
+  };
+
   function rgba(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
 
   /* ================================================================== */
 
   function Game(seed) {
     this.W = W; this.H = H;
-    this.seed = (seed === undefined || seed === null) ? ((Math.random() * 1e9) | 0) : seed;
-    this.rand = SK.rng(this.seed);
+    /* fixedSeed: an explicitly requested seed (?seed=N) that must survive
+       every restart. start() used to throw it away and reseed at random, so
+       "reproducible run" reproduced exactly one run - the one nobody plays. */
+    this.fixedSeed = (seed === undefined || seed === null) ? null : (seed >>> 0);
+    this.runSeed = this.fixedSeed === null ? ((Math.random() * 1e9) | 0) >>> 0 : this.fixedSeed;
+    this.seed = this.runSeed;
+    this.rand = SK.rng(this.runSeed);
 
     this.particles = new SK.Particles(420);
 
@@ -73,7 +114,8 @@
     this.nebula = this._makeNebula();
 
     this.state = 'title';
-    this.time = 0;
+    this.time = 0;      // SIM clock: advances only on fixed ticks while playing
+    this.acc = 0;       // fixed-step accumulator
     this.titleT = 0;
     this.overT = 0;
     this.dyingT = 0;
@@ -83,10 +125,52 @@
     this.camY = 0;
     this.newBest = false;
     this.cause = 'rift';
-    this.muteRect = { x: W - 56, y: 16, w: 40, h: 40 };
+    this.lastForced = false;   // was the previous release forced by a decay node?
+    this.riftPulse = 0;
+    this.queuedAction = false; // input is consumed on the next sim tick
+    this.lastActionT = -99;
+    this.wasPlaying = false;
+
+    /* Tap targets. Hit-tested BEFORE the generic "tap anywhere" action, so a
+       results screen that later grows a purchase button cannot be triggered
+       by a stray retry tap. Sized in logical units but chosen so they clear
+       48 CSS px on the smallest sane phone (390x844 => scale 0.81). */
+    this.muteRect  = { x: W - 56, y: 16, w: 40, h: 40 };          // drawn size
+    this.muteHit   = { x: W - 66, y: 6,  w: 60, h: 60 };          // 48.7 CSS px @390w
+    this.retryRect = { x: W / 2 - 130, y: 640, w: 260, h: 64 };   // 211x52 CSS px
+
+    this.tutorialDone = SK.Store.get('skyhook.tutorialComplete', '0') === '1';
+    this.tutorial = false;
+    this.tutStep = 0;
+    this.tutHold = false;      // orbit frozen, waiting for the taught tap
+    this.tutResetT = 0;
+    this.tutMisses = 0;
+
+    /* Pooled floating labels - no allocation during play. */
+    this.labels = [];
+    for (var li = 0; li < 8; li++) this.labels.push({ t: 0, x: 0, y: 0, s: '', c: '255,255,255' });
+
+    this.predict = { node: null, d: 0, t: 0 };
 
     this._resetWorld();
   }
+
+  /* Linear speed for the current moment. Applied identically on every run -
+     never a hidden per-player difficulty knob. */
+  Game.prototype._speed = function () {
+    if (this.tutorial) return TUTOR_SPEED;
+    var k = clamp((this.hooks - SPEED_RAMP_A) / (SPEED_RAMP_B - SPEED_RAMP_A), 0, 1);
+    return lerp(SPEED_START, SPEED, k);
+  };
+
+  Game.prototype._label = function (x, y, s, col) {
+    var best = this.labels[0];
+    for (var i = 1; i < this.labels.length; i++) {
+      if (this.labels[i].t < best.t) best = this.labels[i];
+    }
+    best.t = LABEL_LIFE; best.x = x; best.y = y; best.s = s;
+    best.c = col || '255,255,255';
+  };
 
   /* ---------------- background ------------------------------------- */
 
@@ -141,8 +225,25 @@
     this.altitude = 0;
     this.particles.clear();
 
+    this.tutStep = 0;
+    this.tutHold = false;
+    this.tutResetT = 0;
+    this.tutMisses = 0;
+    this.lastForced = false;
+    this.riftPulse = 0;
+    for (var li = 0; li < this.labels.length; li++) this.labels[li].t = 0;
+
     var first = this._pushNode(W * 0.5, H * 0.66, 'normal');
     this.startY = first.y;
+    this.safeNode = first;   // last anchor, used to rewind an assisted miss
+
+    /* The tutorial's three hooks are scripted, not generated: a first-run
+       player must not be able to draw a layout that teaches the wrong thing. */
+    if (this.tutorial) {
+      for (var ti = 0; ti < TUTOR_NODES.length; ti++) {
+        this._pushNode(TUTOR_NODES[ti].x, first.y + TUTOR_NODES[ti].dy, 'normal');
+      }
+    }
 
     this.player = {
       x: first.x, y: first.y - 70,
@@ -151,6 +252,8 @@
       node: first,
       ang: -Math.PI / 2,
       r: 70,
+      targetR: 70,
+      speed: this._speed(),
       dir: 1,
       flyT: 0,
       trailT: 0
@@ -201,12 +304,17 @@
       var x = clamp(top.x + dx, MARGIN_X, W - MARGIN_X);
       var y = top.y - gap;
 
+      /* While the tutorial is still teaching, the chain ahead stays clean.
+         A first-timer must not meet an amber node or a mine before they have
+         proved they can release, aim and latch at all. */
+      var safe = this.tutorial;
+
       var type = 'normal';
-      if (n >= 9 && this.rand() < Math.min(0.34, (n - 8) * 0.030)) type = 'decay';
+      if (!safe && n >= 9 && this.rand() < Math.min(0.34, (n - 8) * 0.030)) type = 'decay';
       var node = this._pushNode(x, y, type);
 
       // A shard tempts you off the safest line.
-      if (this.rand() < 0.45) {
+      if (!safe && this.rand() < 0.45) {
         var mt = 0.35 + this.rand() * 0.3;
         var sx = lerp(top.x, node.x, mt), sy = lerp(top.y, node.y, mt);
         var off = (this.rand() * 2 - 1) * 46;
@@ -221,7 +329,7 @@
          viable corridor, so outcomes were random instead of earned. Now a
          clean release is always safe and only a sloppy, wide arc (or a
          greedy detour for a shard) can clip one. */
-      if (n >= 12 && this.rand() < Math.min(0.50, (n - 11) * 0.040)) {
+      if (!safe && n >= 12 && this.rand() < Math.min(0.50, (n - 11) * 0.040)) {
         var mx = (top.x + node.x) * 0.5, my = (top.y + node.y) * 0.5;
         var sdx = node.x - top.x, sdy = node.y - top.y;
         var slen = Math.sqrt(sdx * sdx + sdy * sdy) || 1;
@@ -245,7 +353,8 @@
     var floor = this.camY + H + 460;
     var i;
     for (i = this.nodes.length - 1; i >= 0; i--) {
-      if (this.nodes[i].y > floor && this.nodes[i] !== this.player.node && this.nodes.length > 3) {
+      if (this.nodes[i].y > floor && this.nodes[i] !== this.player.node &&
+          this.nodes[i] !== this.safeNode && this.nodes.length > 3) {
         this.nodes.splice(i, 1);
       }
     }
@@ -255,8 +364,26 @@
 
   /* ---------------- flow ------------------------------------------- */
 
-  Game.prototype.start = function () {
-    this.rand = SK.rng((Math.random() * 1e9) | 0);
+  /* `seed` is optional. Precedence: explicit argument > ?seed=N > random.
+     Whichever wins is RECORDED, so snapshot() can always hand back the seed
+     that actually produced the run you are looking at. */
+  Game.prototype.start = function (seed) {
+    var s;
+    if (seed !== undefined && seed !== null) s = seed >>> 0;
+    else if (this.fixedSeed !== null) s = this.fixedSeed;
+    else s = ((Math.random() * 1e9) | 0) >>> 0;
+
+    this.runSeed = s;
+    this.seed = s;
+    this.rand = SK.rng(s);
+
+    /* The sim clock drives mine drift, so it must restart with the world.
+       Leaving it running meant the same seed produced a different layout on
+       every run - the seed was decorative. */
+    this.time = 0;
+    this.acc = 0;
+
+    this.tutorial = !this.tutorialDone;
     this._resetWorld();
     this.state = 'playing';
     this.newBest = false;
@@ -265,12 +392,61 @@
     this.overT = 0;
     this.dyingT = 0;
     this.hitstop = 0;
+    this.queuedAction = false;
+    this.lastActionT = -99;
     SK.Audio.resume();
     SK.Audio.start();
   };
 
+  /* Used by the balance harness (and anyone debugging) to reach normal
+     gameplay without playing the tutorial first. */
+  Game.prototype.skipTutorial = function (persist) {
+    this.tutorialDone = true;
+    this.tutorial = false;
+    if (persist) SK.Store.set('skyhook.tutorialComplete', '1');
+  };
+
+  Game.prototype._finishTutorial = function () {
+    this.tutorial = false;
+    this.tutorialDone = true;
+    this.tutHold = false;
+    SK.Store.set('skyhook.tutorialComplete', '1');
+    this._label(W / 2, this.player.y - 96, 'YOU HAVE IT - GO', '53,230,255');
+    /* Hand the rift back its freedom from wherever the camera is now. */
+    this.riftY = Math.max(this.riftY, this.camY + H + 240);
+  };
+
+  /* An assisted miss during the tutorial is not a death. Rewind to the last
+     anchor and let them try again - and keep it out of scores, records and
+     any future ad counter. */
+  Game.prototype._tutorialReset = function () {
+    var n = this.safeNode || this.nodes[0];
+    if (!n) return;
+    var p = this.player;
+    this.tutMisses++;
+    p.node = n;
+    p.mode = 'orbit';
+    p.ang = -Math.PI / 2;
+    p.r = 70;
+    p.targetR = 70;
+    p.dir = 1;
+    p.flyT = 0;
+    p.vx = 0; p.vy = 0;
+    p.x = n.x; p.y = n.y - 70;
+    n.spent = false;
+    n.hooked = true;
+    this.pendNode = null;
+    this.tutResetT = TUTOR_RESET;
+    this.tutHold = false;
+    this.riftY = Math.max(this.riftY, this.camY + H + 240);
+    this._label(n.x, n.y - 110, 'TRY AGAIN', '255,176,58');
+    SK.Audio.snap();
+  };
+
   Game.prototype.die = function (cause) {
     if (this.state !== 'playing') return;
+    /* Failure is not available until the tutorial has taught one success. */
+    if (this.tutorial) { this._tutorialReset(); return; }
     this.cause = cause;
     this.state = 'dying';
     this.dyingT = 0;
@@ -297,16 +473,54 @@
 
   Game.prototype.action = function () {
     if (this.state === 'title') { this.start(); return; }
-    if (this.state === 'over') { if (this.overT > 0.5) this.start(); return; }
+    if (this.state === 'paused') { this.resume(); return; }
+    if (this.state === 'over') { if (this.overT > RETRY_LOCK) this.start(); return; }
     if (this.state !== 'playing') return;
-    if (this.player.mode === 'orbit') this._release(false);
+
+    /* Gameplay debounce. Deliberately measured on the SIM clock: a wall-clock
+       debounce would swallow almost every input in the headless balance
+       harness, which plays 240 simulated seconds in a fraction of a second. */
+    if (this.time - this.lastActionT < ACT_DEBOUNCE) return;
+    this.lastActionT = this.time;
+
+    /* Input is queued and consumed by the next fixed tick, so the same taps
+       at the same timestamps produce the same run at any refresh rate. */
+    this.queuedAction = true;
   };
 
+  Game.prototype.pause = function () {
+    if (this.state !== 'playing') return;
+    this.state = 'paused';
+    this.queuedAction = false;
+    this.acc = 0;
+    if (SK.Audio.ctx) { try { SK.Audio.ctx.suspend(); } catch (e) {} }
+  };
+
+  Game.prototype.resume = function () {
+    if (this.state !== 'paused') return;
+    this.state = 'playing';
+    this.acc = 0;
+    this.queuedAction = false;
+    this.lastActionT = this.time;
+    SK.Audio.resume();
+  };
+
+  function inRect(r, x, y) {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  /* Explicit hitboxes are dispatched BEFORE the generic tap-anywhere action.
+     Today that only protects Retry; it is the mechanism that makes it safe to
+     put a revive or purchase button on this screen later. */
   Game.prototype.pointerDown = function (lx, ly) {
-    var m = this.muteRect;
-    if (lx >= m.x - 10 && lx <= m.x + m.w + 10 && ly >= m.y - 10 && ly <= m.y + m.h + 10) {
-      this.toggleMute();
-      return;
+    /* Taps in the letterbox around the canvas still count as gameplay, but
+       they must never reach a button: clamp button hit-testing to the canvas. */
+    var onCanvas = lx >= 0 && lx <= W && ly >= 0 && ly <= H;
+
+    if (onCanvas && inRect(this.muteHit, lx, ly)) { this.toggleMute(); return; }
+
+    if (this.state === 'over' && this.overT > RETRY_LOCK) {
+      if (onCanvas && inRect(this.retryRect, lx, ly)) { this.start(); return; }
     }
     this.action();
   };
@@ -323,14 +537,19 @@
     var p = this.player;
     var n = p.node;
     if (!n) return;
+    /* Speed is sampled once, at release, and held for the whole flight -
+       so a hook landing mid-flight can never change the shot already taken. */
+    p.speed = this._speed();
     var sn = Math.sin(p.ang), cs = Math.cos(p.ang);
     p.x = n.x + cs * p.r;
     p.y = n.y + sn * p.r;
-    p.vx = -sn * p.dir * SPEED;
-    p.vy = cs * p.dir * SPEED;
+    p.vx = -sn * p.dir * p.speed;
+    p.vy = cs * p.dir * p.speed;
     p.mode = 'fly';
     p.flyT = 0;
     this.pendNode = null;
+    this.lastForced = !!forced;
+    this.tutHold = false;
     n.spent = true;
     n.hooked = false;
     p.node = null;
@@ -351,21 +570,54 @@
     var cross = dx * p.vy - dy * p.vx;
 
     p.node = node;
-    p.ang = Math.atan2(dy, dx);
-    p.r = clamp(d, MIN_R, MAX_R);
-    p.dir = cross >= 0 ? 1 : -1;
+
+    /* Radius continuity. The old code snapped r to MIN_R on catch while
+       leaving the player at closest approach, so a bullseye teleported them
+       up to ~46 px outward on the very next step - straight through pickups
+       and, occasionally, into a mine. Start at the distance actually achieved
+       and ease out to the resting length instead. */
+    p.r = d;
+    p.targetR = clamp(d, MIN_R, MAX_R);
+
+    if (d < 0.5) {
+      /* Dead-centre catch: atan2 and the cross product are both numerically
+         meaningless here. Derive the radial direction from the incoming
+         velocity and keep the orbit direction we already had. */
+      var vl = Math.sqrt(p.vx * p.vx + p.vy * p.vy) || 1;
+      var ux = p.vx / vl, uy = p.vy / vl;
+      p.ang = p.dir > 0 ? Math.atan2(-ux, uy) : Math.atan2(ux, -uy);
+      p.r = Math.max(d, 0.001);
+    } else {
+      p.ang = Math.atan2(dy, dx);
+      p.dir = cross >= 0 ? 1 : -1;
+    }
+
     p.mode = 'orbit';
     p.flyT = 0;
+    p.speed = this._speed();
     this.pendNode = null;
+    this.safeNode = node;
     node.hooked = true;
     node.decay = node.type === 'decay' ? DECAY_TIME : 0;
 
     var tight = d <= TIGHT_D;
     if (tight) this.combo = Math.min(this.combo + 1, 9);
-    else if (d >= LOOSE_D) this.combo = 1;
+    /* A sloppy catch used to wipe the combo to 1 outright. Losing six steps
+       of a ladder for one wide latch reads as a bug, not a rule. */
+    else if (d >= LOOSE_D) this.combo = Math.max(1, this.combo - 2);
 
-    this.score += (tight ? 15 : 8) * this.combo;
+    var gain = (tight ? 15 : 8) * this.combo;
+    this.score += gain;
     this.hooks++;
+
+    this._label(node.x, node.y - 34,
+      (tight ? 'TIGHT +' : 'HOOK +') + gain + (this.combo > 1 ? '  x' + this.combo : ''),
+      tight ? '255,215,94' : '53,230,255');
+
+    if (this.tutorial) {
+      this.tutStep++;
+      if (this.tutStep >= TUTOR_HOOKS) this._finishTutorial();
+    }
 
     node.pop = 1;
     this.tetherPulse = 1;
@@ -386,14 +638,73 @@
 
   /* ---------------- simulation ------------------------------------- */
 
+  /* Squared distance from point c to segment a->b. Used so a fast tick can
+     never step a player straight THROUGH a mine or a shard. */
+  function segDist2(ax, ay, bx, by, cx, cy) {
+    var vx = bx - ax, vy = by - ay;
+    var wx = cx - ax, wy = cy - ay;
+    var len2 = vx * vx + vy * vy;
+    var t = len2 > 0 ? clamp((wx * vx + wy * vy) / len2, 0, 1) : 0;
+    var dx = ax + vx * t - cx, dy = ay + vy * t - cy;
+    return dx * dx + dy * dy;
+  }
+
+  /* Where would releasing RIGHT NOW take us? Uses the launch ray and closest
+     approach, with the same candidate rules the flight itself uses: the first
+     node whose latch ring the ray enters wins. */
+  Game.prototype._predictRelease = function () {
+    var out = this.predict;
+    out.node = null; out.d = 0; out.t = 0;
+    var p = this.player;
+    if (p.mode !== 'orbit' || !p.node) return out;
+
+    var sn = Math.sin(p.ang), cs = Math.cos(p.ang);
+    var rx = p.node.x + cs * p.r, ry = p.node.y + sn * p.r;
+    var ux = -sn * p.dir, uy = cs * p.dir;
+    var reach = this._speed() * FLIGHT_MAX;
+
+    var bestT = Infinity;
+    for (var i = 0; i < this.nodes.length; i++) {
+      var nd = this.nodes[i];
+      if (nd.spent || nd === p.node) continue;
+      var ax = nd.x - rx, ay = nd.y - ry;
+      var t = ax * ux + ay * uy;
+      if (t <= 0 || t >= reach) continue;
+      var px = ax - ux * t, py = ay - uy * t;
+      var d = Math.sqrt(px * px + py * py);
+      if (d < CAPTURE_R && t < bestT) { bestT = t; out.node = nd; out.d = d; out.t = t; }
+    }
+    return out;
+  };
+
   Game.prototype._step = function (dt) {
     var p = this.player, i;
+    var ox = p.x, oy = p.y;   // swept-collision origin for this tick
 
     if (p.mode === 'orbit') {
       var n = p.node;
-      p.ang += p.dir * (SPEED / p.r) * dt;
+      p.speed = this._speed();
+
+      /* tutHold freezes the orbit on the taught tap so a first-run player can
+         see the release that works before they are asked to time it. */
+      if (!this.tutHold) {
+        /* Angular rate is floored at the resting radius: settling out of a
+           dead-centre catch is a short wind-out, never a near-zero-radius spin. */
+        p.ang += p.dir * (p.speed / Math.max(p.r, MIN_R)) * dt;
+        if (p.r !== p.targetR) {
+          var rdiff = p.targetR - p.r;
+          var rmove = SETTLE_RATE * dt;
+          p.r += clamp(rdiff, -rmove, rmove);
+        }
+      }
       p.x = n.x + Math.cos(p.ang) * p.r;
       p.y = n.y + Math.sin(p.ang) * p.r;
+
+      this._predictRelease();
+      if (this.tutorial && this.tutStep === 0 && !this.tutHold &&
+          this.predict.node && this.predict.d <= TUTOR_AIM) {
+        this.tutHold = true;   // "TAP NOW"
+      }
 
       if (n.type === 'decay') {
         n.decay -= dt;
@@ -449,19 +760,26 @@
 
     if (p.x < -DEATH_PAD || p.x > W + DEATH_PAD) { this.die('edge'); return; }
 
-    /* the rift */
-    var riftSpeed = 52 + Math.min(132, this.hooks * 1.7);
-    this.riftY -= riftSpeed * dt;
+    /* The rift. Frozen while the tutorial teaches - a first-run player should
+       be able to think about the release, not race a wall. */
     var leash = this.camY + H + 300;
-    if (this.riftY > leash) this.riftY = leash;
-    if (p.y >= this.riftY) { this.die('rift'); return; }
+    if (this.tutorial) {
+      this.riftY = Math.max(this.riftY, leash);
+    } else {
+      var riftSpeed = 52 + Math.min(132, this.hooks * 1.7);
+      this.riftY -= riftSpeed * dt;
+      if (this.riftY > leash) this.riftY = leash;
+      if (p.y >= this.riftY) { this.die('rift'); return; }
+    }
 
-    /* mines */
+    /* Mines and shards are tested against the SEGMENT the player swept this
+       tick, not just the endpoint - so settling out of a tight catch can
+       neither skip a pickup nor tunnel through a hazard. */
     for (i = 0; i < this.mines.length; i++) {
       var m = this.mines[i];
       m.x = m.homeX + Math.sin(this.time * 0.9 + m.phase) * m.amp;
-      var mdx = p.x - m.x, mdy = p.y - m.y;
-      if (mdx * mdx + mdy * mdy < (MINE_R + PLAYER_R) * (MINE_R + PLAYER_R)) { this.die('mine'); return; }
+      var mr = MINE_R + PLAYER_R;
+      if (segDist2(ox, oy, p.x, p.y, m.x, m.y) < mr * mr) { this.die('mine'); return; }
     }
 
     /* shards */
@@ -469,12 +787,13 @@
     for (i = 0; i < this.shards.length; i++) {
       var sh = this.shards[i];
       if (sh.got) continue;
-      var sdx = p.x - sh.x, sdy = p.y - sh.y;
-      if (sdx * sdx + sdy * sdy < SHARD_PICK * SHARD_PICK) {
+      if (segDist2(ox, oy, p.x, p.y, sh.x, sh.y) < SHARD_PICK * SHARD_PICK) {
         sh.got = true;
         collected = true;
         this.score += 25 * Math.max(1, Math.floor(this.combo * 0.5));
         this.riftY += 72;            // breathing room as a reward
+        this.riftPulse = 1;
+        this._label(sh.x, sh.y - 26, 'RIFT PUSHBACK', '255,215,94');
         this.shake = Math.min(this.shake + 3, 12);
         for (var k = 0; k < 14; k++) {
           var a3 = Math.random() * TAU, s3 = 60 + Math.random() * 200;
@@ -489,58 +808,44 @@
     }
   };
 
-  Game.prototype.update = function (dtRaw) {
-    var dt = Math.min(dtRaw, 0.05);
-    this.time += dt;
+  /* ONE simulation tick. Always exactly STEP seconds - never a subdivision of
+     whatever the display happened to deliver. Everything that can change the
+     outcome of a run lives in here: the sim clock, mine drift, the camera, the
+     rift leash, spawning, culling and hitstop. */
+  Game.prototype._tick = function () {
+    var dt = STEP;
 
-    this.shake = Math.max(0, this.shake - this.shake * 6 * dt - 6 * dt);
-    this.flash = Math.max(0, this.flash - dt * 3.2);
-    this.tetherPulse = Math.max(0, this.tetherPulse - dt * 3.5);
-
-    if (this.state === 'title') {
-      this.titleT += dt;
-      this.camY -= 20 * dt;
-      this.particles.update(dt);
-      return;
-    }
-
-    if (this.state === 'over') {
-      this.overT += dt;
-      this.camY -= 8 * dt;
-      this.particles.update(dt);
-      return;
-    }
-
-    if (this.state === 'dying') {
-      this.dyingT += dt;
-      this.particles.update(dt);
-      this.riftY -= 40 * dt;
-      if (this.dyingT > 0.7) {
-        this.state = 'over';
-        this.overT = 0;
-        if (this.newBest) SK.Audio.best();
-      }
-      return;
-    }
-
-    /* playing */
     if (this.hitstop > 0) {
       this.hitstop -= dt;
       this.particles.update(dt * 0.2);
       return;
     }
 
-    var steps = Math.min(8, Math.max(1, Math.ceil(dt / STEP)));
-    var sdt = dt / steps;
-    for (var s = 0; s < steps; s++) {
-      this._step(sdt);
-      if (this.state !== 'playing') break;
+    /* Queued input is consumed at the head of a tick, so identical taps at
+       identical timestamps replay identically at any refresh rate. */
+    if (this.queuedAction) {
+      this.queuedAction = false;
+      if (this.player.mode === 'orbit') this._release(false);
     }
 
+    this.time += dt;
+    if (this.tutResetT > 0) this.tutResetT = Math.max(0, this.tutResetT - dt);
+
+    this._step(dt);
     this.particles.update(dt);
     if (this.state !== 'playing') return;
 
     var p = this.player;
+
+    /* Node pop was decaying inside the draw call (-0.045 per painted frame),
+       which made a purely cosmetic value depend on render scheduling. */
+    for (var i = 0; i < this.nodes.length; i++) {
+      var nd = this.nodes[i];
+      if (nd.pop > 0) nd.pop = Math.max(0, nd.pop - 2.7 * dt);
+    }
+    for (i = 0; i < this.labels.length; i++) {
+      if (this.labels[i].t > 0) this.labels[i].t = Math.max(0, this.labels[i].t - dt);
+    }
 
     /* motion trail */
     p.trailT -= dt;
@@ -561,7 +866,7 @@
 
     /* proximity warning beeps */
     var gapToRift = this.riftY - p.y;
-    if (gapToRift < 190) {
+    if (gapToRift < 190 && !this.tutorial) {
       this.warnT -= dt;
       if (this.warnT <= 0) { this.warnT = clamp(gapToRift / 460, 0.14, 0.42); SK.Audio.warn(); }
     } else this.warnT = 0;
@@ -575,6 +880,67 @@
 
     this._ensureAhead();
     this._cull();
+  };
+
+  Game.prototype.update = function (dtRaw) {
+    var dt = (typeof dtRaw === 'number' && dtRaw > 0) ? dtRaw : 0;
+
+    /* A long gap is a STALL (tab throttled, ad overlay, GC pause), not a slow
+       frame. The old code clamped dt to 0.05, which silently ran the whole
+       game in slow motion below 20 FPS. Drop the backlog instead: never
+       simulate a catch-up the player could not react to, never slow down. */
+    var stalled = dt > STALL_MAX;
+    if (stalled) dt = STALL_MAX;
+
+    /* Presentation-only timers keep using real time so menus stay smooth. */
+    this.shake = Math.max(0, this.shake - this.shake * 6 * dt - 6 * dt);
+    this.flash = Math.max(0, this.flash - dt * 3.2);
+    this.tetherPulse = Math.max(0, this.tetherPulse - dt * 3.5);
+    this.riftPulse = Math.max(0, this.riftPulse - dt * 1.8);
+
+    if (this.state === 'title') {
+      this.time += dt;              // cosmetic only outside a run
+      this.titleT += dt;
+      this.camY -= 20 * dt;
+      this.particles.update(dt);
+      return;
+    }
+
+    if (this.state === 'paused') return;
+
+    if (this.state === 'over') {
+      this.time += dt;
+      this.overT += dt;
+      this.camY -= 8 * dt;
+      this.particles.update(dt);
+      return;
+    }
+
+    if (this.state === 'dying') {
+      this.time += dt;
+      this.dyingT += dt;
+      this.particles.update(dt);
+      this.riftY -= 40 * dt;
+      if (this.dyingT > DEATH_ANIM) {
+        this.state = 'over';
+        this.overT = 0;
+        if (this.newBest) SK.Audio.best();
+      }
+      return;
+    }
+
+    /* playing: true fixed-step accumulator */
+    if (stalled) { this.acc = 0; return; }
+
+    this.acc += dt;
+    var ticks = 0;
+    while (this.acc >= STEP && ticks < MAX_TICKS) {
+      this.acc -= STEP;
+      ticks++;
+      this._tick();
+      if (this.state !== 'playing') { this.acc = 0; break; }
+    }
+    if (ticks >= MAX_TICKS) this.acc = 0;   // never death-spiral on a slow device
   };
 
   /* ---------------- rendering -------------------------------------- */
@@ -639,8 +1005,7 @@
     var col = decayed ? COL.decay : COL.node;
     var glow = decayed ? this.glowDecay : this.glowNode;
 
-    if (n.pop > 0) n.pop = Math.max(0, n.pop - 0.045);
-
+    /* n.pop decays in _tick(), not here - drawing must never mutate state. */
     var alive = !n.spent;
     var baseA = alive ? 0.55 : 0.14;
 
@@ -761,29 +1126,77 @@
         ctx.fill();
       }
 
-      /* Release-direction guide. In a game that is 100% aiming, hiding the
-         launch vector is not difficulty, it is guesswork. */
+      /* Release guide. In a game that is 100% aiming, hiding the launch vector
+         is not difficulty, it is guesswork. The guide now also answers the
+         question that actually matters: WOULD THIS RELEASE WORK? It runs the
+         same closest-approach maths the flight itself uses and recolours -
+         cyan when the shot lands inside a latch ring, gold when it lands
+         inside the tight-hook threshold. */
       var gvx = -Math.sin(p.ang) * p.dir, gvy = Math.cos(p.ang) * p.dir;
+      var pr = this.predict;
+      var gCol = '255,255,255', gA = 0.30, gTip = 0.42;
+      if (pr.node) {
+        if (pr.d <= TIGHT_D) { gCol = '255,215,94'; gA = 0.85; gTip = 0.95; }
+        else { gCol = '53,230,255'; gA = 0.62; gTip = 0.8; }
+      }
+      var tail = GUIDE_LEN - 14;
       ctx.save();
       ctx.setLineDash([7, 8]);
       ctx.lineDashOffset = -this.time * 90;
-      ctx.strokeStyle = 'rgba(255,255,255,0.30)';
-      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = 'rgba(' + gCol + ',' + gA.toFixed(2) + ')';
+      ctx.lineWidth = pr.node ? 2.2 : 1.6;
       ctx.beginPath();
       ctx.moveTo(p.x + gvx * 15, p.y + gvy * 15);
-      ctx.lineTo(p.x + gvx * 118, p.y + gvy * 118);
+      ctx.lineTo(p.x + gvx * tail, p.y + gvy * tail);
       ctx.stroke();
       ctx.restore();
-      ctx.fillStyle = 'rgba(255,255,255,0.42)';
+      ctx.fillStyle = 'rgba(' + gCol + ',' + gTip.toFixed(2) + ')';
       ctx.beginPath();
-      ctx.moveTo(p.x + gvx * 132, p.y + gvy * 132);
-      ctx.lineTo(p.x + gvx * 118 - gvy * 5.5, p.y + gvy * 118 + gvx * 5.5);
-      ctx.lineTo(p.x + gvx * 118 + gvy * 5.5, p.y + gvy * 118 - gvx * 5.5);
+      ctx.moveTo(p.x + gvx * GUIDE_LEN, p.y + gvy * GUIDE_LEN);
+      ctx.lineTo(p.x + gvx * tail - gvy * 5.5, p.y + gvy * tail + gvx * 5.5);
+      ctx.lineTo(p.x + gvx * tail + gvy * 5.5, p.y + gvy * tail - gvx * 5.5);
       ctx.closePath();
       ctx.fill();
+
+      /* Mark the node this release would actually capture. */
+      if (pr.node) {
+        var tgt = pr.node;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(' + gCol + ',' + (0.5 + 0.3 * Math.sin(this.time * 8)).toFixed(2) + ')';
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.arc(tgt.x, tgt.y, NODE_R + 9, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
 
     this.particles.draw(ctx);
+
+    /* Outcome labels: what did that hook actually pay? Pooled, so no
+       allocation and no string churn during play. */
+    for (i = 0; i < this.labels.length; i++) {
+      var L = this.labels[i];
+      if (L.t <= 0) continue;
+      var lt = L.t / LABEL_LIFE;
+      var rise = (1 - lt) * 26;
+      txt(ctx, L.s, L.x, L.y - rise, 17,
+        'rgba(' + L.c + ',' + (lt < 0.3 ? (lt / 0.3) : 1).toFixed(2) + ')',
+        'center', 800, 'rgba(' + L.c + ',0.7)', 12);
+    }
+
+    /* Tutorial coaching, anchored to the player so it cannot be missed. */
+    if (this.tutorial && this.state === 'playing') {
+      if (this.tutHold) {
+        var bp = 0.7 + 0.3 * Math.sin(this.time * 9);
+        txt(ctx, 'TAP NOW', p.x, p.y - 58, 26, 'rgba(255,215,94,' + bp.toFixed(2) + ')',
+          'center', 800, 'rgba(255,215,94,0.9)', 20);
+      } else if (p.mode === 'orbit' && this.tutStep > 0 &&
+                 this.predict.node && this.predict.d <= TIGHT_D) {
+        txt(ctx, 'RELEASE', p.x, p.y - 52, 20, 'rgba(255,215,94,0.9)',
+          'center', 800, 'rgba(255,215,94,0.7)', 14);
+      }
+    }
 
     /* player */
     if (this.state === 'playing') {
@@ -896,7 +1309,11 @@
 
   Game.prototype._drawTitle = function (ctx) {
     var cx = W / 2, cy = 366, r = 88;
-    var a = this.titleT * 1.5;
+    /* The demo used to orbit at a fixed 1.5 rad/s - a 4.19 s lap, against a
+       real opening lap of well under 1.5 s. It was advertising a different,
+       much calmer game than the one behind the tap. Drive it at the same
+       LINEAR speed the player is about to be handed instead. */
+    var a = this.titleT * (TUTOR_SPEED / r);
 
     ctx.strokeStyle = 'rgba(53,230,255,0.16)';
     ctx.lineWidth = 1;
@@ -918,9 +1335,12 @@
     txt(ctx, 'SKYHOOK', W / 2, 196, 62, '#ffffff', 'center', 800, 'rgba(53,230,255,0.9)', 30);
     txt(ctx, 'H O O K   -   S W I N G   -   C L I M B', W / 2, 230, 13, 'rgba(150,210,240,0.75)', 'center', 600);
 
-    var blink = 0.55 + 0.45 * Math.sin(this.titleT * 4);
-    txt(ctx, 'TAP  /  SPACE', W / 2, 560, 26, 'rgba(255,255,255,' + blink.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.6)', 16);
-    txt(ctx, 'to let go of the tether', W / 2, 588, 15, 'rgba(150,190,220,0.65)', 'center', 500);
+    /* The old CTA said "TAP / SPACE - to let go of the tether", but the first
+       tap does not release anything: it starts the run. Say what the button
+       actually does, then say what the NEXT one does. */
+    var blink = 0.65 + 0.35 * Math.sin(this.titleT * 4);
+    txt(ctx, 'TAP TO START', W / 2, 560, 26, 'rgba(255,255,255,' + blink.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.6)', 16);
+    txt(ctx, 'Tap again to release. Hooks connect automatically.', W / 2, 588, 13, 'rgba(150,190,220,0.7)', 'center', 500);
 
     txt(ctx, 'BEST', W / 2, 660, 13, 'rgba(150,190,220,0.55)', 'center', 700);
     txt(ctx, String(this.best), W / 2, 702, 38, 'rgba(255,215,94,0.95)', 'center', 800, 'rgba(255,215,94,0.5)', 18);
@@ -940,6 +1360,12 @@
     txt(ctx, 'SIGNAL LOST', W / 2, 268 - slide, 44, 'rgba(255,255,255,' + t.toFixed(2) + ')', 'center', 800, 'rgba(255,46,99,0.8)', 26);
     txt(ctx, CAUSE[this.cause] || '', W / 2, 300 - slide, 14, 'rgba(255,140,165,' + (0.8 * t).toFixed(2) + ')', 'center', 600);
 
+    /* One actionable correction, not a restatement of the consequence. If the
+       run ended adrift right after an amber node dumped us, name that. */
+    var fixKey = (this.cause === 'drift' && this.lastForced) ? 'decay' : this.cause;
+    txt(ctx, FIX[fixKey] || '', W / 2, 328 - slide, 14,
+      'rgba(150,210,240,' + (0.85 * t).toFixed(2) + ')', 'center', 500);
+
     txt(ctx, 'SCORE', W / 2, 396, 13, 'rgba(150,190,220,' + (0.6 * t).toFixed(2) + ')', 'center', 700);
     txt(ctx, String(this.score), W / 2, 456, 62, 'rgba(255,255,255,' + t.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.8)', 24);
     txt(ctx, this.hooks + ' hooks   -   ' + this.altitude + ' m', W / 2, 488, 14, 'rgba(150,190,220,' + (0.6 * t).toFixed(2) + ')', 'center', 600);
@@ -955,9 +1381,24 @@
       txt(ctx, 'BEST  ' + this.best, W / 2, 548, 20, 'rgba(255,215,94,' + (0.85 * t).toFixed(2) + ')', 'center', 700);
     }
 
-    if (this.overT > 0.5) {
-      var blink = 0.5 + 0.5 * Math.sin((this.overT - 0.5) * 4.5);
-      txt(ctx, 'TAP TO RETRY', W / 2, 668, 24, 'rgba(255,255,255,' + blink.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.6)', 16);
+    if (this.overT > RETRY_LOCK) {
+      /* A real, hit-tested button - not just a word to tap near. Sized so it
+         clears 48 CSS px on the smallest sane phone, and pulsing between 0.65
+         and 1.0 rather than blinking all the way to invisible. */
+      var rr = this.retryRect;
+      var pulse = 0.65 + 0.35 * (0.5 + 0.5 * Math.sin((this.overT - RETRY_LOCK) * 4.5));
+      ctx.save();
+      ctx.fillStyle = 'rgba(53,230,255,' + (0.10 * t).toFixed(2) + ')';
+      ctx.strokeStyle = 'rgba(53,230,255,' + (0.55 * pulse).toFixed(2) + ')';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(rr.x, rr.y, rr.w, rr.h, 12);
+      else ctx.rect(rr.x, rr.y, rr.w, rr.h);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      txt(ctx, 'TAP TO RETRY', W / 2, rr.y + 41, 24,
+        'rgba(255,255,255,' + pulse.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.6)', 16);
     }
   };
 
@@ -980,11 +1421,12 @@
       ctx.restore();
     }
 
-    /* rift proximity vignette */
-    if (this.state === 'playing') {
+    /* rift proximity vignette - also the "RIFT PUSHBACK" feedback surface */
+    if (this.state === 'playing' || this.state === 'paused') {
       var gap = this.riftY - this.player.y;
-      if (gap < 240) {
-        var a = clamp(1 - gap / 240, 0, 1) * (0.35 + 0.25 * Math.sin(this.time * 10));
+      if (gap < 240 || this.riftPulse > 0) {
+        var a = clamp(1 - gap / 240, 0, 1) * (0.35 + 0.25 * Math.sin(this.time * 10))
+          + this.riftPulse * 0.30;
         var vg = ctx.createLinearGradient(0, H, 0, H * 0.35);
         vg.addColorStop(0, 'rgba(255,46,99,' + (a * 0.75).toFixed(3) + ')');
         vg.addColorStop(1, 'rgba(255,46,99,0)');
@@ -1009,6 +1451,15 @@
     else if (this.state === 'over') { this._drawOver(ctx); this._drawMute(ctx); }
     else this._drawHud(ctx);
 
+    /* Coming back from a background/ad interruption never resumes an orbit
+       under the player's thumb - they ask for it. */
+    if (this.state === 'paused') {
+      ctx.fillStyle = 'rgba(4,5,14,0.72)';
+      ctx.fillRect(0, 0, W, H);
+      txt(ctx, 'PAUSED', W / 2, 400, 40, '#ffffff', 'center', 800, 'rgba(53,230,255,0.7)', 22);
+      txt(ctx, 'TAP TO RESUME', W / 2, 452, 20, 'rgba(255,255,255,0.85)', 'center', 700);
+    }
+
     ctx.restore();
   };
 
@@ -1027,6 +1478,8 @@
     }
     return {
       state: this.state,
+      seed: this.runSeed,          // the seed that ACTUALLY produced this run
+      simTime: this.time,
       score: this.score,
       best: this.best,
       hooks: this.hooks,
@@ -1034,9 +1487,15 @@
       altitude: this.altitude,
       mode: p.mode,
       px: p.x, py: p.y,
-      ang: p.ang, r: p.r, dir: p.dir,
+      ang: p.ang, r: p.r, targetR: p.targetR, dir: p.dir,
+      speed: this._speed(),
+      tutorial: this.tutorial,
+      tutStep: this.tutStep,
+      tutHold: this.tutHold,
+      tutMisses: this.tutMisses,
       anchor: p.node ? { x: p.node.x, y: p.node.y, type: p.node.type } : null,
       next: next ? { x: next.x, y: next.y, d: bestD } : null,
+      predict: this.predict.node ? { d: this.predict.d, t: this.predict.t } : null,
       riftY: this.riftY,
       cause: this.cause,
       persistent: SK.Store.persistent

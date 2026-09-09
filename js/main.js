@@ -67,6 +67,11 @@
     SK.Audio.resume();
   }
 
+  /* In the touch fallback the browser synthesises a mousedown after every
+     touchstart, so one thumb tap arrived as two releases. */
+  var lastTouchAt = 0;
+  var TOUCH_GHOST_MS = 750;
+
   function onDown(e) {
     if (e.cancelable) e.preventDefault();
     armAudio();
@@ -79,11 +84,26 @@
     game.pointerDown(p.x, p.y);
   }
 
+  function onPointerDown(e) {
+    /* Secondary touches in a multi-touch gesture, and every mouse button
+       except the primary one, are not gameplay input. */
+    if (e.isPrimary === false) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    onDown(e);
+  }
+
   if (global.PointerEvent) {
-    stage.addEventListener('pointerdown', onDown, { passive: false });
+    stage.addEventListener('pointerdown', onPointerDown, { passive: false });
   } else {
-    stage.addEventListener('touchstart', onDown, { passive: false });
-    stage.addEventListener('mousedown', onDown, { passive: false });
+    stage.addEventListener('touchstart', function (e) {
+      lastTouchAt = Date.now();
+      onDown(e);
+    }, { passive: false });
+    stage.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      if (Date.now() - lastTouchAt < TOUCH_GHOST_MS) return;   // ghost click
+      onDown(e);
+    }, { passive: false });
   }
 
   /* Stop iOS double-tap zoom / long-press callout over the play area. */
@@ -108,23 +128,35 @@
   var last = 0;
   var running = true;
 
+  /* The loop hands raw elapsed time to the game, which owns the fixed-step
+     accumulator. It no longer invents a dt of 1/60 after a stall - pretending
+     a 3-second gap was 16 ms is how a backgrounded tab comes back already
+     dead, or silently in slow motion. */
   function frame(ts) {
     global.requestAnimationFrame(frame);
     if (!last) { last = ts; return; }
     var dt = (ts - last) / 1000;
     last = ts;
-    if (!running) return;
-    if (dt > 0.25) dt = 1 / 60;          // returning from a background tab
+    if (!running) { game.render(ctx); return; }
     game.update(dt);
     game.render(ctx);
   }
 
+  /* Backgrounding is an explicit interruption: pause, and make the player ask
+     for the game back. Coming straight out of a phone call (or, on Android, a
+     fullscreen ad) into a live orbit is a stolen run. */
   document.addEventListener('visibilitychange', function () {
     running = !document.hidden;
     last = 0;
-    if (document.hidden && SK.Audio.ctx) { try { SK.Audio.ctx.suspend(); } catch (e) {} }
-    else if (audioArmed) SK.Audio.resume();
+    if (document.hidden) {
+      game.pause();
+      if (SK.Audio.ctx) { try { SK.Audio.ctx.suspend(); } catch (e) {} }
+    } else if (audioArmed) {
+      SK.Audio.resume();
+    }
   });
+
+  global.addEventListener('blur', function () { last = 0; }, { passive: true });
 
   global.requestAnimationFrame(frame);
 
@@ -136,6 +168,8 @@
     fit: fit,
     snapshot: function () { return game.snapshot(); },
     tap: function () { game.action(); },
+    /* Test/debug hook: reach normal gameplay without playing the tutorial. */
+    skipTutorial: function (persist) { game.skipTutorial(persist !== false); },
     version: '1.0.0'
   };
 
