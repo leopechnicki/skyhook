@@ -149,6 +149,16 @@ function shouldRelease(g, skill) {
   const p = g.player;
   if (p.mode !== 'orbit' || !p.node) return false;
 
+  /* F5 (2026-09-09): PANIC TAPS.
+     Every profile here used to fail in exactly one way - by NOT releasing.
+     A player who never lets go at a bad moment can only ever be killed by a
+     hazard, so the harness was structurally incapable of observing a death
+     caused by a bad release. That was tolerable while the rift and the flight
+     timer existed; with the endless build it means the instrument cannot see
+     the ONLY fail condition the game has left. `panic` is a per-second
+     probability of letting go regardless of aim. */
+  if (skill.panic && Math.random() < skill.panic / 60) return true;
+
   let target = null, bd = Infinity;
   for (const n of g.nodes) {
     if (n.spent || n === p.node) continue;
@@ -265,10 +275,15 @@ const SEED_BASE = parseInt(flag('seed', ''), 10);
 const PAIRED = Number.isFinite(SEED_BASE);
 
 const profiles = [
-  ['first-timer', { mode: 'casual', tolerance: 78, missChance: 0.34 }],
-  ['casual',      { mode: 'casual', tolerance: 62, missChance: 0.16 }],
-  ['good',        { mode: 'casual', tolerance: 44, missChance: 0.06 }],
-  ['expert',      { mode: 'expert' }]
+  /* panic = per-second chance of letting go with no aim at all. Calibrated on
+     the SHIPPED (pre-gravity) build so that first-timer runs land in the 4-30s
+     window the health check already asserts: 0.40/s put the median at 5.4 s
+     with a p25 score of ZERO, i.e. most first-timers died before their first
+     hook, which is harsher than the game a human actually meets. */
+  ['first-timer', { mode: 'casual', tolerance: 78, missChance: 0.34, panic: 0.13 }],
+  ['casual',      { mode: 'casual', tolerance: 62, missChance: 0.16, panic: 0.06 }],
+  ['good',        { mode: 'casual', tolerance: 44, missChance: 0.06, panic: 0.02 }],
+  ['expert',      { mode: 'expert', panic: 0 }]
 ];
 
 console.log(`build: ${ROOT}`);

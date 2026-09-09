@@ -199,14 +199,18 @@ async function main() {
 
     /* ---------- 3. death + game over ---------- */
     await page.evaluate('window.__bot.on = false');
-    // make sure we are mid-run, then stop tapping and let the rift take us
+    /* The rift and the flight timer are gone: idling on an orbit is now
+       SAFE FOREVER by design, so "stop tapping and wait to die" can no longer
+       end a run. Death is caused by a bad release, so provoke one - spam
+       untimed taps until the ball leaves the screen. */
     s = await page.evaluate('window.__SKYHOOK.snapshot()');
     if (s.state !== 'playing') { await page.evaluate(TAP_CENTER); await wait(200); }
 
     const scoreBeforeDeath = (await page.evaluate('window.__SKYHOOK.snapshot()')).score;
     let died = false;
-    for (let i = 0; i < 60; i++) {
-      await wait(300);
+    for (let i = 0; i < 90; i++) {
+      await page.evaluate(TAP_CENTER);
+      await wait(160);
       s = await page.evaluate('window.__SKYHOOK.snapshot()');
       if (s.state === 'over') { died = true; break; }
     }

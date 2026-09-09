@@ -1,7 +1,11 @@
 /* SKYHOOK - core game.
-   One input. You orbit a node on a tether. Tap to let go; you fly in a
-   straight line and automatically latch onto the next node you pass near.
-   Miss, and there is nothing under you but the rising rift. */
+   One input. You orbit a celestial body on a tether. Tap to let go; you fly in
+   a straight line and automatically latch onto the next body you pass near.
+
+   Bodies have MASS. A star pulls harder than a planet, so it spins you faster
+   and throws you further; a planet is gentle and forgiving but pays less.
+   The run is endless while the ball stays on screen: there is no rift and no
+   flight timer. You lose by leaving the column or falling out of the bottom. */
 (function (global) {
   'use strict';
 
@@ -18,20 +22,72 @@
      r=46 vs 1.24 s at r=92). The game's most celebrated action was silently
      its harshest punishment. Speed now ramps with demonstrated skill and
      MIN_R is wide enough that a bullseye no longer costs you the next hook. */
-  var SPEED        = 468;   // top linear speed, orbiting AND flying
-  var SPEED_START  = 360;   // speed through the first few hooks
-  var SPEED_RAMP_A = 3;     // ...held until this many hooks
-  var SPEED_RAMP_B = 20;    // ...reaching SPEED at this many hooks
-  var TUTOR_SPEED  = 300;   // deliberately slow while the tutorial teaches
-  var MIN_R        = 60;    // tightest resting tether (was 46)
-  var MAX_R        = 92;    // widest tether == latch range
+  /* ---- gravity -----------------------------------------------------
+     Bodies used to be identical dots orbited at one global linear SPEED.
+     They now have a MASS and a RADIUS, and the orbit is DERIVED from them:
+
+         mu    = G * mass * scale^2        standard gravitational parameter
+         omega = sqrt(mu / r^3)            Kepler's circular-orbit rate
+         v     = sqrt(mu / r)  ( = omega*r )   tangential speed at release
+
+     Those are the real relations; only the constants are tuned rather than SI.
+     What that buys, as gameplay and not decoration:
+       - a heavy body spins you faster AND slings you harder,
+       - the same body spins you faster the tighter you catch it,
+       - a star covers far more ground per release than a planet, so it is
+         both the greedy line and the one that throws you off the screen.
+
+     `scale` is the onboarding ramp. It is SQUARED into mu on purpose, so one
+     knob moves omega and v together and v = omega*r keeps holding. */
+  var G            = 1.55e7; // px^3 / (mass * s^2)
+  var SCALE_START  = 0.78;   // gravity scale through the first few hooks
+  var SCALE_RAMP_A = 3;      // ...held until this many hooks
+  var SCALE_RAMP_B = 20;     // ...reaching full strength at this many hooks
+  var TUTOR_SCALE  = 0.64;   // deliberately gentle while the tutorial teaches
+
+  /* One mass-radius law for every body: R = R_REF * M^R_EXP. Stars are drawn
+     bigger because they ARE heavier, not because of a lookup table. */
+  var R_REF        = 12.5;   // radius of a 1.0-mass body, px
+  var R_EXP        = 0.36;
+
+  /* Tether geometry derives from the body's own radius, so a bigger body gets
+     a bigger circle, a bigger latch ring and a wider orbit - all at once. */
+  var MINR_BASE = 33, MINR_K = 2.16;  // minR = MINR_BASE + MINR_K * radius
+  var MAXR_BASE = 55, MAXR_K = 2.96;  // maxR = captureR = MAXR_BASE + MAXR_K*r
+
+  var PLANET_M_LO = 0.55, PLANET_M_HI = 1.15;
+  var STAR_M_LO   = 2.20, STAR_M_HI   = 3.20;
+
+  /* Difficulty escalation, and the ONLY one left now that the rift is gone.
+     It is not a clock: the sky simply gets heavier the higher you climb, so
+     stars appear more often and weigh more. Heavier body -> faster orbit and
+     a longer sling -> a tighter release window and less room to stay on
+     screen. Deep-run pressure comes out of the physics, not out of a timer. */
+  var STAR_FROM     = 6;    // no stars at all before this many bodies
+  var STAR_CHANCE_LO = 0.20; // share of bodies that are stars, at STAR_FROM
+  var STAR_CHANCE_HI = 0.44; // ...once fully escalated
+  var STAR_M_DEEP    = 4.20; // lower bound of the star mass band when deep
+  var DEEP_OVER      = 70;   // bodies over which the escalation completes
+
+  /* Catch quality is judged as a FRACTION of the body you caught. Absolute
+     pixels would score every star as a sloppy hook purely for being large. */
+  var TIGHT_F      = 0.57;
+  var LOOSE_F      = 0.85;
+
+  /* REFERENCE constants: the values a 1.0-mass body works out to. Nothing in
+     the sim reads them as a tuning knob any more - they are the fallback for
+     the balance harness, the title art, and the copy on the title screen. */
+  var SPEED        = 468;   // v of a 1.0-mass body at r = 71
+  var MIN_R        = 60;    // MINR_BASE + MINR_K * R_REF
+  var MAX_R        = 92;    // MAXR_BASE + MAXR_K * R_REF
   var CAPTURE_R    = 92;
-  var TIGHT_D      = 52;    // latch closer than this = tight hook (combo up)
-  var LOOSE_D      = 78;    // latch further than this = sloppy (combo down)
-  var SETTLE_RATE  = 240;   // px/s the tether eases out to its resting length
-  var FLIGHT_MAX   = 1.5;   // seconds adrift before the hook loses charge
-  var PLAYER_R     = 8;
   var NODE_R       = 12;
+  var TIGHT_D      = 52;    // 0.57 * 92
+  var LOOSE_D      = 78;    // 0.85 * 92
+
+  var SETTLE_RATE  = 240;   // px/s the tether eases out to its resting length
+  var PREDICT_T    = 1.15;  // seconds of flight the release guide looks ahead
+  var PLAYER_R     = 8;
   var MINE_R       = 11;
   var SHARD_PICK   = 22;
   var MARGIN_X     = 96;    // node placement bounds
@@ -49,7 +105,7 @@
   var DEATH_ANIM   = 0.40;     // was 0.7
   var RETRY_LOCK   = 0.20;     // was 0.5
 
-  /* Tutorial: three scripted hooks, no hazards, frozen rift. Offsets are
+  /* Tutorial: three scripted hooks, no hazards, 1.0-mass planets. Offsets are
      relative to the starting node so they survive any change to H. */
   var TUTOR_NODES  = [ { x: 144, dy: -156 }, { x: 300, dy: -312 }, { x: 180, dy: -468 } ];
   var TUTOR_HOOKS  = TUTOR_NODES.length;
@@ -57,29 +113,38 @@
   var TUTOR_RESET  = 0.25;  // an assisted miss rewinds this fast
 
   var COL = {
-    node:   [53, 230, 255],
+    node:   [53, 230, 255],    // planet
+    star:   [255, 224, 140],   // star
     decay:  [255, 176, 58],
     player: [255, 255, 255],
     shard:  [255, 215, 94],
     mine:   [255, 77, 109],
-    rift:   [255, 46, 99]
+    danger: [255, 46, 99]
   };
 
+  /* The one place that answers "what colour is this body?". */
+  function bodyCol(n) {
+    if (!n) return COL.node;
+    if (n.type === 'decay') return COL.decay;
+    return n.kind === 'star' ? COL.star : COL.node;
+  }
+
+  /* The rift and the flight timer are gone, so 'rift' and 'drift' would now be
+     lying to the player. There are exactly two ways to lose, and both of them
+     are "the ball left the screen". */
   var CAUSE = {
-    rift:  'THE RIFT TOOK YOU',
-    mine:  'YOU HIT A MINE',
-    drift: 'HOOK LOST CHARGE',
-    edge:  'YOU LEFT THE COLUMN'
+    fell: 'YOU FELL OUT OF THE SKY',
+    mine: 'YOU HIT A MINE',
+    edge: 'YOU LEFT THE COLUMN'
   };
 
   /* A postmortem that only names the consequence teaches nothing. Every
-     death now ships the one correction that would have prevented it. */
+     death ships the one correction that would have prevented it. */
   var FIX = {
-    rift:   'Keep moving - every hook buys height on the rift',
-    mine:   'Mines sit off the direct line - a clean release clears them',
-    drift:  'Wait until the guide crosses a ring before you let go',
-    edge:   'Release near the top of the swing, not out to the side',
-    decay:  'Amber anchors release you when their timer expires'
+    fell:  'Release on the way UP - a downward launch has nothing to catch',
+    mine:  'Mines sit off the direct line - a clean release clears them',
+    edge:  'Stars sling you far - let go of one earlier than you would a planet',
+    decay: 'Amber anchors release you when their timer expires'
   };
 
   function rgba(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
@@ -104,11 +169,11 @@
 
     /* pre-rendered glows (cheap substitute for ctx.shadowBlur) */
     this.glowNode   = SK.makeGlow(64, COL.node.join(','), 0.85);
+    this.glowStar   = SK.makeGlow(96, COL.star.join(','), 0.9);
     this.glowDecay  = SK.makeGlow(64, COL.decay.join(','), 0.85);
     this.glowPlayer = SK.makeGlow(52, COL.player.join(','), 0.9);
     this.glowShard  = SK.makeGlow(34, COL.shard.join(','), 0.9);
     this.glowMine   = SK.makeGlow(40, COL.mine.join(','), 0.8);
-    this.glowRift   = SK.makeGlow(120, COL.rift.join(','), 0.5);
 
     this.stars = this._makeStars();
     this.nebula = this._makeNebula();
@@ -124,9 +189,9 @@
     this.hitstop = 0;
     this.camY = 0;
     this.newBest = false;
-    this.cause = 'rift';
+    this.cause = 'fell';
     this.lastForced = false;   // was the previous release forced by a decay node?
-    this.riftPulse = 0;
+    this.shardPulse = 0;
     this.queuedAction = false; // input is consumed on the next sim tick
     this.lastActionT = -99;
     this.wasPlaying = false;
@@ -155,12 +220,51 @@
     this._resetWorld();
   }
 
-  /* Linear speed for the current moment. Applied identically on every run -
-     never a hidden per-player difficulty knob. */
-  Game.prototype._speed = function () {
-    if (this.tutorial) return TUTOR_SPEED;
-    var k = clamp((this.hooks - SPEED_RAMP_A) / (SPEED_RAMP_B - SPEED_RAMP_A), 0, 1);
-    return lerp(SPEED_START, SPEED, k);
+  /* ---------------- gravity ----------------------------------------- */
+
+  /* Mass -> radius, the single relation every body obeys. */
+  function bodyRadius(mass) { return R_REF * Math.pow(mass, R_EXP); }
+
+  /* Global strength of gravity right now. This is the onboarding ramp and
+     nothing else - applied identically on every run, never a hidden
+     per-player difficulty knob. */
+  Game.prototype._gScale = function () {
+    if (this.tutorial) return TUTOR_SCALE;
+    var k = clamp((this.hooks - SCALE_RAMP_A) / (SCALE_RAMP_B - SCALE_RAMP_A), 0, 1);
+    return lerp(SCALE_START, 1, k);
+  };
+
+  /* Standard gravitational parameter of one body, mu = G*M, with the
+     onboarding scale squared in so that v = omega*r survives the ramp. */
+  Game.prototype._mu = function (n) {
+    var sc = this._gScale();
+    return G * (n && n.mass ? n.mass : 1) * sc * sc;
+  };
+
+  /* The radius the orbit maths actually uses. Floored at the body's OWN
+     resting minimum (the per-body successor to the MIN_R guard), so settling
+     out of a dead-centre catch is a short wind-out and never a singularity. */
+  function orbR(p) {
+    var mn = (p.node && p.node.minR) ? p.node.minR : MIN_R;
+    return Math.max(p.r, mn);
+  }
+
+  /* Signed angular rate in rad/s: omega = sqrt(mu / r^3), Kepler.
+     Exposed publicly because the balance harness has to model the integrator
+     exactly rather than guess at it (see test/balance.mjs, F3). */
+  Game.prototype.angRate = function (p) {
+    p = p || this.player;
+    if (!p.node) return 0;
+    var r = orbR(p);
+    return p.dir * Math.sqrt(this._mu(p.node) / (r * r * r));
+  };
+
+  /* Tangential speed in px/s: v = sqrt(mu / r). This is the speed you leave
+     with, so a heavy body throws you harder for free. */
+  Game.prototype._vTan = function (p) {
+    p = p || this.player;
+    if (!p.node) return p.speed || SPEED;
+    return Math.sqrt(this._mu(p.node) / orbR(p));
   };
 
   Game.prototype._label = function (x, y, s, col) {
@@ -230,10 +334,12 @@
     this.tutResetT = 0;
     this.tutMisses = 0;
     this.lastForced = false;
-    this.riftPulse = 0;
+    this.shardPulse = 0;
     for (var li = 0; li < this.labels.length; li++) this.labels[li].t = 0;
 
-    var first = this._pushNode(W * 0.5, H * 0.66, 'normal');
+    /* The opening body is a fixed 1.0-mass planet on every run: the first
+       thing a player ever touches must not be a random star. */
+    var first = this._pushNode(W * 0.5, H * 0.66, 'normal', 'planet', 1.0);
     this.startY = first.y;
     this.safeNode = first;   // last anchor, used to rewind an assisted miss
 
@@ -241,23 +347,27 @@
        player must not be able to draw a layout that teaches the wrong thing. */
     if (this.tutorial) {
       for (var ti = 0; ti < TUTOR_NODES.length; ti++) {
-        this._pushNode(TUTOR_NODES[ti].x, first.y + TUTOR_NODES[ti].dy, 'normal');
+        this._pushNode(TUTOR_NODES[ti].x, first.y + TUTOR_NODES[ti].dy, 'normal', 'planet', 1.0);
       }
     }
 
+    /* Start one notch outside the opening body's own resting minimum rather
+       than at a hardcoded 70 - the number now means something. */
+    var startR = first.minR + 10;
     this.player = {
-      x: first.x, y: first.y - 70,
+      x: first.x, y: first.y - startR,
       vx: 0, vy: 0,
       mode: 'orbit',
       node: first,
       ang: -Math.PI / 2,
-      r: 70,
-      targetR: 70,
-      speed: this._speed(),
+      r: startR,
+      targetR: startR,
+      speed: 0,
       dir: 1,
       flyT: 0,
       trailT: 0
     };
+    this.player.speed = this._vTan(this.player);
     first.hooked = true;
 
     this.pendNode = null;
@@ -266,20 +376,37 @@
     this.pendY = 0;
 
     this.camY = this.player.y - H * CAM_OFFSET;
-    this.riftY = this.camY + H + 240;
     this.warnT = 0;
     this.tetherPulse = 0;
 
     this._ensureAhead();
   };
 
-  Game.prototype._pushNode = function (x, y, type) {
+  /* Every body carries its own physics AND its own geometry. `minR`, `maxR`
+     and `captureR` used to be three globals; they are now derived from this
+     body's radius, which is derived from its mass. That is what makes "bigger
+     circle for a bigger body" a rule of the simulation instead of a paint job.
+     NOTE: the balance harness reads `minR` / `captureR` off these objects. */
+  Game.prototype._pushNode = function (x, y, type, kind, mass) {
+    kind = kind || 'planet';
+    if (mass === undefined || mass === null) {
+      mass = kind === 'star'
+        ? STAR_M_LO + this.rand() * (STAR_M_HI - STAR_M_LO)
+        : PLANET_M_LO + this.rand() * (PLANET_M_HI - PLANET_M_LO);
+    }
+    var radius = bodyRadius(mass);
+    var reach = MAXR_BASE + MAXR_K * radius;
     var n = {
       x: x, y: y, type: type,
+      kind: kind, mass: mass, radius: radius,
+      minR: MINR_BASE + MINR_K * radius,
+      maxR: reach,
+      captureR: reach,
       spent: false, hooked: false,
       decay: type === 'decay' ? DECAY_TIME : 0,
       pop: 0,
       phase: this.rand() * TAU,
+      art: this.rand(),        // stable per-body surface variation
       idx: this.nodeCount++
     };
     this.nodes.push(n);
@@ -309,9 +436,25 @@
          proved they can release, aim and latch at all. */
       var safe = this.tutorial;
 
+      /* Stars are the minority and they arrive only once the player has hooked
+         a few times. They are easier to CATCH (bigger latch ring) and harder
+         to SURVIVE (they sling you roughly 1.6x further), which is the whole
+         risk/reward axis now that the rift is gone. */
+      var deep = clamp((n - STAR_FROM) / DEEP_OVER, 0, 1);
+      var starP = lerp(STAR_CHANCE_LO, STAR_CHANCE_HI, deep);
+      var kind = (!safe && n >= STAR_FROM && this.rand() < starP) ? 'star' : 'planet';
+
+      /* Burn-out is a planet property. Stacking it on a star would combine the
+         two harshest mechanics in the game on one body. */
       var type = 'normal';
-      if (!safe && n >= 9 && this.rand() < Math.min(0.34, (n - 8) * 0.030)) type = 'decay';
-      var node = this._pushNode(x, y, type);
+      if (!safe && kind === 'planet' && n >= 9 && this.rand() < Math.min(0.34, (n - 8) * 0.030)) type = 'decay';
+      /* Mass band slides upward with depth; the band's WIDTH is constant so a
+         deep sky is uniformly heavier rather than merely more variable. */
+      var mass = null;
+      if (kind === 'star') {
+        mass = lerp(STAR_M_LO, STAR_M_DEEP, deep) + this.rand() * (STAR_M_HI - STAR_M_LO);
+      }
+      var node = this._pushNode(x, y, type, kind, mass);
 
       // A shard tempts you off the safest line.
       if (!safe && this.rand() < 0.45) {
@@ -340,8 +483,8 @@
         var hy = my + pny * sgn * offd;
         // Never let a mine sit inside a node's latch ring - that would make
         // the node itself un-hookable.
-        var okA = Math.hypot(hx - top.x, hy - top.y) > CAPTURE_R + 22;
-        var okB = Math.hypot(hx - node.x, hy - node.y) > CAPTURE_R + 22;
+        var okA = Math.hypot(hx - top.x, hy - top.y) > top.captureR + 22;
+        var okB = Math.hypot(hx - node.x, hy - node.y) > node.captureR + 22;
         if (okA && okB) {
           this.mines.push({ homeX: hx, x: hx, y: hy, amp: 8 + this.rand() * 12, phase: this.rand() * TAU });
         }
@@ -412,8 +555,6 @@
     this.tutHold = false;
     SK.Store.set('skyhook.tutorialComplete', '1');
     this._label(W / 2, this.player.y - 96, 'YOU HAVE IT - GO', '53,230,255');
-    /* Hand the rift back its freedom from wherever the camera is now. */
-    this.riftY = Math.max(this.riftY, this.camY + H + 240);
   };
 
   /* An assisted miss during the tutorial is not a death. Rewind to the last
@@ -426,19 +567,20 @@
     this.tutMisses++;
     p.node = n;
     p.mode = 'orbit';
+    var rr = n.minR + 10;
     p.ang = -Math.PI / 2;
-    p.r = 70;
-    p.targetR = 70;
+    p.r = rr;
+    p.targetR = rr;
     p.dir = 1;
     p.flyT = 0;
     p.vx = 0; p.vy = 0;
-    p.x = n.x; p.y = n.y - 70;
+    p.x = n.x; p.y = n.y - rr;
     n.spent = false;
     n.hooked = true;
+    p.speed = this._vTan(p);
     this.pendNode = null;
     this.tutResetT = TUTOR_RESET;
     this.tutHold = false;
-    this.riftY = Math.max(this.riftY, this.camY + H + 240);
     this._label(n.x, n.y - 110, 'TRY AGAIN', '255,176,58');
     SK.Audio.snap();
   };
@@ -459,7 +601,7 @@
       var a = Math.random() * TAU, s = 60 + Math.random() * 340;
       this.particles.spawn(p.x, p.y, Math.cos(a) * s, Math.sin(a) * s,
         0.5 + Math.random() * 0.7, 2 + Math.random() * 3,
-        Math.random() < 0.4 ? COL.rift : COL.player, 1.5, true);
+        Math.random() < 0.4 ? COL.danger : COL.player, 1.5, true);
     }
     SK.Audio.death();
     if (global.navigator && navigator.vibrate) { try { navigator.vibrate(60); } catch (e) {} }
@@ -537,9 +679,11 @@
     var p = this.player;
     var n = p.node;
     if (!n) return;
-    /* Speed is sampled once, at release, and held for the whole flight -
-       so a hook landing mid-flight can never change the shot already taken. */
-    p.speed = this._speed();
+    /* Speed is sampled once, at release, and held for the whole flight - so a
+       hook landing mid-flight can never change the shot already taken. It is
+       the body's own orbital velocity, v = sqrt(mu/r): let go of a star and
+       you leave far faster than you ever would off a planet. */
+    p.speed = this._vTan(p);
     var sn = Math.sin(p.ang), cs = Math.cos(p.ang);
     p.x = n.x + cs * p.r;
     p.y = n.y + sn * p.r;
@@ -559,7 +703,7 @@
       this.particles.spawn(p.x, p.y,
         p.vx * (0.25 + Math.random() * 0.35) + j * 90,
         p.vy * (0.25 + Math.random() * 0.35) + j * 90,
-        0.25 + Math.random() * 0.25, 2.2, COL.node, 2.4, true);
+        0.25 + Math.random() * 0.25, 2.2, bodyCol(n), 2.4, true);
     }
     if (forced) SK.Audio.snap();
   };
@@ -577,7 +721,7 @@
        and, occasionally, into a mine. Start at the distance actually achieved
        and ease out to the resting length instead. */
     p.r = d;
-    p.targetR = clamp(d, MIN_R, MAX_R);
+    p.targetR = clamp(d, node.minR, node.maxR);
 
     if (d < 0.5) {
       /* Dead-centre catch: atan2 and the cross product are both numerically
@@ -594,19 +738,24 @@
 
     p.mode = 'orbit';
     p.flyT = 0;
-    p.speed = this._speed();
+    p.speed = this._vTan(p);
     this.pendNode = null;
     this.safeNode = node;
     node.hooked = true;
     node.decay = node.type === 'decay' ? DECAY_TIME : 0;
 
-    var tight = d <= TIGHT_D;
+    /* Catch quality is a FRACTION of the body you caught. Judging a 128 px
+       star by a 52 px absolute threshold would have scored every single star
+       hook as sloppy - the player would be punished for the body's size. */
+    var tight = d <= node.captureR * TIGHT_F;
     if (tight) this.combo = Math.min(this.combo + 1, 9);
     /* A sloppy catch used to wipe the combo to 1 outright. Losing six steps
        of a ladder for one wide latch reads as a bug, not a rule. */
-    else if (d >= LOOSE_D) this.combo = Math.max(1, this.combo - 2);
+    else if (d >= node.captureR * LOOSE_F) this.combo = Math.max(1, this.combo - 2);
 
-    var gain = (tight ? 15 : 8) * this.combo;
+    /* Heavier body, bigger payout. The extra risk of a star has to be bought
+       back somewhere or nobody would ever take one on purpose. */
+    var gain = Math.round((tight ? 15 : 8) * this.combo * (1 + (node.mass - 1) * 0.22));
     this.score += gain;
     this.hooks++;
 
@@ -623,7 +772,7 @@
     this.tetherPulse = 1;
     this.shake = Math.min(this.shake + (tight ? 7 : 3.5), 14);
 
-    var col = node.type === 'decay' ? COL.decay : COL.node;
+    var col = bodyCol(node);
     var count = tight ? 20 : 12;
     for (var i = 0; i < count; i++) {
       var a = Math.random() * TAU, s = 70 + Math.random() * (tight ? 260 : 150);
@@ -661,7 +810,9 @@
     var sn = Math.sin(p.ang), cs = Math.cos(p.ang);
     var rx = p.node.x + cs * p.r, ry = p.node.y + sn * p.r;
     var ux = -sn * p.dir, uy = cs * p.dir;
-    var reach = this._speed() * FLIGHT_MAX;
+    /* The flight timer is gone, so "reach" is no longer a rule of the sim -
+       it is purely how far ahead the guide is willing to look. */
+    var reach = this._vTan(p) * PREDICT_T;
 
     var bestT = Infinity;
     for (var i = 0; i < this.nodes.length; i++) {
@@ -672,7 +823,7 @@
       if (t <= 0 || t >= reach) continue;
       var px = ax - ux * t, py = ay - uy * t;
       var d = Math.sqrt(px * px + py * py);
-      if (d < CAPTURE_R && t < bestT) { bestT = t; out.node = nd; out.d = d; out.t = t; }
+      if (d < nd.captureR && t < bestT) { bestT = t; out.node = nd; out.d = d; out.t = t; }
     }
     return out;
   };
@@ -683,14 +834,15 @@
 
     if (p.mode === 'orbit') {
       var n = p.node;
-      p.speed = this._speed();
+      p.speed = this._vTan(p);
 
       /* tutHold freezes the orbit on the taught tap so a first-run player can
          see the release that works before they are asked to time it. */
       if (!this.tutHold) {
-        /* Angular rate is floored at the resting radius: settling out of a
-           dead-centre catch is a short wind-out, never a near-zero-radius spin. */
-        p.ang += p.dir * (p.speed / Math.max(p.r, MIN_R)) * dt;
+        /* omega = sqrt(mu / r^3). The divisor keeps the same floor guard it
+           always had, now the BODY's own resting minimum: settling out of a
+           dead-centre catch is a short wind-out, never a singular spin. */
+        p.ang += this.angRate(p) * dt;
         if (p.r !== p.targetR) {
           var rdiff = p.targetR - p.r;
           var rmove = SETTLE_RATE * dt;
@@ -731,7 +883,7 @@
       if (this.pendNode) {
         var pdx = p.x - this.pendNode.x, pdy = p.y - this.pendNode.y;
         var pd = Math.sqrt(pdx * pdx + pdy * pdy);
-        if (pd > this.pendD || pd > CAPTURE_R) {
+        if (pd > this.pendD || pd > this.pendNode.captureR) {
           var node = this.pendNode;
           var snapD = this.pendD;
           p.x = this.pendX; p.y = this.pendY;   // rewind to the closest point
@@ -747,30 +899,31 @@
           if (nd.spent) continue;
           var ddx = p.x - nd.x, ddy = p.y - nd.y;
           var d = Math.sqrt(ddx * ddx + ddy * ddy);
-          if (d < CAPTURE_R && d < bestD) { bestD = d; bestNode = nd; }
+          /* Compared against the TARGET's own ring, so a big star really is
+             easier to catch than a small planet. */
+          if (d < nd.captureR && d < bestD) { bestD = d; bestNode = nd; }
         }
         if (bestNode) {
           this.pendNode = bestNode;
           this.pendD = bestD;
           this.pendX = p.x;
           this.pendY = p.y;
-        } else if (p.flyT > FLIGHT_MAX) { this.die('drift'); return; }
+        }
+        /* There is deliberately no `else` here any more. A flight that finds
+           nothing is not punished by a timer - it simply keeps going until it
+           leaves the screen, which is the only fail condition left. */
       }
     }
 
+    /* ---- the two ways to lose --------------------------------------
+       Both are the same sentence: the ball left the screen. Horizontal was
+       already here; vertical is new, and it is what replaces the rift.
+       The camera only ever climbs, so the bottom edge is a RATCHET: every
+       hook you land permanently raises the floor beneath you. Stand still and
+       you are safe but score nothing; misjudge a release and you fall out of
+       your own progress. */
     if (p.x < -DEATH_PAD || p.x > W + DEATH_PAD) { this.die('edge'); return; }
-
-    /* The rift. Frozen while the tutorial teaches - a first-run player should
-       be able to think about the release, not race a wall. */
-    var leash = this.camY + H + 300;
-    if (this.tutorial) {
-      this.riftY = Math.max(this.riftY, leash);
-    } else {
-      var riftSpeed = 52 + Math.min(132, this.hooks * 1.7);
-      this.riftY -= riftSpeed * dt;
-      if (this.riftY > leash) this.riftY = leash;
-      if (p.y >= this.riftY) { this.die('rift'); return; }
-    }
+    if (p.y > this.camY + H + DEATH_PAD) { this.die('fell'); return; }
 
     /* Mines and shards are tested against the SEGMENT the player swept this
        tick, not just the endpoint - so settling out of a tight catch can
@@ -790,10 +943,13 @@
       if (segDist2(ox, oy, p.x, p.y, sh.x, sh.y) < SHARD_PICK * SHARD_PICK) {
         sh.got = true;
         collected = true;
+        /* A shard used to buy rift pushback. With no rift, the reward it pays
+           is the thing that is actually scarce now: combo, which multiplies
+           every hook that follows. */
         this.score += 25 * Math.max(1, Math.floor(this.combo * 0.5));
-        this.riftY += 72;            // breathing room as a reward
-        this.riftPulse = 1;
-        this._label(sh.x, sh.y - 26, 'RIFT PUSHBACK', '255,215,94');
+        this.combo = Math.min(this.combo + 1, 9);
+        this.shardPulse = 1;
+        this._label(sh.x, sh.y - 26, 'SHARD  x' + this.combo, '255,215,94');
         this.shake = Math.min(this.shake + 3, 12);
         for (var k = 0; k < 14; k++) {
           var a3 = Math.random() * TAU, s3 = 60 + Math.random() * 200;
@@ -810,8 +966,8 @@
 
   /* ONE simulation tick. Always exactly STEP seconds - never a subdivision of
      whatever the display happened to deliver. Everything that can change the
-     outcome of a run lives in here: the sim clock, mine drift, the camera, the
-     rift leash, spawning, culling and hitstop. */
+     outcome of a run lives in here: the sim clock, mine drift, the camera,
+     spawning, culling and hitstop. */
   Game.prototype._tick = function () {
     var dt = STEP;
 
@@ -864,19 +1020,12 @@
 
     this.altitude = Math.max(this.altitude, Math.round((this.startY - p.y) / 10));
 
-    /* proximity warning beeps */
-    var gapToRift = this.riftY - p.y;
-    if (gapToRift < 190 && !this.tutorial) {
+    /* Proximity warning, now measured against the bottom of the view. */
+    var gapToFall = (this.camY + H) - p.y;
+    if (gapToFall < 190 && !this.tutorial) {
       this.warnT -= dt;
-      if (this.warnT <= 0) { this.warnT = clamp(gapToRift / 460, 0.14, 0.42); SK.Audio.warn(); }
+      if (this.warnT <= 0) { this.warnT = clamp(gapToFall / 460, 0.14, 0.42); SK.Audio.warn(); }
     } else this.warnT = 0;
-
-    /* rift embers */
-    if (Math.random() < dt * 40) {
-      this.particles.spawn(Math.random() * W, this.riftY + 6,
-        (Math.random() * 2 - 1) * 30, -60 - Math.random() * 120,
-        0.7 + Math.random() * 0.7, 2 + Math.random() * 2, COL.rift, 0.7, true);
-    }
 
     this._ensureAhead();
     this._cull();
@@ -896,7 +1045,7 @@
     this.shake = Math.max(0, this.shake - this.shake * 6 * dt - 6 * dt);
     this.flash = Math.max(0, this.flash - dt * 3.2);
     this.tetherPulse = Math.max(0, this.tetherPulse - dt * 3.5);
-    this.riftPulse = Math.max(0, this.riftPulse - dt * 1.8);
+    this.shardPulse = Math.max(0, this.shardPulse - dt * 1.8);
 
     if (this.state === 'title') {
       this.time += dt;              // cosmetic only outside a run
@@ -920,7 +1069,6 @@
       this.time += dt;
       this.dyingT += dt;
       this.particles.update(dt);
-      this.riftY -= 40 * dt;
       if (this.dyingT > DEATH_ANIM) {
         this.state = 'over';
         this.overT = 0;
@@ -999,56 +1147,150 @@
     }
   };
 
+  /* Star surface: an emissive core plus a corona whose extent scales with the
+     body's radius, so mass is readable from across the screen without a label.
+     Everything is procedural (gradients + arcs), which is deliberate - it costs
+     no download, no atlas and no extra fill on a low-end Android GPU, and it
+     tracks the size model for free the moment the mass ranges are retuned. */
+  Game.prototype._drawStar = function (ctx, n, R, alive, pulse) {
+    var a = alive ? 1 : 0.34;
+
+    /* corona: two soft falloffs, the outer one slowly breathing */
+    var cr = R * (2.9 + pulse * 0.30);
+    var g = ctx.createRadialGradient(n.x, n.y, R * 0.55, n.x, n.y, cr);
+    g.addColorStop(0, 'rgba(255,238,196,' + (0.34 * a).toFixed(3) + ')');
+    g.addColorStop(0.42, 'rgba(255,196,96,' + (0.13 * a).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(255,150,40,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(n.x, n.y, cr, 0, TAU); ctx.fill();
+
+    /* photosphere: hot white centre easing to the limb */
+    var pg = ctx.createRadialGradient(n.x - R * 0.18, n.y - R * 0.18, R * 0.1, n.x, n.y, R);
+    pg.addColorStop(0, 'rgba(255,255,248,' + a.toFixed(2) + ')');
+    pg.addColorStop(0.55, 'rgba(255,232,152,' + (0.96 * a).toFixed(2) + ')');
+    pg.addColorStop(1, 'rgba(255,158,52,' + (0.92 * a).toFixed(2) + ')');
+    ctx.fillStyle = pg;
+    ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, TAU); ctx.fill();
+
+    /* granulation: a few darker cells, seeded per body so they never crawl */
+    if (alive) {
+      ctx.save();
+      ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, TAU); ctx.clip();
+      ctx.fillStyle = 'rgba(214,120,26,0.30)';
+      for (var i = 0; i < 4; i++) {
+        var ga = (n.art + i * 0.27) * TAU, gd = R * (0.22 + ((n.art * (i + 3)) % 1) * 0.5);
+        ctx.beginPath();
+        ctx.arc(n.x + Math.cos(ga) * gd, n.y + Math.sin(ga) * gd, R * 0.20, 0, TAU);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    /* flare spikes - the classic "this one is a STAR" read */
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,236,180,' + (0.5 * a).toFixed(2) + ')';
+    ctx.lineWidth = 1.4;
+    for (var k = 0; k < 4; k++) {
+      var fa = n.phase * 0.4 + k * (Math.PI / 2) + this.time * 0.12;
+      var f0 = R * 1.15, f1 = R * (1.75 + pulse * 0.35);
+      ctx.beginPath();
+      ctx.moveTo(n.x + Math.cos(fa) * f0, n.y + Math.sin(fa) * f0);
+      ctx.lineTo(n.x + Math.cos(fa) * f1, n.y + Math.sin(fa) * f1);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  /* Planet surface: albedo shading with a terminator (the lit side faces the
+     top of the column, so the whole field is lit consistently) and latitude
+     banding whose count scales with the body's radius. */
+  Game.prototype._drawPlanet = function (ctx, n, R, alive, col) {
+    var a = alive ? 1 : 0.34;
+    var lx = -0.42, ly = -0.52;   // light direction, normalised-ish
+
+    var pg = ctx.createRadialGradient(n.x + lx * R, n.y + ly * R, R * 0.08, n.x, n.y, R * 1.12);
+    pg.addColorStop(0, 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + (0.85 * a).toFixed(2) + ')');
+    pg.addColorStop(0.5, 'rgba(' + Math.round(col[0] * 0.45) + ',' + Math.round(col[1] * 0.55) + ',' + Math.round(col[2] * 0.65) + ',' + (0.72 * a).toFixed(2) + ')');
+    pg.addColorStop(1, 'rgba(6,10,26,' + (0.85 * a).toFixed(2) + ')');
+    ctx.fillStyle = pg;
+    ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, TAU); ctx.fill();
+
+    /* banding: 2 bands on a small planet, up to 4 on a large one */
+    if (alive) {
+      var bands = 2 + Math.min(2, Math.floor((R - 9) / 2.6));
+      ctx.save();
+      ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, TAU); ctx.clip();
+      ctx.strokeStyle = rgba(col, 0.20);
+      ctx.lineWidth = Math.max(1, R * 0.13);
+      for (var b = 0; b < bands; b++) {
+        var by = n.y - R + ((b + 0.6 + n.art * 0.5) / bands) * R * 2;
+        ctx.beginPath();
+        ctx.moveTo(n.x - R, by);
+        ctx.lineTo(n.x + R, by);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    /* limb light: a bright crescent on the lit edge sells the sphere */
+    ctx.save();
+    ctx.strokeStyle = rgba(col, (0.9 * a).toFixed(2));
+    ctx.lineWidth = 1.8;
+    var la = Math.atan2(ly, lx);
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, R - 0.6, la - 1.15, la + 1.15);
+    ctx.stroke();
+    ctx.strokeStyle = rgba(col, (0.28 * a).toFixed(2));
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(n.x, n.y, R - 0.6, 0, TAU); ctx.stroke();
+    ctx.restore();
+  };
+
   Game.prototype._drawNode = function (ctx, n) {
     var pulse = 0.5 + 0.5 * Math.sin(this.time * 2.4 + n.phase);
     var decayed = n.type === 'decay';
-    var col = decayed ? COL.decay : COL.node;
-    var glow = decayed ? this.glowDecay : this.glowNode;
+    var isStar = n.kind === 'star';
+    var col = bodyCol(n);
+    var glow = decayed ? this.glowDecay : (isStar ? this.glowStar : this.glowNode);
 
     /* n.pop decays in _tick(), not here - drawing must never mutate state. */
     var alive = !n.spent;
     var baseA = alive ? 0.55 : 0.14;
+    var R = n.radius * (alive ? 1 : 0.7) + n.pop * 6;
 
-    SK.drawGlow(ctx, glow, n.x, n.y, alive ? (0.62 + pulse * 0.14 + n.pop * 0.7) : 0.34, baseA);
+    /* Glow sprite scales with the body: a star's halo is genuinely bigger,
+       it is not the same 64 px sprite drawn on everything. */
+    SK.drawGlow(ctx, glow, n.x, n.y,
+      (n.radius / NODE_R) * (alive ? (0.62 + pulse * 0.14 + n.pop * 0.7) : 0.34), baseA);
 
-    /* Latch-range ring. Only drawn for nodes the player could plausibly
-       reach right now - drawing it on every node turned the screen into
-       a wall of overlapping circles. */
+    /* Latch-range ring, per body. Only drawn for bodies the player could
+       plausibly reach right now - drawing it on every one turned the screen
+       into a wall of overlapping circles. */
     if (alive) {
       var pdx = this.player.x - n.x, pdy = this.player.y - n.y;
       var pd = Math.sqrt(pdx * pdx + pdy * pdy);
-      if (pd < 330) {
-        var ringA = clamp((330 - pd) / 200, 0, 1) * (0.16 + pulse * 0.05);
+      if (pd < 330 + n.captureR) {
+        var ringA = clamp((330 + n.captureR - pd) / 200, 0, 1) * (0.16 + pulse * 0.05);
         ctx.save();
         ctx.setLineDash([5, 9]);
         ctx.lineDashOffset = -this.time * 14;
         ctx.strokeStyle = rgba(col, ringA.toFixed(3));
         ctx.lineWidth = 1.2;
         ctx.beginPath();
-        ctx.arc(n.x, n.y, CAPTURE_R, 0, TAU);
+        ctx.arc(n.x, n.y, n.captureR, 0, TAU);
         ctx.stroke();
         ctx.restore();
       }
     }
 
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, NODE_R * (alive ? 1 : 0.7) + n.pop * 6, 0, TAU);
-    ctx.fillStyle = rgba(col, alive ? 0.22 : 0.10);
-    ctx.fill();
-    ctx.lineWidth = alive ? 2.4 : 1.2;
-    ctx.strokeStyle = rgba(col, alive ? 0.95 : 0.30);
-    ctx.stroke();
+    if (isStar) this._drawStar(ctx, n, R, alive, pulse);
+    else this._drawPlanet(ctx, n, R, alive, col);
 
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, 3.6, 0, TAU);
-    ctx.fillStyle = alive ? '#ffffff' : rgba(col, 0.4);
-    ctx.fill();
-
-    /* burn-down ring on the node you are currently riding */
+    /* burn-down ring on the body you are currently riding */
     if (decayed && n.hooked && n.decay > 0) {
       var f = n.decay / DECAY_TIME;
       ctx.beginPath();
-      ctx.arc(n.x, n.y, NODE_R + 8, -Math.PI / 2, -Math.PI / 2 + TAU * f);
+      ctx.arc(n.x, n.y, R + 8, -Math.PI / 2, -Math.PI / 2 + TAU * f);
       ctx.lineWidth = 3.4;
       ctx.strokeStyle = f < 0.35
         ? 'rgba(255,90,90,' + (0.6 + 0.4 * Math.sin(this.time * 26)).toFixed(3) + ')'
@@ -1109,7 +1351,7 @@
     /* tether */
     if (p.mode === 'orbit' && p.node) {
       var n = p.node;
-      var tcol = n.type === 'decay' ? COL.decay : COL.node;
+      var tcol = bodyCol(n);
       ctx.strokeStyle = rgba(tcol, (0.28 + this.tetherPulse * 0.5).toFixed(3));
       ctx.lineWidth = 1.6 + this.tetherPulse * 2.2;
       ctx.beginPath();
@@ -1165,7 +1407,7 @@
         ctx.strokeStyle = 'rgba(' + gCol + ',' + (0.5 + 0.3 * Math.sin(this.time * 8)).toFixed(2) + ')';
         ctx.lineWidth = 2.4;
         ctx.beginPath();
-        ctx.arc(tgt.x, tgt.y, NODE_R + 9, 0, TAU);
+        ctx.arc(tgt.x, tgt.y, tgt.radius + 9, 0, TAU);
         ctx.stroke();
         ctx.restore();
       }
@@ -1200,53 +1442,21 @@
 
     /* player */
     if (this.state === 'playing') {
-      var charge = p.mode === 'fly' ? 1 - (p.flyT / FLIGHT_MAX) : 1;
+      /* The ring used to be a charge meter counting down FLIGHT_MAX. There is
+         no flight timer any more, so it reports the thing that CAN kill you:
+         how close the ball is to dropping out of the bottom of the view. */
+      var fallGap = (this.camY + H) - p.y;
       SK.drawGlow(ctx, this.glowPlayer, p.x, p.y, 0.55 + 0.10 * Math.sin(this.time * 7), 0.7);
       ctx.beginPath();
       ctx.arc(p.x, p.y, PLAYER_R, 0, TAU);
       ctx.fillStyle = '#ffffff';
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = (p.mode === 'fly' && charge < 0.45)
+      ctx.strokeStyle = (fallGap < 150)
         ? 'rgba(255,90,110,' + (0.5 + 0.5 * Math.sin(this.time * 22)).toFixed(3) + ')'
         : rgba(COL.node, 0.9);
       ctx.stroke();
     }
-  };
-
-  Game.prototype._riftEdgeY = function (x) {
-    return this.riftY
-      + Math.sin(x * 0.031 + this.time * 3.1) * 7
-      + Math.sin(x * 0.017 - this.time * 2.0) * 5;
-  };
-
-  Game.prototype._drawRift = function (ctx) {
-    var y = this.riftY;
-    if (y > this.camY + H + 60) return;
-
-    var x;
-    ctx.beginPath();
-    ctx.moveTo(-20, this._riftEdgeY(-20));
-    for (x = -8; x <= W + 20; x += 12) ctx.lineTo(x, this._riftEdgeY(x));
-    ctx.lineTo(W + 20, y + 620);
-    ctx.lineTo(-20, y + 620);
-    ctx.closePath();
-
-    var g = ctx.createLinearGradient(0, y - 20, 0, y + 320);
-    g.addColorStop(0, 'rgba(255,46,99,0.85)');
-    g.addColorStop(0.18, 'rgba(150,10,60,0.80)');
-    g.addColorStop(1, 'rgba(40,0,20,0.96)');
-    ctx.fillStyle = g;
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.moveTo(-20, this._riftEdgeY(-20));
-    for (x = -8; x <= W + 20; x += 12) ctx.lineTo(x, this._riftEdgeY(x));
-    ctx.strokeStyle = 'rgba(255,190,210,0.95)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    SK.drawGlow(ctx, this.glowRift, W * 0.5, y + 10, 3.0, 0.35);
   };
 
   Game.prototype._drawMute = function (ctx) {
@@ -1311,9 +1521,9 @@
     var cx = W / 2, cy = 366, r = 88;
     /* The demo used to orbit at a fixed 1.5 rad/s - a 4.19 s lap, against a
        real opening lap of well under 1.5 s. It was advertising a different,
-       much calmer game than the one behind the tap. Drive it at the same
-       LINEAR speed the player is about to be handed instead. */
-    var a = this.titleT * (TUTOR_SPEED / r);
+       much calmer game than the one behind the tap. Drive it with the SAME
+       gravity relation the player is about to be handed: a 1.0-mass body. */
+    var a = this.titleT * Math.sqrt(G / (r * r * r));
 
     ctx.strokeStyle = 'rgba(53,230,255,0.16)';
     ctx.lineWidth = 1;
@@ -1333,7 +1543,7 @@
     ctx.fillStyle = '#fff'; ctx.fill();
 
     txt(ctx, 'SKYHOOK', W / 2, 196, 62, '#ffffff', 'center', 800, 'rgba(53,230,255,0.9)', 30);
-    txt(ctx, 'H O O K   -   S W I N G   -   C L I M B', W / 2, 230, 13, 'rgba(150,210,240,0.75)', 'center', 600);
+    txt(ctx, 'O R B I T   -   R E L E A S E   -   C L I M B', W / 2, 230, 13, 'rgba(150,210,240,0.75)', 'center', 600);
 
     /* The old CTA said "TAP / SPACE - to let go of the tether", but the first
        tap does not release anything: it starts the run. Say what the button
@@ -1345,8 +1555,8 @@
     txt(ctx, 'BEST', W / 2, 660, 13, 'rgba(150,190,220,0.55)', 'center', 700);
     txt(ctx, String(this.best), W / 2, 702, 38, 'rgba(255,215,94,0.95)', 'center', 800, 'rgba(255,215,94,0.5)', 18);
 
-    txt(ctx, 'gold shards push the rift back', W / 2, 792, 12, 'rgba(140,175,205,0.5)', 'center', 500);
-    txt(ctx, 'amber nodes burn out - do not linger', W / 2, 812, 12, 'rgba(140,175,205,0.5)', 'center', 500);
+    txt(ctx, 'stars pull harder and throw you further than planets', W / 2, 792, 12, 'rgba(140,175,205,0.5)', 'center', 500);
+    txt(ctx, 'stay on screen and the climb never ends', W / 2, 812, 12, 'rgba(140,175,205,0.5)', 'center', 500);
 
     this._drawMute(ctx);
   };
@@ -1362,7 +1572,7 @@
 
     /* One actionable correction, not a restatement of the consequence. If the
        run ended adrift right after an amber node dumped us, name that. */
-    var fixKey = (this.cause === 'drift' && this.lastForced) ? 'decay' : this.cause;
+    var fixKey = (this.cause === 'fell' && this.lastForced) ? 'decay' : this.cause;
     txt(ctx, FIX[fixKey] || '', W / 2, 328 - slide, 14,
       'rgba(150,210,240,' + (0.85 * t).toFixed(2) + ')', 'center', 500);
 
@@ -1417,20 +1627,26 @@
       ctx.save();
       ctx.translate(sx, sy - this.camY);
       this._drawWorld(ctx);
-      this._drawRift(ctx);
       ctx.restore();
     }
 
-    /* rift proximity vignette - also the "RIFT PUSHBACK" feedback surface */
+    /* Bottom-edge vignette. The rift is gone; the danger it used to draw is
+       now the literal bottom of the screen, so the warning is drawn there. */
     if (this.state === 'playing' || this.state === 'paused') {
-      var gap = this.riftY - this.player.y;
-      if (gap < 240 || this.riftPulse > 0) {
-        var a = clamp(1 - gap / 240, 0, 1) * (0.35 + 0.25 * Math.sin(this.time * 10))
-          + this.riftPulse * 0.30;
-        var vg = ctx.createLinearGradient(0, H, 0, H * 0.35);
+      var gap = (this.camY + H) - this.player.y;
+      if (gap < 240 || this.shardPulse > 0) {
+        var a = clamp(1 - gap / 240, 0, 1) * (0.35 + 0.25 * Math.sin(this.time * 10));
+        var vg = ctx.createLinearGradient(0, H, 0, H * 0.42);
         vg.addColorStop(0, 'rgba(255,46,99,' + (a * 0.75).toFixed(3) + ')');
         vg.addColorStop(1, 'rgba(255,46,99,0)');
         ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, W, H);
+      }
+      if (this.shardPulse > 0) {
+        var sg2 = ctx.createLinearGradient(0, H, 0, H * 0.55);
+        sg2.addColorStop(0, 'rgba(255,215,94,' + (this.shardPulse * 0.22).toFixed(3) + ')');
+        sg2.addColorStop(1, 'rgba(255,215,94,0)');
+        ctx.fillStyle = sg2;
         ctx.fillRect(0, 0, W, H);
       }
     }
@@ -1488,15 +1704,21 @@
       mode: p.mode,
       px: p.x, py: p.y,
       ang: p.ang, r: p.r, targetR: p.targetR, dir: p.dir,
-      speed: this._speed(),
+      speed: this._vTan(p),
       tutorial: this.tutorial,
       tutStep: this.tutStep,
       tutHold: this.tutHold,
       tutMisses: this.tutMisses,
-      anchor: p.node ? { x: p.node.x, y: p.node.y, type: p.node.type } : null,
-      next: next ? { x: next.x, y: next.y, d: bestD } : null,
+      anchor: p.node ? {
+        x: p.node.x, y: p.node.y, type: p.node.type,
+        kind: p.node.kind, mass: p.node.mass, radius: p.node.radius,
+        captureR: p.node.captureR
+      } : null,
+      next: next ? { x: next.x, y: next.y, d: bestD, kind: next.kind } : null,
       predict: this.predict.node ? { d: this.predict.d, t: this.predict.t } : null,
-      riftY: this.riftY,
+      gScale: this._gScale(),
+      angRate: p.node ? this.angRate(p) : 0,
+      fallGap: (this.camY + H) - p.y,
       cause: this.cause,
       persistent: SK.Store.persistent
     };

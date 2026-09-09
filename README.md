@@ -1,6 +1,6 @@
 # SKYHOOK
 
-A one-touch neon climbing arcade game. Hook onto nodes, swing on your tether, release to fly upward, and latch onto the next node before the rising rift consumes you.
+A one-touch neon climbing arcade game. Orbit a planet or a star, swing on your tether, release to fly upward, and latch onto the next body. The climb is endless -- as long as the ball stays on screen.
 
 **[▶ Play it here](https://leopechnicki.github.io/skyhook/)** — no install, works on desktop and mobile.
 
@@ -12,26 +12,37 @@ A one-touch neon climbing arcade game. Hook onto nodes, swing on your tether, re
 
 ## Concept
 
-You orbit a glowing node on a tether. Tap (or press Space) to release -- you fly in a straight line and automatically latch onto the next node you pass near. Miss, and the rising rift swallows you.
+You orbit a celestial body on a tether. Tap (or press Space) to release -- you fly in a straight line and automatically latch onto the next body you pass near. Miss everything and you drift off the screen, which is the only way the run can end.
+
+**Gravity is real (ish).** Every body has a *mass* and a *radius*, and the orbit is derived from them rather than from one global speed:
+
+```
+mu    = G * mass                 standard gravitational parameter
+omega = sqrt(mu / r^3)           orbital angular rate  (Kepler)
+v     = sqrt(mu / r)  = omega*r  the speed you leave with
+```
+
+The relations are the real ones; only the constants are tuned. Consequences you can feel: a **star** (high mass, drawn large, big latch ring) spins you faster *and* slings you roughly 1.6x further than a **planet** (low mass, small, gentle). The tighter you catch a body, the faster it spins you. Every body's circle, latch ring and orbit width scale with its radius, so mass is readable at a glance.
 
 **Core mechanics:**
 
 - **Hook** -- Release at the right angle to aim at the next node. Closer latches ("tight hooks") score more and build your combo multiplier (up to x9).
 - **Swing** -- While orbiting, your direction and timing determine where you launch. The single input (tap/space) is all you have.
-- **Climb** -- The rift rises faster the higher you go. Gold shards push it back. Amber nodes burn out on a timer -- don't linger.
+- **Climb** -- The camera only ever climbs, so the bottom of the screen is a ratchet: every hook permanently raises the floor beneath you. The higher you go the heavier the sky gets -- stars become more frequent and more massive, so the release window keeps tightening. Amber planets burn out on a timer -- don't linger.
 
 **Hazards:**
 
-- **The Rift** -- A rising wall of energy that accelerates over time. If it catches you, the run ends.
-- **Mines** -- Red spiked orbs that appear from about the 12th node up. They sit *off* the direct line between two nodes (bobbing on a small arc), so a clean release is always safe -- only a sloppy wide swing or a greedy detour for a shard clips one.
-- **Amber nodes** -- Decaying nodes that crumble after ~1.5 seconds, forcing an early release.
-- **Drift timeout** -- If you fly for more than 1.5 seconds without hooking, your tether loses charge.
+- **Falling off the screen** -- The only fail condition. Leave the column sideways, or drop through the bottom of the view, and the run ends. There is no timer of any kind: idling on an orbit is safe forever, it just scores nothing.
+- **Stars** -- Not a hazard by themselves, but the fastest way to become one. They throw you far enough to overshoot the column if you release late.
+- **Mines** -- Red spiked orbs that appear from about the 12th body up. They sit *off* the direct line between two bodies (bobbing on a small arc), so a clean release is always safe -- only a sloppy wide swing or a greedy detour for a shard clips one.
+- **Amber planets** -- Decaying bodies that crumble after ~1.5 seconds, forcing an early release.
 
 **Scoring:**
 
-- Tight hook (close latch): 15 points x combo
-- Loose hook: 8 points x combo (combo resets if too sloppy)
-- Gold shard: 25 points x half-combo, plus pushes the rift back
+- Tight hook (latch within 57% of the body's ring): 15 points x combo x mass bonus
+- Loose hook: 8 points x combo x mass bonus (combo drops if you latch past 85% of the ring)
+- Mass bonus: `1 + (mass - 1) * 0.22`, so a heavy star pays roughly 1.5x a planet
+- Gold shard: 25 points x half-combo, and +1 combo
 
 ## Controls
 
@@ -103,7 +114,7 @@ exists anywhere else in the codebase.
 | `css/style.css` | 116 | Layout only (all game visuals are canvas-drawn) |
 | `js/utils.js` | 145 | Math helpers, PRNG, localStorage wrapper, particle system, glow sprites |
 | `js/audio.js` | 159 | Fully synthesized audio via Web Audio API (no sample files) |
-| `js/game.js` | 1050 | Core game: nodes, orbiting, flying, latching, rift, mines, shards, rendering |
+| `js/game.js` | ~1650 | Core game: celestial bodies, gravity, orbiting, flying, latching, mines, shards, rendering |
 | `js/main.js` | 142 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
 | `test/smoke.mjs` | 309 | Playwright end-to-end smoke test (21 checks) |
 | `test/balance.mjs` | 153 | Headless difficulty/balance harness (no browser) |
