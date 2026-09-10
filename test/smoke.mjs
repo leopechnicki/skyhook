@@ -265,6 +265,51 @@ async function main() {
       `muted=${muted} state=${stillTitle}`);
     await page.evaluate('window.__SKYHOOK.game.toggleMute()');
 
+    /* ---------- 6b. keyboard ------------------------------------------
+       The title screen now names its keys in its own copy - "Tap, click or
+       SPACE fires the thruster and lets go." and "M mutes." - so the keyboard
+       path is a PROMISE printed on the first screen, not a nicety. Nothing in
+       this file covered it before: every input check above drives the mouse or
+       a synthetic pointer, so main.js's keydown listener could have been
+       deleted and the suite would still have gone green while the title kept
+       advertising it.
+       Real key events through the browser's own dispatch, never game.action(),
+       so the listener itself is what is under test. */
+    await page.keyboard.press('KeyM');
+    await wait(90);
+    const kbMuted = await page.evaluate('window.__SKYHOOK.game.muted');
+    const kbTitle = await page.evaluate('window.__SKYHOOK.game.state');
+    check('M key mutes without starting the game',
+      kbMuted === true && kbTitle === 'title', `muted=${kbMuted} state=${kbTitle}`);
+    await page.keyboard.press('KeyM');
+    await wait(90);
+
+    await page.keyboard.press('Space');
+    await wait(180);
+    s = await page.evaluate('window.__SKYHOOK.snapshot()');
+    check('SPACE starts the run from the title screen', s.state === 'playing',
+      `state=${s.state}`);
+
+    /* SPACE must also drive the ROCKET, not only the physics. `burn` is the
+       render-only impulse that lights the thruster plume, so if this stays at
+       zero the ship flies cold on every keyboard release and the flame answers
+       the mouse alone - a bug no state assertion above would ever catch.
+       Wait for the ship to be ATTACHED first: a tap while already in flight is
+       queued for the next hook, so pressing early would measure the queue. */
+    await page.evaluate('window.__SKYHOOK.skipTutorial()');
+    let attached = false;
+    for (let i = 0; i < 80 && !attached; i++) {
+      attached = await page.evaluate(`window.__SKYHOOK.game.player.mode === 'orbit'`);
+      if (!attached) await wait(50);
+    }
+    const burnBefore = await page.evaluate('window.__SKYHOOK.game.player.burn');
+    await page.keyboard.press('Space');
+    await wait(40);
+    const burnAfter = await page.evaluate('window.__SKYHOOK.game.player.burn');
+    check('SPACE fires the thruster (rocket burn answers the keyboard)',
+      attached && burnAfter > burnBefore && burnAfter > 0.7,
+      `attached=${attached} burn ${burnBefore.toFixed(3)} -> ${burnAfter.toFixed(3)}`);
+
     /* ---------- 7. mobile / touch ---------- */
     const mctx = await browser.newContext({
       viewport: { width: 390, height: 844 },

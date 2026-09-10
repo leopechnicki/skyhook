@@ -1,6 +1,6 @@
 # SKYHOOK
 
-A one-touch neon climbing arcade game. Orbit a planet or a star, swing on your tether, release to fly upward, and latch onto the next body. The climb is endless -- as long as the ball stays on screen.
+A one-touch neon climbing arcade game. Fly a rocket: tether it to a planet or a star, swing, then fire the thruster to let go and latch onto the next body. The climb is endless -- as long as you stay on screen.
 
 **[▶ Play it here](https://leopechnicki.github.io/skyhook/)** — no install, works on desktop and mobile.
 
@@ -12,7 +12,7 @@ A one-touch neon climbing arcade game. Orbit a planet or a star, swing on your t
 
 ## Concept
 
-You orbit a celestial body on a tether. Tap (or press Space) to release -- you fly in a straight line and automatically latch onto the next body you pass near. Miss everything and you drift off the screen, which is the only way the run can end.
+Your rocket orbits a celestial body on a tether. Tap (or press Space) to fire the thruster and release -- you fly in a straight line and automatically latch onto the next body you pass near. The hull always points along your velocity, so the launch vector is readable off the ship itself. Miss everything and you drift off the screen, which is the only way the run can end.
 
 **Gravity is real (ish).** Every body has a *mass* and a *radius*, and the orbit is derived from them rather than from one global speed:
 
@@ -34,7 +34,7 @@ The relations are the real ones; only the constants are tuned. Consequences you 
 
 - **Falling off the screen** -- The only fail condition. Leave the column sideways, or drop through the bottom of the view, and the run ends. There is no timer of any kind: idling on an orbit is safe forever, it just scores nothing.
 - **Stars** -- Not a hazard by themselves, but the fastest way to become one. They throw you far enough to overshoot the column if you release late.
-- **Mines** -- Red spiked orbs that appear from about the 12th body up. They sit *off* the direct line between two bodies (bobbing on a small arc), so a clean release is always safe -- only a sloppy wide swing or a greedy detour for a shard clips one.
+- **Meteoroids** -- Tumbling rogue rocks, trailing fire, that appear from about the 12th body up. They sit *off* the direct line between two bodies (bobbing on a small arc), so a clean release is always safe -- only a sloppy wide swing or a greedy detour for a shard clips one.
 - **Amber planets** -- Decaying bodies that crumble after ~1.5 seconds, forcing an early release.
 
 **Scoring:**
@@ -111,13 +111,16 @@ exists anywhere else in the codebase.
 | File | Lines | Purpose |
 |---|---|---|
 | `index.html` | 71 | Shell: canvas, ad slot, script loading |
-| `css/style.css` | 116 | Layout only (all game visuals are canvas-drawn) |
+| `css/style.css` | 112 | Layout only (all game visuals are canvas-drawn) |
 | `js/utils.js` | 145 | Math helpers, PRNG, localStorage wrapper, particle system, glow sprites |
 | `js/audio.js` | 159 | Fully synthesized audio via Web Audio API (no sample files) |
-| `js/game.js` | ~1650 | Core game: celestial bodies, gravity, orbiting, flying, latching, mines, shards, rendering |
-| `js/main.js` | 142 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
-| `test/smoke.mjs` | 309 | Playwright end-to-end smoke test (21 checks) |
-| `test/balance.mjs` | 153 | Headless difficulty/balance harness (no browser) |
+| `js/celestial.js` | 879 | Body ART only: planet formation classes, spectral star colours, meteoroid rocks. Sprite-cached, zero physics |
+| `js/rocket.js` | 396 | Player ART only: hull sprite, heading, thruster plume. Sprite-cached, zero physics |
+| `js/game.js` | ~1770 | Core game: celestial bodies, gravity, orbiting, flying, latching, meteoroids, shards, rendering |
+| `js/main.js` | 176 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
+| `test/smoke.mjs` | 372 | Playwright end-to-end smoke test (25 checks) |
+| `test/balance.mjs` | 532 | Headless difficulty/balance harness (no browser) |
+| `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |
 
 Runtime dependencies: none. The only dev dependency is Playwright, and only for the smoke test.
 
@@ -127,12 +130,22 @@ Runtime dependencies: none. The only dev dependency is Playwright, and only for 
 npm install          # only needed once, pulls Playwright for the smoke test
 npx playwright install chromium
 
-npm run test:smoke     # node test/smoke.mjs          - 21 end-to-end checks
+npm run test:smoke     # node test/smoke.mjs          - 25 end-to-end checks
 npm run test:headed    # node test/smoke.mjs --headed - watch the bot play
 npm run test:balance   # node test/balance.mjs        - difficulty sweep
+npm run test:world     # node test/world.mjs          - golden world stream (fast, pass/fail)
+npm run test:art       # node test/art_shots.mjs      - planet/star/meteoroid contact sheets
+npm run test:rocket    # node test/rocket_shots.mjs   - rocket orientation + thruster + frame time
+npm run shots          # node test/shipping_shots.mjs - regenerate README + og:image shots
 ```
 
-`test/smoke.mjs` spins up a local HTTP server, boots the game in a real browser (Google Chrome if installed, otherwise Playwright's bundled Chromium), runs an in-page bot that plays through the real input path, and verifies the full lifecycle: title screen, gameplay (hooks, scoring, combos), game over, restart, localStorage persistence, mute toggle, ad slot hidden and ad-code-free, mobile viewport, `file://` protocol, and a clean console. It writes screenshots to `test/screenshots/` (git-ignored).
+`test/world.mjs` is the gate that keeps an art pass honest. Everything visual is
+generated from one seeded RNG chain, so a single stray `rand()` taken for a visual
+detail would silently regenerate the whole world. It records every body, hazard and
+shard for four seeds into a golden fixture and asserts byte-equality, which is a
+faster and stronger statement than re-running the balance sweep.
+
+`test/smoke.mjs` spins up a local HTTP server, boots the game in a real browser (Google Chrome if installed, otherwise Playwright's bundled Chromium), runs an in-page bot that plays through the real input path, and verifies the full lifecycle: title screen, gameplay (hooks, scoring, combos), game over, restart, localStorage persistence, mute toggle, keyboard (SPACE starts a run and fires the thruster, M mutes), ad slot hidden and ad-code-free, mobile viewport, `file://` protocol, and a clean console. It writes screenshots to `test/screenshots/` (git-ignored).
 
 `test/balance.mjs` loads the real game logic into a DOM stub and simulates hundreds of runs at fixed 60 Hz across four synthetic skill profiles, then prints score distributions, death causes, and run lengths. It is a reporting tool, not a pass/fail gate.
 

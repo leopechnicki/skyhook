@@ -10,7 +10,11 @@
     "test": "node test/smoke.mjs",
     "test:smoke": "node test/smoke.mjs",
     "test:headed": "node test/smoke.mjs --headed",
-    "test:balance": "node test/balance.mjs"
+    "test:balance": "node test/balance.mjs",
+    "test:world": "node test/world.mjs",
+    "test:art": "node test/art_shots.mjs",
+    "test:rocket": "node test/rocket_shots.mjs",
+    "shots": "node test/shipping_shots.mjs"
   },
   "devDependencies": {
     "playwright": "^1.47.0"

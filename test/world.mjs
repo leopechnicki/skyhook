@@ -69,6 +69,8 @@ function loadGame() {
      a build that predates it. */
   const art = path.join(ROOT, 'js/celestial.js');
   if (fs.existsSync(art)) vm.runInContext(fs.readFileSync(art, 'utf8'), sandbox);
+  const rocket = path.join(ROOT, 'js/rocket.js');
+  if (fs.existsSync(rocket)) vm.runInContext(fs.readFileSync(rocket, 'utf8'), sandbox);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'js/game.js'), 'utf8'), sandbox);
   return { SK: sandbox.SK, setRandom: fn => { source = fn; } };
 }
