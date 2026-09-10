@@ -108,6 +108,13 @@ function loadGame(root) {
     init: noop, resume: noop, setMuted: noop,
     hook: noop, shard: noop, warn: noop, snap: noop, death: noop, start: noop, best: noop, ui: noop
   };
+  /* The art module. bodyCol() delegates to it, and bodyCol is called from
+     inside _release (particle colour), so the sim genuinely needs it loaded -
+     but it is loaded OPTIONALLY so `--baseline=<older-root>` A/B runs against
+     a build that predates the file still work. */
+  const artPath = path.join(root, 'js/celestial.js');
+  if (fs.existsSync(artPath)) vm.runInContext(fs.readFileSync(artPath, 'utf8'), sandbox);
+
   vm.runInContext(gameSrc, sandbox);
 
   /* Read the tuning constants OUT OF the build under test instead of
