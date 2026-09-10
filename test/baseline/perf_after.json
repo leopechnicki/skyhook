@@ -11,42 +11,43 @@
   "synthetic": {
     "render": {
       "n": 1201,
-      "mean": 2.189,
-      "p50": 2,
-      "p95": 3.8,
-      "p99": 4.8,
-      "max": 6.2
+      "mean": 2.204,
+      "p50": 2.1,
+      "p95": 3.2,
+      "p99": 3.8,
+      "max": 7.4
     },
     "frame": {
       "n": 1201,
-      "mean": 3.814,
-      "p50": 3.6,
-      "p95": 5.4,
-      "p99": 7.7,
-      "max": 209.1
+      "mean": 3.764,
+      "p50": 3.3,
+      "p95": 5,
+      "p99": 8.4,
+      "max": 227
     }
   },
   "live": {
     "render": {
-      "n": 2571,
-      "mean": 2.403,
-      "p50": 2.2,
-      "p95": 4,
-      "p99": 5.4,
-      "max": 7.7
+      "n": 2592,
+      "mean": 2.127,
+      "p50": 2,
+      "p95": 2.8,
+      "p99": 3.6,
+      "max": 11.2
     },
     "frame": {
-      "n": 2571,
-      "mean": 7.007,
+      "n": 2592,
+      "mean": 6.951,
       "p50": 6.9,
-      "p95": 7.6,
-      "p99": 10.2,
-      "max": 16.2
+      "p95": 7.2,
+      "p99": 8.3,
+      "max": 15.7
     },
-    "fps": 142.7,
+    "fps": 143.9,
     "avgNodes": 8.84,
     "hooks": 18,
     "state": "playing"
   },
-  "errors": []
+  "errors": [],
+  "note": "Wedge trail. Measured back-to-back in the same session against perf_strokes_control.json (the pre-wedge three-stroke trail) so the A/B is not contaminated by cross-session machine drift."
 }

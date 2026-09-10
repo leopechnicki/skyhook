@@ -1,0 +1,53 @@
+{
+  "label": "strokes-control",
+  "throttle": 4,
+  "frames": 600,
+  "seconds": 18,
+  "scene": {
+    "nodes": 12,
+    "hazards": 6,
+    "shards": 6
+  },
+  "synthetic": {
+    "render": {
+      "n": 1201,
+      "mean": 2.313,
+      "p50": 2.2,
+      "p95": 3.5,
+      "p99": 4.4,
+      "max": 8.8
+    },
+    "frame": {
+      "n": 1201,
+      "mean": 3.731,
+      "p50": 3.5,
+      "p95": 5.1,
+      "p99": 7,
+      "max": 151.3
+    }
+  },
+  "live": {
+    "render": {
+      "n": 2592,
+      "mean": 1.966,
+      "p50": 1.9,
+      "p95": 2.6,
+      "p99": 3.3,
+      "max": 8.5
+    },
+    "frame": {
+      "n": 2592,
+      "mean": 6.947,
+      "p50": 6.9,
+      "p95": 7.2,
+      "p99": 8.1,
+      "max": 13.7
+    },
+    "fps": 143.9,
+    "avgNodes": 8.84,
+    "hooks": 18,
+    "state": "playing"
+  },
+  "errors": [],
+  "note": "Control: the three-stroke trail from commit 5a05103, measured in the same session as perf_after.json. Exists because a first wedge run read 3.8 ms synthetic p95 against a 2.6 ms baseline recorded hours earlier; re-measuring both back-to-back showed the machine had drifted (this control reads 3.5 ms) and the wedge is not slower."
+}

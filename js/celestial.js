@@ -770,8 +770,10 @@
        blunt, three overlapping strokes pile up alpha at the base, and nothing
        about it got thinner with distance. It is now a WEDGE - full width at
        the rock, converging to a point - with an alpha gradient along its
-       length, which is what a trail does. Cost: two gradients, two fills, and
-       test/perf.mjs is the gate that says whether that is affordable. */
+       length, which is what a trail does. Two gradients and two fills, which
+       measured no slower than the three strokes it replaced: 3.2 ms vs 3.5 ms
+       synthetic render p95 at 4x CPU throttle, same fps. See
+       test/baseline/perf_after.json and perf_strokes_control.json. */
     var tipL = R * 3.4;                       // how far back the trail reaches
     var halfW = R * 0.62;                     // half-width where it leaves the rock
     var bx = m.x + tx * R * 0.35, by = m.y + ty * R * 0.35;   // base, just off the rock
