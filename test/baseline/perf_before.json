@@ -1,0 +1,52 @@
+{
+  "label": "before",
+  "throttle": 4,
+  "frames": 600,
+  "seconds": 18,
+  "scene": {
+    "nodes": 12,
+    "hazards": 6,
+    "shards": 6
+  },
+  "synthetic": {
+    "render": {
+      "n": 1201,
+      "mean": 1.843,
+      "p50": 1.8,
+      "p95": 2.6,
+      "p99": 3.3,
+      "max": 4.4
+    },
+    "frame": {
+      "n": 1201,
+      "mean": 3.624,
+      "p50": 3,
+      "p95": 5.4,
+      "p99": 7.7,
+      "max": 126.2
+    }
+  },
+  "live": {
+    "render": {
+      "n": 2591,
+      "mean": 1.942,
+      "p50": 1.8,
+      "p95": 2.8,
+      "p99": 3.7,
+      "max": 6.8
+    },
+    "frame": {
+      "n": 2591,
+      "mean": 6.952,
+      "p50": 6.9,
+      "p95": 7.3,
+      "p99": 8.6,
+      "max": 17.1
+    },
+    "fps": 143.8,
+    "avgNodes": 8.84,
+    "hooks": 18,
+    "state": "playing"
+  },
+  "errors": []
+}

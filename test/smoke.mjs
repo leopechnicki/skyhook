@@ -74,12 +74,9 @@ function startServer() {
  *   2. The in-page bot still dispatches its own event, because it must decide
  *      and fire inside a single animation frame and a round-trip to the driver
  *      cannot hit that window. It now emits a FAITHFUL primary mouse pointer,
- *      matching what Chrome actually delivers (verified field-by-field above).
+ *      matching what Chrome actually delivers (verified field-by-field; see
+ *      test/bot.js).
  * ------------------------------------------------------------------------- */
-
-/* Fields Chrome sets on a real primary mouse pointerdown. Omitting these is
-   what broke this harness; keep them together so nobody drops one again. */
-const PRIMARY_POINTER = `isPrimary: true, pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1,`;
 
 /* A real desktop click, driven by the browser rather than dispatched by us. */
 async function tapCenter(page) {
@@ -89,70 +86,11 @@ async function tapCenter(page) {
 
 /* An in-page bot that plays for real: it waits for the orbit angle where
    releasing aims closest at the next node, then dispatches a genuine
-   pointerdown on the stage. Same code path a human thumb uses. */
-const BOT = `
-window.__bot = { on: true, taps: 0 };
-(function botLoop() {
-  requestAnimationFrame(botLoop);
-  var B = window.__bot;
-  if (!B.on) return;
-  var g = window.__SKYHOOK && window.__SKYHOOK.game;
-  if (!g || g.state !== 'playing') return;
-  var p = g.player;
-  if (p.mode !== 'orbit' || !p.node) return;
-
-  function tap() {
-    var r = window.__SKYHOOK.canvas.getBoundingClientRect();
-    window.__SKYHOOK.stage.dispatchEvent(new PointerEvent('pointerdown', {
-      bubbles: true, cancelable: true, ${PRIMARY_POINTER}
-      clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
-    }));
-    B.taps++;
-  }
-
-  /* The tutorial FREEZES the orbit on tutHold and puts "TAP NOW" on screen.
-     A bot that only fires on a changing angle waits there forever - which is
-     exactly what it did: 26 s, 0 hooks, altitude stuck at 7 m. When the game
-     tells the player to tap, tap. This is the real first-run path a human
-     walks, so the suite should walk it too rather than skipping the tutorial. */
-  if (g.tutHold) { tap(); return; }
-
-  var target = null, bd = 1e9;
-  for (var i = 0; i < g.nodes.length; i++) {
-    var n = g.nodes[i];
-    if (n.spent || n === p.node) continue;
-    var d = Math.hypot(p.x - n.x, p.y - n.y);
-    if (d < bd) { bd = d; target = n; }
-  }
-  if (!target) return;
-
-  function aimAt(ang) {
-    var cs = Math.cos(ang), sn = Math.sin(ang);
-    var rx = p.node.x + cs * p.r, ry = p.node.y + sn * p.r;
-    var vx = -sn * p.dir, vy = cs * p.dir;
-    var tx = target.x - rx, ty = target.y - ry;
-    return { along: tx * vx + ty * vy, perp: Math.abs(tx * vy - ty * vx) };
-  }
-
-  /* Ask the game for its own angular rate instead of restating it. The old
-     hardcoded 468/p.r was wrong twice over - speed ramps 360 -> 468 with
-     hooks, and the divisor is floored at the body's resting minimum - so the
-     one-frame lookahead that decides the release was aiming at a phantom.
-     (Same defect balance.mjs logged as F3a/F3b.) */
-  var rate = (typeof g.angRate === 'function')
-    ? g.angRate(p)
-    : p.dir * (p.speed / Math.max(p.r, 60));
-  var step = rate * (1 / 60);
-
-  /* Tolerance scales with the TARGET's own latch ring, so "close enough"
-     means the same thing on a small planet and on a big star. */
-  var tol = 70 * ((target.captureR || 92) / 92);
-
-  var now = aimAt(p.ang);
-  var soon = aimAt(p.ang + step);
-  if (now.along > 0 && now.perp < tol && soon.perp >= now.perp) tap();
-})();
-`;
+   pointerdown on the stage. Same code path a human thumb uses.
+   It lives in test/bot.js so test/perf.mjs measures frame time under the
+   exact same player; see that file's header for why every PointerEvent field
+   in it matters. */
+const BOT = fs.readFileSync(path.join(HERE, 'bot.js'), 'utf8');
 
 function attachLogs(page, bucket, label) {
   page.on('console', m => { if (m.type() === 'error') bucket.push(`[${label}] console: ${m.text()}`); });
@@ -292,11 +230,21 @@ async function main() {
       `stored=${stored} scoreAtDeath=${scoreBeforeDeath}`);
 
     /* ---------- 4. restart ---------- */
+    /* What "cleanly" has to mean: the RUN COUNTERS were reset, not that the
+       new run has literally scored nothing yet. The old assertion demanded
+       score === 0 after a 200 ms settle and was therefore flaky by
+       construction - a shard can sit within pickup range of the opening orbit,
+       so a perfectly clean restart legitimately reads score 25 with hooks 0
+       (score only moves on a hook, game.js:759, or a shard, game.js:949).
+       Assert the reset instead: a carried-over run would show the previous
+       hooks (26) and altitude (560 m), which these bounds exclude outright. */
     await tapCenter(page);
     await wait(200);
     s = await page.evaluate('window.__SKYHOOK.snapshot()');
-    check('tap on game over restarts cleanly', s.state === 'playing' && s.score === 0 && s.hooks === 0,
-      `state=${s.state} score=${s.score} hooks=${s.hooks}`);
+    const restarted = s.state === 'playing' && s.hooks === 0 && s.altitude < 20
+      && s.score < 100 && s.score < scoreBeforeDeath;
+    check('tap on game over restarts cleanly', restarted,
+      `state=${s.state} score=${s.score} hooks=${s.hooks} altitude=${s.altitude}`);
 
     /* ---------- 5. persistence across a reload ---------- */
     await page.reload({ waitUntil: 'load' });
