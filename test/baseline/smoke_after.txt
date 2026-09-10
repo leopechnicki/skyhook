@@ -1,0 +1,25 @@
+PASS  boots into title screen  -> state=title
+PASS  localStorage available over http
+PASS  canvas has a real size  -> 491x900
+PASS  ad slot is hidden (no visible placeholder)  -> not rendered
+PASS  ad slot contains no ad-network code
+PASS  ad slot markup still available for future use
+PASS  non-primary pointers are ignored (multi-touch guard holds)  -> state=title
+PASS  real desktop mouse click starts the run  -> state=playing
+PASS  core loop runs: player chains hooks  -> peak hooks=26
+PASS  scoring works  -> peak score=3703
+PASS  combo can build (tight hooks are reachable)  -> peak combo=9
+PASS  altitude advances  -> peak altitude=556 m
+PASS  run ends in a game-over screen  -> state=over cause=edge
+PASS  high score written to localStorage  -> stored=3703 scoreAtDeath=3703
+PASS  tap on game over restarts cleanly  -> state=playing score=0 hooks=0 altitude=7
+PASS  high score survives a reload  -> best=3703 stored=3703
+PASS  mute button toggles without starting the game  -> muted=true state=title
+PASS  canvas fits inside a 390x844 phone viewport  -> 390x715
+PASS  touch tap starts the game on mobile  -> state=playing
+PASS  runs from file:// with no server (title screen)
+PASS  runs from file:// (loop advances, no crash)  -> state=playing localStorage=available
+PASS  no console errors / page errors / failed requests
+
+22/22 checks passed
+screenshots: C:\Users\leops\Life Organizer\leo-agents-v2\projects\game-01-skyhook\test\screenshots
