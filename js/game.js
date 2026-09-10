@@ -88,7 +88,7 @@
   var SETTLE_RATE  = 240;   // px/s the tether eases out to its resting length
   var PREDICT_T    = 1.15;  // seconds of flight the release guide looks ahead
   var PLAYER_R     = 8;
-  var MINE_R       = 11;
+  var METEOR_R     = 11;   // collision radius of a meteoroid (unchanged)
   var SHARD_PICK   = 22;
   var MARGIN_X     = 96;    // node placement bounds
   var DEATH_PAD    = 64;    // how far off-column before you are gone
@@ -118,15 +118,20 @@
     decay:  [255, 176, 58],
     player: [255, 255, 255],
     shard:  [255, 215, 94],
-    mine:   [255, 77, 109],
+    meteor: [255, 77, 109],
     danger: [255, 46, 99]
   };
 
-  /* The one place that answers "what colour is this body?". */
+  /* The one place that answers "what colour are this body's GAMEPLAY signals?"
+     - its latch ring, its tether and its hook burst. That is no longer the
+     same question as "what colour is this body painted", which js/celestial.js
+     now owns: a body can be an iron-grey rock or a sulfur-yellow cloud world
+     and still show the cyan latch ring that has meant "safe anchor" since the
+     first build. Stars are the deliberate exception - their spectral colour is
+     set by mass, and mass is exactly what decides how far they sling you, so
+     letting it through into the signals tells the player something true. */
   function bodyCol(n) {
-    if (!n) return COL.node;
-    if (n.type === 'decay') return COL.decay;
-    return n.kind === 'star' ? COL.star : COL.node;
+    return SK.Celestial.signalCol(n);
   }
 
   /* The rift and the flight timer are gone, so 'rift' and 'drift' would now be
@@ -134,7 +139,7 @@
      are "the ball left the screen". */
   var CAUSE = {
     fell: 'YOU FELL OUT OF THE SKY',
-    mine: 'YOU HIT A MINE',
+    meteor: 'A METEOROID TOOK YOU OUT',
     edge: 'YOU LEFT THE COLUMN'
   };
 
@@ -142,7 +147,7 @@
      death ships the one correction that would have prevented it. */
   var FIX = {
     fell:  'Release on the way UP - a downward launch has nothing to catch',
-    mine:  'Mines sit off the direct line - a clean release clears them',
+    meteor: 'Meteoroids drift OFF the direct line - a clean release clears them',
     edge:  'Stars sling you far - let go of one earlier than you would a planet',
     decay: 'Amber anchors release you when their timer expires'
   };
@@ -167,13 +172,18 @@
     this.muted = SK.Store.get('skyhook.muted', '0') === '1';
     SK.Audio.muted = this.muted;
 
-    /* pre-rendered glows (cheap substitute for ctx.shadowBlur) */
-    this.glowNode   = SK.makeGlow(64, COL.node.join(','), 0.85);
-    this.glowStar   = SK.makeGlow(96, COL.star.join(','), 0.9);
-    this.glowDecay  = SK.makeGlow(64, COL.decay.join(','), 0.85);
+    /* pre-rendered glows (cheap substitute for ctx.shadowBlur).
+       Body halos used to be three fixed sprites right here; there are now
+       fourteen formation classes and six spectral classes, each throwing light
+       of its own colour, so js/celestial.js owns those and builds them on
+       first sight into its bounded cache. The player and the shard are not
+       art classes, so they stay. */
     this.glowPlayer = SK.makeGlow(52, COL.player.join(','), 0.9);
     this.glowShard  = SK.makeGlow(34, COL.shard.join(','), 0.9);
-    this.glowMine   = SK.makeGlow(40, COL.mine.join(','), 0.8);
+    /* The title screen's demo body is not a simulated node - it has no mass
+       and no `art`, so it has no formation class to ask for a halo. It keeps
+       the original cyan one. */
+    this.glowTitle  = SK.makeGlow(64, COL.node.join(','), 0.85);
 
     this.stars = this._makeStars();
     this.nebula = this._makeNebula();
@@ -320,7 +330,7 @@
 
   Game.prototype._resetWorld = function () {
     this.nodes = [];
-    this.mines = [];
+    this.meteors = [];
     this.shards = [];
     this.nodeCount = 0;
     this.hooks = 0;
@@ -432,7 +442,7 @@
       var y = top.y - gap;
 
       /* While the tutorial is still teaching, the chain ahead stays clean.
-         A first-timer must not meet an amber node or a mine before they have
+         A first-timer must not meet an amber node or a meteor before they have
          proved they can release, aim and latch at all. */
       var safe = this.tutorial;
 
@@ -464,10 +474,10 @@
         this.shards.push({ x: clamp(sx + off, 26, W - 26), y: sy, phase: this.rand() * TAU, got: false });
       }
 
-      /* Mines. These are deliberately parked OFF the direct line between
+      /* Meteoroids. These are deliberately parked OFF the direct line between
          two nodes, at a perpendicular offset. An earlier version had them
          drifting across the whole column; a 600-run balance sweep showed
-         99% of all deaths were mine hits and the expert-vs-beginner score
+         99% of all deaths were hazard hits and the expert-vs-beginner score
          gradient collapsed to 1.5x - the hazard was occupying the only
          viable corridor, so outcomes were random instead of earned. Now a
          clean release is always safe and only a sloppy, wide arc (or a
@@ -481,12 +491,12 @@
         var offd = 82 + this.rand() * 46;
         var hx = clamp(mx + pnx * sgn * offd, 44, W - 44);
         var hy = my + pny * sgn * offd;
-        // Never let a mine sit inside a node's latch ring - that would make
+        // Never let a meteoroid sit inside a node's latch ring - that would make
         // the node itself un-hookable.
         var okA = Math.hypot(hx - top.x, hy - top.y) > top.captureR + 22;
         var okB = Math.hypot(hx - node.x, hy - node.y) > node.captureR + 22;
         if (okA && okB) {
-          this.mines.push({ homeX: hx, x: hx, y: hy, amp: 8 + this.rand() * 12, phase: this.rand() * TAU });
+          this.meteors.push({ homeX: hx, x: hx, y: hy, amp: 8 + this.rand() * 12, phase: this.rand() * TAU });
         }
       }
     }
@@ -501,7 +511,7 @@
         this.nodes.splice(i, 1);
       }
     }
-    for (i = this.mines.length - 1; i >= 0; i--) if (this.mines[i].y > floor) this.mines.splice(i, 1);
+    for (i = this.meteors.length - 1; i >= 0; i--) if (this.meteors[i].y > floor) this.meteors.splice(i, 1);
     for (i = this.shards.length - 1; i >= 0; i--) if (this.shards[i].y > floor) this.shards.splice(i, 1);
   };
 
@@ -520,7 +530,7 @@
     this.seed = s;
     this.rand = SK.rng(s);
 
-    /* The sim clock drives mine drift, so it must restart with the world.
+    /* The sim clock drives meteoroid drift, so it must restart with the world.
        Leaving it running meant the same seed produced a different layout on
        every run - the seed was decorative. */
     this.time = 0;
@@ -718,7 +728,7 @@
     /* Radius continuity. The old code snapped r to MIN_R on catch while
        leaving the player at closest approach, so a bullseye teleported them
        up to ~46 px outward on the very next step - straight through pickups
-       and, occasionally, into a mine. Start at the distance actually achieved
+       and, occasionally, into a meteoroid. Start at the distance actually achieved
        and ease out to the resting length instead. */
     p.r = d;
     p.targetR = clamp(d, node.minR, node.maxR);
@@ -788,7 +798,7 @@
   /* ---------------- simulation ------------------------------------- */
 
   /* Squared distance from point c to segment a->b. Used so a fast tick can
-     never step a player straight THROUGH a mine or a shard. */
+     never step a player straight THROUGH a meteoroid or a shard. */
   function segDist2(ax, ay, bx, by, cx, cy) {
     var vx = bx - ax, vy = by - ay;
     var wx = cx - ax, wy = cy - ay;
@@ -925,14 +935,14 @@
     if (p.x < -DEATH_PAD || p.x > W + DEATH_PAD) { this.die('edge'); return; }
     if (p.y > this.camY + H + DEATH_PAD) { this.die('fell'); return; }
 
-    /* Mines and shards are tested against the SEGMENT the player swept this
+    /* Meteoroids and shards are tested against the SEGMENT the player swept this
        tick, not just the endpoint - so settling out of a tight catch can
        neither skip a pickup nor tunnel through a hazard. */
-    for (i = 0; i < this.mines.length; i++) {
-      var m = this.mines[i];
+    for (i = 0; i < this.meteors.length; i++) {
+      var m = this.meteors[i];
       m.x = m.homeX + Math.sin(this.time * 0.9 + m.phase) * m.amp;
-      var mr = MINE_R + PLAYER_R;
-      if (segDist2(ox, oy, p.x, p.y, m.x, m.y) < mr * mr) { this.die('mine'); return; }
+      var mr = METEOR_R + PLAYER_R;
+      if (segDist2(ox, oy, p.x, p.y, m.x, m.y) < mr * mr) { this.die('meteor'); return; }
     }
 
     /* shards */
@@ -966,7 +976,7 @@
 
   /* ONE simulation tick. Always exactly STEP seconds - never a subdivision of
      whatever the display happened to deliver. Everything that can change the
-     outcome of a run lives in here: the sim clock, mine drift, the camera,
+     outcome of a run lives in here: the sim clock, meteoroid drift, the camera,
      spawning, culling and hitstop. */
   Game.prototype._tick = function () {
     var dt = STEP;
@@ -1147,111 +1157,20 @@
     }
   };
 
-  /* Star surface: an emissive core plus a corona whose extent scales with the
-     body's radius, so mass is readable from across the screen without a label.
-     Everything is procedural (gradients + arcs), which is deliberate - it costs
-     no download, no atlas and no extra fill on a low-end Android GPU, and it
-     tracks the size model for free the moment the mass ranges are retuned. */
-  Game.prototype._drawStar = function (ctx, n, R, alive, pulse) {
-    var a = alive ? 1 : 0.34;
-
-    /* corona: two soft falloffs, the outer one slowly breathing */
-    var cr = R * (2.9 + pulse * 0.30);
-    var g = ctx.createRadialGradient(n.x, n.y, R * 0.55, n.x, n.y, cr);
-    g.addColorStop(0, 'rgba(255,238,196,' + (0.34 * a).toFixed(3) + ')');
-    g.addColorStop(0.42, 'rgba(255,196,96,' + (0.13 * a).toFixed(3) + ')');
-    g.addColorStop(1, 'rgba(255,150,40,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(n.x, n.y, cr, 0, TAU); ctx.fill();
-
-    /* photosphere: hot white centre easing to the limb */
-    var pg = ctx.createRadialGradient(n.x - R * 0.18, n.y - R * 0.18, R * 0.1, n.x, n.y, R);
-    pg.addColorStop(0, 'rgba(255,255,248,' + a.toFixed(2) + ')');
-    pg.addColorStop(0.55, 'rgba(255,232,152,' + (0.96 * a).toFixed(2) + ')');
-    pg.addColorStop(1, 'rgba(255,158,52,' + (0.92 * a).toFixed(2) + ')');
-    ctx.fillStyle = pg;
-    ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, TAU); ctx.fill();
-
-    /* granulation: a few darker cells, seeded per body so they never crawl */
-    if (alive) {
-      ctx.save();
-      ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, TAU); ctx.clip();
-      ctx.fillStyle = 'rgba(214,120,26,0.30)';
-      for (var i = 0; i < 4; i++) {
-        var ga = (n.art + i * 0.27) * TAU, gd = R * (0.22 + ((n.art * (i + 3)) % 1) * 0.5);
-        ctx.beginPath();
-        ctx.arc(n.x + Math.cos(ga) * gd, n.y + Math.sin(ga) * gd, R * 0.20, 0, TAU);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-
-    /* flare spikes - the classic "this one is a STAR" read */
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,236,180,' + (0.5 * a).toFixed(2) + ')';
-    ctx.lineWidth = 1.4;
-    for (var k = 0; k < 4; k++) {
-      var fa = n.phase * 0.4 + k * (Math.PI / 2) + this.time * 0.12;
-      var f0 = R * 1.15, f1 = R * (1.75 + pulse * 0.35);
-      ctx.beginPath();
-      ctx.moveTo(n.x + Math.cos(fa) * f0, n.y + Math.sin(fa) * f0);
-      ctx.lineTo(n.x + Math.cos(fa) * f1, n.y + Math.sin(fa) * f1);
-      ctx.stroke();
-    }
-    ctx.restore();
-  };
-
-  /* Planet surface: albedo shading with a terminator (the lit side faces the
-     top of the column, so the whole field is lit consistently) and latitude
-     banding whose count scales with the body's radius. */
-  Game.prototype._drawPlanet = function (ctx, n, R, alive, col) {
-    var a = alive ? 1 : 0.34;
-    var lx = -0.42, ly = -0.52;   // light direction, normalised-ish
-
-    var pg = ctx.createRadialGradient(n.x + lx * R, n.y + ly * R, R * 0.08, n.x, n.y, R * 1.12);
-    pg.addColorStop(0, 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + (0.85 * a).toFixed(2) + ')');
-    pg.addColorStop(0.5, 'rgba(' + Math.round(col[0] * 0.45) + ',' + Math.round(col[1] * 0.55) + ',' + Math.round(col[2] * 0.65) + ',' + (0.72 * a).toFixed(2) + ')');
-    pg.addColorStop(1, 'rgba(6,10,26,' + (0.85 * a).toFixed(2) + ')');
-    ctx.fillStyle = pg;
-    ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, TAU); ctx.fill();
-
-    /* banding: 2 bands on a small planet, up to 4 on a large one */
-    if (alive) {
-      var bands = 2 + Math.min(2, Math.floor((R - 9) / 2.6));
-      ctx.save();
-      ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, TAU); ctx.clip();
-      ctx.strokeStyle = rgba(col, 0.20);
-      ctx.lineWidth = Math.max(1, R * 0.13);
-      for (var b = 0; b < bands; b++) {
-        var by = n.y - R + ((b + 0.6 + n.art * 0.5) / bands) * R * 2;
-        ctx.beginPath();
-        ctx.moveTo(n.x - R, by);
-        ctx.lineTo(n.x + R, by);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    /* limb light: a bright crescent on the lit edge sells the sphere */
-    ctx.save();
-    ctx.strokeStyle = rgba(col, (0.9 * a).toFixed(2));
-    ctx.lineWidth = 1.8;
-    var la = Math.atan2(ly, lx);
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, R - 0.6, la - 1.15, la + 1.15);
-    ctx.stroke();
-    ctx.strokeStyle = rgba(col, (0.28 * a).toFixed(2));
-    ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.arc(n.x, n.y, R - 0.6, 0, TAU); ctx.stroke();
-    ctx.restore();
-  };
+  /* _drawStar and _drawPlanet used to live here - ~100 lines of gradients,
+     bands and limb strokes rebuilt per body per frame. They are now one
+     sprite blit each in js/celestial.js, which is also where the fourteen
+     formation classes and six spectral classes were added. Nothing else
+     called them. */
 
   Game.prototype._drawNode = function (ctx, n) {
     var pulse = 0.5 + 0.5 * Math.sin(this.time * 2.4 + n.phase);
     var decayed = n.type === 'decay';
     var isStar = n.kind === 'star';
     var col = bodyCol(n);
-    var glow = decayed ? this.glowDecay : (isStar ? this.glowStar : this.glowNode);
+    /* Halo colour now comes from the body's formation/spectral class, built
+       on first sight and cached in js/celestial.js. */
+    var glow = SK.Celestial.glowFor(n);
 
     /* n.pop decays in _tick(), not here - drawing must never mutate state. */
     var alive = !n.spent;
@@ -1283,8 +1202,11 @@
       }
     }
 
-    if (isStar) this._drawStar(ctx, n, R, alive, pulse);
-    else this._drawPlanet(ctx, n, R, alive, col);
+    /* The body itself. Everything about how it LOOKS - formation class,
+       spectral colour, craters, bands, rings, corona - lives in
+       js/celestial.js and is blitted from a bounded sprite cache. This call
+       is side-effect free: no RNG, no writes to `n`. */
+    SK.Celestial.drawBody(ctx, n, R, alive, pulse, this.time);
 
     /* burn-down ring on the body you are currently riding */
     if (decayed && n.hooked && n.decay > 0) {
@@ -1321,29 +1243,12 @@
       ctx.restore();
     }
 
-    for (i = 0; i < this.mines.length; i++) {
-      var m = this.mines[i];
-      SK.drawGlow(ctx, this.glowMine, m.x, m.y, 0.75, 0.6);
-      ctx.save();
-      ctx.translate(m.x, m.y);
-      ctx.rotate(this.time * 1.1 + m.phase);
-      ctx.strokeStyle = rgba(COL.mine, 0.95);
-      ctx.lineWidth = 2.2;
-      for (var s = 0; s < 6; s++) {
-        var a = (s / 6) * TAU;
-        ctx.beginPath();
-        ctx.moveTo(Math.cos(a) * 6, Math.sin(a) * 6);
-        ctx.lineTo(Math.cos(a) * (MINE_R + 4), Math.sin(a) * (MINE_R + 4));
-        ctx.stroke();
-      }
-      ctx.beginPath();
-      ctx.arc(0, 0, 6.5, 0, TAU);
-      ctx.fillStyle = '#2a0713';
-      ctx.fill();
-      ctx.strokeStyle = rgba(COL.mine, 1);
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.restore();
+    /* Hazards. Drawn at exactly METEOR_R - the collision radius the sim
+       uses - so the art can never grow past the hitbox and lie about where
+       the danger actually is. The rock, its tumble, its trail and its hot
+       leading edge all live in js/celestial.js. */
+    for (i = 0; i < this.meteors.length; i++) {
+      SK.Celestial.drawMeteor(ctx, this.meteors[i], METEOR_R, this.time);
     }
 
     for (i = 0; i < this.nodes.length; i++) this._drawNode(ctx, this.nodes[i]);
@@ -1529,7 +1434,7 @@
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
 
-    SK.drawGlow(ctx, this.glowNode, cx, cy, 0.8, 0.6);
+    SK.drawGlow(ctx, this.glowTitle, cx, cy, 0.8, 0.6);
     ctx.beginPath(); ctx.arc(cx, cy, NODE_R, 0, TAU);
     ctx.fillStyle = 'rgba(53,230,255,0.22)'; ctx.fill();
     ctx.strokeStyle = 'rgba(53,230,255,0.95)'; ctx.lineWidth = 2.4; ctx.stroke();
