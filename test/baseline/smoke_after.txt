@@ -7,13 +7,13 @@ PASS  ad slot markup still available for future use
 PASS  non-primary pointers are ignored (multi-touch guard holds)  -> state=title
 PASS  real desktop mouse click starts the run  -> state=playing
 PASS  core loop runs: player chains hooks  -> peak hooks=26
-PASS  scoring works  -> peak score=3703
+PASS  scoring works  -> peak score=3503
 PASS  combo can build (tight hooks are reachable)  -> peak combo=9
-PASS  altitude advances  -> peak altitude=556 m
+PASS  altitude advances  -> peak altitude=559 m
 PASS  run ends in a game-over screen  -> state=over cause=edge
-PASS  high score written to localStorage  -> stored=3703 scoreAtDeath=3703
+PASS  high score written to localStorage  -> stored=3816 scoreAtDeath=3503
 PASS  tap on game over restarts cleanly  -> state=playing score=0 hooks=0 altitude=7
-PASS  high score survives a reload  -> best=3703 stored=3703
+PASS  high score survives a reload  -> best=3816 stored=3816
 PASS  mute button toggles without starting the game  -> muted=true state=title
 PASS  canvas fits inside a 390x844 phone viewport  -> 390x715
 PASS  touch tap starts the game on mobile  -> state=playing

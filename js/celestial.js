@@ -764,18 +764,45 @@
     var tl = Math.hypot(vx, 34) || 1;
     var tx = -vx / tl, ty = -34 / tl;
 
-    /* ablation trail: three tapering, fading strokes */
+    /* Ablation trail. This started life as three round-capped strokes of
+       constant width, and at the size the hazard is actually played at
+       (R = 11) that read as a mallet handle, not as motion: a round cap is
+       blunt, three overlapping strokes pile up alpha at the base, and nothing
+       about it got thinner with distance. It is now a WEDGE - full width at
+       the rock, converging to a point - with an alpha gradient along its
+       length, which is what a trail does. Cost: two gradients, two fills, and
+       test/perf.mjs is the gate that says whether that is affordable. */
+    var tipL = R * 3.4;                       // how far back the trail reaches
+    var halfW = R * 0.62;                     // half-width where it leaves the rock
+    var bx = m.x + tx * R * 0.35, by = m.y + ty * R * 0.35;   // base, just off the rock
+    var px = -ty, py = tx;                    // perpendicular to travel
+
+    var tg = ctx.createLinearGradient(bx, by, bx + tx * tipL, by + ty * tipL);
+    tg.addColorStop(0, rgba(METEOR.hot, 0.55));
+    tg.addColorStop(0.35, rgba(METEOR.fire, 0.28));
+    tg.addColorStop(1, rgba(METEOR.fire, 0));
+
     ctx.save();
-    ctx.lineCap = 'round';
-    for (var i = 0; i < 3; i++) {
-      var len = R * (1.5 + i * 1.5);
-      ctx.strokeStyle = rgba(i === 0 ? METEOR.hot : METEOR.fire, (0.34 - i * 0.10).toFixed(3));
-      ctx.lineWidth = Math.max(1, R * (0.72 - i * 0.2));
-      ctx.beginPath();
-      ctx.moveTo(m.x + tx * R * 0.4, m.y + ty * R * 0.4);
-      ctx.lineTo(m.x + tx * len, m.y + ty * len);
-      ctx.stroke();
-    }
+    ctx.fillStyle = tg;
+    ctx.beginPath();
+    ctx.moveTo(bx + px * halfW, by + py * halfW);
+    ctx.lineTo(bx + tx * tipL, by + ty * tipL);
+    ctx.lineTo(bx - px * halfW, by - py * halfW);
+    ctx.closePath();
+    ctx.fill();
+
+    /* A hotter, narrower core down the middle of the wedge, so the trail has
+       a bright spine instead of being one flat wash. */
+    var cg = ctx.createLinearGradient(bx, by, bx + tx * tipL * 0.62, by + ty * tipL * 0.62);
+    cg.addColorStop(0, rgba([255, 226, 180], 0.7));
+    cg.addColorStop(1, rgba(METEOR.hot, 0));
+    ctx.fillStyle = cg;
+    ctx.beginPath();
+    ctx.moveTo(bx + px * halfW * 0.34, by + py * halfW * 0.34);
+    ctx.lineTo(bx + tx * tipL * 0.62, by + ty * tipL * 0.62);
+    ctx.lineTo(bx - px * halfW * 0.34, by - py * halfW * 0.34);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
 
     SK.drawGlow(ctx, meteorGlow(), m.x, m.y, 0.8, 0.6);
