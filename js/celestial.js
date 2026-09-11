@@ -68,7 +68,17 @@
   var LX = -0.42, LY = -0.52;
 
   var SPRITE_R = 50;     // internal radius every class sprite is painted at
-  var CACHE_MAX = 96;    // hard ceiling; see sprite()
+  /* Hard ceiling on cached sprites; see the sprite cache section below.
+     The reachable set today is 93 entries (14 planet classes x 3 variants +
+     6 spectral x 3 = 60 discs, +20 glows, +6 coronae, +6 meteoroid
+     silhouettes, +1 meteoroid glow), and ALL of it is reachable in one long
+     run. At 96 that left three slots of margin: one new planet class costs
+     four entries and tips the whole cache into permanent thrashing.
+     160 leaves room for roughly sixteen more classes.
+     test/sprites.mjs asserts the real reachable count against this number, so
+     the class that finally outgrows it fails the build instead of quietly
+     turning every frame into a repaint. */
+  var CACHE_MAX = 160;
 
   /* ---------------------------------------------------------------- utils */
 
@@ -254,10 +264,17 @@
   function classOf(n) {
     if (!n) return PLANETS.rocky;
     if (n.kind === 'star') return starClass(n.mass);
-    if (n.type === 'decay') return PLANETS[pick(SCORCHED, n.art, 5)];
+    /* The `|| PLANETS.rocky` fallbacks are structural, not defensive noise.
+       `pick` hashes n.art, and hash(undefined) is NaN, so a body that reached
+       here without an `art` field would index the class table with NaN and
+       return undefined - and the caller would fail later, in a paint routine,
+       reading `.pal` of undefined. Nothing constructs such a body today; this
+       makes "always returns a class" true by construction rather than by
+       every caller remembering to set the field. */
+    if (n.type === 'decay') return PLANETS[pick(SCORCHED, n.art, 5)] || PLANETS.rocky;
     var m01 = clamp((n.mass - 0.55) / 0.60, 0, 1);
     for (var i = 0; i < PLANET_BANDS.length; i++) {
-      if (m01 <= PLANET_BANDS[i].upTo) return PLANETS[pick(PLANET_BANDS[i].set, n.art, 1)];
+      if (m01 <= PLANET_BANDS[i].upTo) return PLANETS[pick(PLANET_BANDS[i].set, n.art, 1)] || PLANETS.rocky;
     }
     return PLANETS.rocky;
   }
@@ -269,8 +286,51 @@
 
   /* -------------------------------------------------------- sprite cache */
 
-  var cache = {};
+  /* One cache, one code path. Every sprite in this file - discs, coronae,
+     glows, meteoroids - goes through `cached()` below. It used to be four
+     copy-pasted miss blocks, which meant a fix to the eviction policy could
+     land in three of them and silently miss the fourth.
+
+     EVICTION IS LRU, not a flush. The previous policy emptied the entire
+     cache on overflow, so the frame after the ceiling was hit repainted
+     EVERY sprite from scratch - a stall exactly when the screen was busiest,
+     and then again the next time it filled. LRU drops one cold entry and
+     leaves the hot ones painted.
+
+     The recency stamp is a monotonic counter rather than a linked list: with
+     a ceiling in the low hundreds, scanning for the minimum on the rare
+     eviction is cheaper than the bookkeeping a list costs on every hit, and
+     hits are the case that happens sixty times a second. */
+  var cache = {};        // key -> canvas
+  var cacheUse = {};     // key -> recency stamp; same keys as `cache`
   var cacheN = 0;
+  var cacheClock = 0;
+  var cacheEvictions = 0;
+
+  function evictLRU() {
+    var oldestKey = null, oldest = Infinity;
+    for (var k in cacheUse) {
+      if (cacheUse[k] < oldest) { oldest = cacheUse[k]; oldestKey = k; }
+    }
+    if (oldestKey === null) return;
+    delete cache[oldestKey];
+    delete cacheUse[oldestKey];
+    cacheN--;
+    cacheEvictions++;
+  }
+
+  /* Get-or-build. `build()` is only called on a miss, and only its return
+     value is stored, so a builder cannot half-populate the cache. */
+  function cached(key, build) {
+    var hit = cache[key];
+    if (hit !== undefined) { cacheUse[key] = ++cacheClock; return hit; }
+    var c = build();
+    if (cacheN >= CACHE_MAX) evictLRU();
+    cache[key] = c;
+    cacheUse[key] = ++cacheClock;
+    cacheN++;
+    return c;
+  }
 
   /* Paint once, blit forever. `paint(g, cx, cy, r)` gets a fresh 2d context
      with the disc centred at (cx, cy) and radius r = SPRITE_R.
@@ -278,26 +338,29 @@
      something continuous (a radius, a timer) degrades into "slow" instead of
      "out of memory on a phone". */
   function sprite(key, pad, paint) {
-    var hit = cache[key];
-    if (hit) return hit;
-    if (cacheN >= CACHE_MAX) { cache = {}; cacheN = 0; }
-    var r = SPRITE_R;
-    var size = Math.ceil(r * pad * 2);
-    var c = global.document.createElement('canvas');
-    c.width = c.height = size;
-    var g = c.getContext('2d');
-    paint(g, size / 2, size / 2, r);
-    c.__r = r; c.__pad = pad;
-    cache[key] = c; cacheN++;
-    return c;
+    return cached(key, function () {
+      var r = SPRITE_R;
+      var size = Math.ceil(r * pad * 2);
+      var c = global.document.createElement('canvas');
+      c.width = c.height = size;
+      var g = c.getContext('2d');
+      paint(g, size / 2, size / 2, r);
+      return c;
+    });
   }
 
   /* Blit a class sprite so its disc lands exactly on radius R at (x, y). */
   function blit(ctx, spr, x, y, R, alpha) {
     var half = (spr.width / 2) * (R / SPRITE_R);
+    /* save/restore rather than resetting globalAlpha to 1: restoring a
+       hardcoded 1 silently discards whatever alpha the CALLER had set. No
+       live caller blits inside a faded group today, so this is latent - but
+       the first one that does would get a bug that looks like a render
+       glitch and reads nowhere near this line. */
+    ctx.save();
     ctx.globalAlpha = alpha;
     ctx.drawImage(spr, x - half, y - half, half * 2, half * 2);
-    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   /* ------------------------------------------------------ paint: helpers */
@@ -550,35 +613,33 @@
      star was the single most expensive thing the old draw path did. */
   var CORONA_R = 72;
   function coronaSprite(cls) {
-    var key = 'corona:' + cls.id;
-    var hit = cache[key];
-    if (hit) return hit;
-    if (cacheN >= CACHE_MAX) { cache = {}; cacheN = 0; }
-    var size = CORONA_R * 2;
-    var c = global.document.createElement('canvas');
-    c.width = c.height = size;
-    var g = c.getContext('2d');
-    var gr = g.createRadialGradient(CORONA_R, CORONA_R, CORONA_R * 0.19, CORONA_R, CORONA_R, CORONA_R);
-    gr.addColorStop(0, rgba(cls.core, 0.34));
-    gr.addColorStop(0.42, rgba(cls.corona, 0.13));
-    gr.addColorStop(1, rgba(cls.corona, 0));
-    g.fillStyle = gr;
-    g.fillRect(0, 0, size, size);
-    cache[key] = c; cacheN++;
-    return c;
+    return cached('corona:' + cls.id, function () {
+      var size = CORONA_R * 2;
+      var c = global.document.createElement('canvas');
+      c.width = c.height = size;
+      var g = c.getContext('2d');
+      var gr = g.createRadialGradient(CORONA_R, CORONA_R, CORONA_R * 0.19, CORONA_R, CORONA_R, CORONA_R);
+      gr.addColorStop(0, rgba(cls.core, 0.34));
+      gr.addColorStop(0.42, rgba(cls.corona, 0.13));
+      gr.addColorStop(1, rgba(cls.corona, 0));
+      g.fillStyle = gr;
+      g.fillRect(0, 0, size, size);
+      return c;
+    });
   }
 
   /* Per-class halo, so the light a body throws matches the light it is made
      of. Same SK.makeGlow the rest of the game already uses. */
   function glowSprite(cls, isStar) {
-    var key = 'glow:' + cls.id;
-    var hit = cache[key];
-    if (hit) return hit;
-    if (cacheN >= CACHE_MAX) { cache = {}; cacheN = 0; }
-    var col = isStar ? cls.glow : cls.pal.glow;
-    var c = SK.makeGlow(isStar ? 96 : 64, col.join(','), isStar ? 0.9 : 0.85);
-    cache[key] = c; cacheN++;
-    return c;
+    /* `isStar` is part of the key, not just the payload: a star glow and a
+       planet glow differ in radius and alpha, so two classes that ever shared
+       an id would otherwise hand back each other's halo. No id collides today
+       (planets are words, spectral classes are single letters) - keying on it
+       makes that a fact about the code rather than a coincidence. */
+    return cached('glow:' + (isStar ? 'star:' : 'planet:') + cls.id, function () {
+      var col = isStar ? cls.glow : cls.pal.glow;
+      return SK.makeGlow(isStar ? 96 : 64, col.join(','), isStar ? 0.9 : 0.85);
+    });
   }
 
   function discSprite(n) {
@@ -742,13 +803,9 @@
   }
 
   function meteorGlow() {
-    var key = 'glow:meteor';
-    var hit = cache[key];
-    if (hit) return hit;
-    if (cacheN >= CACHE_MAX) { cache = {}; cacheN = 0; }
-    var c = SK.makeGlow(40, METEOR.danger.join(','), 0.8);
-    cache[key] = c; cacheN++;
-    return c;
+    return cached('glow:meteor', function () {
+      return SK.makeGlow(40, METEOR.danger.join(','), 0.8);
+    });
   }
 
   /* Draws one meteoroid. `R` is the collision radius the sim uses, so the art
@@ -844,8 +901,10 @@
     starClass: starClass,
     hash: hash,
 
-    /* The colour a body uses for its GAMEPLAY signals - halo tint aside, this
-       is the latch ring, the tether and the hook particles.
+    /* The colour a body uses for its PERSISTENT gameplay signals - halo tint
+       aside, this is the latch ring and the tether. NOT the bursts: those are
+       accentCol below. (This comment used to claim the hook particles too,
+       while accentCol claimed them as well - they now have one owner each.)
        Deliberately NOT the art palette for planets: cyan has meant "safe
        anchor" and amber has meant "this one burns out" since the first build,
        and a formation class must not be allowed to overwrite either signal.
@@ -859,8 +918,12 @@
       return [53, 230, 255];
     },
 
-    /* What a body's hook burst is made of - the art accent, so a lava planet
-       throws orange sparks and a blue giant throws blue-white ones. */
+    /* What a body's bursts are made of - the art accent, so a lava planet
+       throws orange sparks and a blue giant throws blue-white ones. Read by
+       game.js `burstCol`, which feeds both the launch ejecta on release and
+       the spray when the tether bites. Unlike signalCol this IS allowed to
+       carry the formation class, because a burst is over in a few hundred
+       milliseconds and never stands in for a persistent gameplay signal. */
     accentCol: function (n) {
       var cls = classOf(n);
       return n && n.kind === 'star' ? cls.accent : cls.pal.accent;
@@ -872,8 +935,21 @@
     drawMeteor: drawMeteor,
     meteorArt: meteorArt,
 
-    /* For the harness: proves the cache is bounded and actually being hit. */
-    cacheStats: function () { return { entries: cacheN, keys: Object.keys(cache) }; }
+    /* Test seam, not called by the game. The eviction path is the one part of
+       this file that live play never exercises - the reachable set is kept
+       deliberately far under the ceiling, which is the whole point - so
+       without a way to lower the ceiling, evictLRU() would ship untested.
+       That is precisely how the previous "eviction" (a full cache flush) went
+       unnoticed. Returns the previous ceiling so a test can put it back. */
+    _setCacheMax: function (n) { var was = CACHE_MAX; CACHE_MAX = n; return was; },
+
+    /* For the harness: proves the cache is bounded and actually being hit.
+       `max` and `evictions` are what test/sprites.mjs gates on - a non-zero
+       eviction count after walking the whole roster means the reachable set
+       has outgrown the ceiling and the game is repainting sprites forever. */
+    cacheStats: function () {
+      return { entries: cacheN, max: CACHE_MAX, evictions: cacheEvictions, keys: Object.keys(cache) };
+    }
   };
 
 }(typeof window !== 'undefined' ? window : this));

@@ -120,13 +120,16 @@
   var TUTOR_AIM    = 52;    // prompt "TAP NOW" once the guide is this close
   var TUTOR_RESET  = 0.25;  // an assisted miss rewinds this fast
 
+  /* Only the entries something actually reads. `star` and `meteor` used to
+     live here and had no call sites left once js/celestial.js took over body
+     and hazard art - a dead colour table is a trap, because the next person
+     to want a meteoroid colour finds one here and edits a constant that
+     paints nothing. METEOR.danger in celestial.js is the live one. */
   var COL = {
     node:   [53, 230, 255],    // planet
-    star:   [255, 224, 140],   // star
     decay:  [255, 176, 58],
     player: [255, 255, 255],
     shard:  [255, 215, 94],
-    meteor: [255, 77, 109],
     danger: [255, 46, 99]
   };
 
@@ -140,6 +143,23 @@
      letting it through into the signals tells the player something true. */
   function bodyCol(n) {
     return SK.Celestial.signalCol(n);
+  }
+
+  /* What a body's BURSTS are made of - the launch ejecta on release and the
+     spray when the tether bites. This is the art accent, not the signal
+     colour: a lava planet throws orange sparks and a blue giant throws
+     blue-white ones, which is what js/celestial.js has documented since the
+     art pass landed and what this call finally makes true. Until now
+     accentCol was exported with zero call sites while the comment beside it
+     described behaviour the game did not have.
+
+     Splitting it from bodyCol is the whole point. The burst is a few hundred
+     milliseconds of debris and is free to say "what this world is made of".
+     The latch ring and the tether are PERSISTENT and must keep saying "safe
+     anchor" (cyan) or "this one burns out" (amber) - those stay on bodyCol,
+     so no formation class can ever repaint a gameplay signal. */
+  function burstCol(n) {
+    return SK.Celestial.accentCol(n);
   }
 
   /* The rift and the flight timer are gone, so 'rift' and 'drift' would now be
@@ -770,7 +790,7 @@
       this.particles.spawn(p.x, p.y,
         p.vx * (0.25 + Math.random() * 0.35) + j * 90,
         p.vy * (0.25 + Math.random() * 0.35) + j * 90,
-        0.25 + Math.random() * 0.25, 2.2, bodyCol(n), 2.4, true);
+        0.25 + Math.random() * 0.25, 2.2, burstCol(n), 2.4, true);
     }
     if (forced) SK.Audio.snap();
   };
@@ -843,7 +863,7 @@
     p.burn = Math.max(p.burn, tight ? 0.55 : 0.35);
     this.shake = Math.min(this.shake + (tight ? 7 : 3.5), 14);
 
-    var col = bodyCol(node);
+    var col = burstCol(node);
     var count = tight ? 20 : 12;
     for (var i = 0; i < count; i++) {
       var a = Math.random() * TAU, s = 70 + Math.random() * (tight ? 260 : 150);
