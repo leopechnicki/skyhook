@@ -19,7 +19,7 @@
     "test:ci": "node test/world.mjs && node test/balance.mjs --ci && node test/smoke.mjs && node test/perf.mjs"
   },
   "devDependencies": {
-    "playwright": "^1.47.0"
+    "playwright": "^1.55.1"
   },
   "keywords": ["game", "arcade", "canvas", "html5", "one-touch", "no-build", "vanilla-js"],
   "repository": { "type": "git", "url": "https://github.com/leopechnicki/skyhook.git" },
