@@ -1,0 +1,73 @@
+build: C:\Users\leops\AppData\Local\Temp\skyhook_base
+constants read from build: MIN_R=60  CAPTURE_R=92  SPEED=468  FLIGHT_MAX=absent
+paired seeding: base 4242 (run i faces the same world in every profile/build)
+
+=== first-timer  (200 runs) ===
+  exposure 65.3 min    deaths 200    reached 240s cap 0 (0.0%)
+  -- survival (right-censored at the 240s cap) --
+    still alive at   30s 18%   60s 2%   120s 0%   240s 0%
+    median run length  16.4s (Kaplan-Meier)
+    hazard  3.062 deaths/min   mean run 20s
+    hazard by phase  0-30s 3.00  30-60s 3.51  60-120s 2.68  120-240s --  deaths/min
+  -- progress rate (pooled over exposure; cap-independent) --
+    5422 score/min    61.6 hooks/min
+  -- median score among runs still alive --
+    30s 3163 (n=36)   60s 7104 (n=5)   120s n=0   240s n=0
+  final score (censored: capped runs are lower bounds)  median 1103  p90 4539  max 12199
+  deaths   edge 60%  fell 21%  meteor 20%   (n=200)
+
+=== casual  (200 runs) ===
+  exposure 115.3 min    deaths 200    reached 240s cap 0 (0.0%)
+  -- survival (right-censored at the 240s cap) --
+    still alive at   30s 42%   60s 17%   120s 2%   240s 0%
+    median run length  26.0s (Kaplan-Meier)
+    hazard  1.735 deaths/min   mean run 35s
+    hazard by phase  0-30s 1.61  30-60s 1.77  60-120s 2.18  120-240s 3.47  deaths/min   [RISING - difficulty ramp is biting]
+  -- progress rate (pooled over exposure; cap-independent) --
+    8621 score/min    63.6 hooks/min
+  -- median score among runs still alive --
+    30s 4061 (n=84)   60s 9247 (n=35)   120s 20633 (n=4)   240s n=0
+  final score (censored: capped runs are lower bounds)  median 3422  p90 12585  max 28969
+  deaths   edge 50%  meteor 35%  fell 16%   (n=200)
+
+=== good  (200 runs) ===
+  exposure 247.4 min    deaths 193    reached 240s cap 7 (3.5%)
+  -- survival (right-censored at the 240s cap) --
+    still alive at   30s 71%   60s 46%   120s 20%   240s 3%
+    median run length  57.8s (Kaplan-Meier)
+    hazard  0.780 deaths/min   mean run 77s
+    hazard by phase  0-30s 0.67  30-60s 0.86  60-120s 0.81  120-240s 0.87  deaths/min
+  -- progress rate (pooled over exposure; cap-independent) --
+    10812 score/min    62.6 hooks/min
+  -- median score among runs still alive --
+    30s 4544 (n=142)   60s 10025 (n=92)   120s 22777 (n=40)   240s 49132 (n=7)
+  final score (censored: capped runs are lower bounds)  median 9401  p90 30769  max 49914
+  deaths   meteor 44%  edge 42%  fell 13%   (n=193)
+
+=== expert  (200 runs) ===
+  exposure 610.0 min    deaths 91    reached 240s cap 109 (54.5%)
+  -- survival (right-censored at the 240s cap) --
+    still alive at   30s 97%   60s 89%   120s 73%   240s 54%
+    median run length  not reached within the cap; exponential fit 279s (hazard is RISING, so this is an over-estimate)
+    hazard  0.149 deaths/min   mean run 402s
+    hazard by phase  0-30s 0.07  30-60s 0.17  60-120s 0.19  120-240s 0.14  deaths/min   [RISING - difficulty ramp is biting]
+  -- progress rate (pooled over exposure; cap-independent) --
+    12102 score/min    64.6 hooks/min
+  -- median score among runs still alive --
+    30s 4671 (n=193)   60s 10252 (n=177)   120s 23009 (n=146)   240s 49138 (n=109)
+  final score (censored: capped runs are lower bounds)  median 46887  p90 51068  max 53097
+  deaths   meteor 100%   (n=91)
+
+--- health checks (endless mode: rates and survival, never censored totals) ---
+  first run length (median): 16.4s  OK
+  skill gradient expert/first-timer score RATE: 2.2x  TOO FLAT
+  survival gradient expert/first-timer median life: 17.0x  OK
+  expert: 12102 score/min, median life 279s
+
+--- measurement validity (endless game: the cap censors, it does not fail) ---
+  first-timer  deaths  200   capped   0.0%   ok
+  casual       deaths  200   capped   0.0%   ok
+  good         deaths  193   capped   3.5%   ok
+  expert       deaths   91   capped  54.5%   ok
+
+  losability: a "casual" player still alive after 2 min: 2.0%  OK

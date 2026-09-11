@@ -4,7 +4,7 @@
 
    Bodies have MASS. A star pulls harder than a planet, so it spins you faster
    and throws you further; a planet is gentle and forgiving but pays less.
-   The run is endless while the ball stays on screen: there is no rift and no
+   The run is endless while the rocket stays on screen: there is no rift and no
    flight timer. You lose by leaving the column or falling out of the bottom. */
 (function (global) {
   'use strict';
@@ -85,6 +85,14 @@
   var TIGHT_D      = 52;    // 0.57 * 92
   var LOOSE_D      = 78;    // 0.85 * 92
 
+  /* Rocket presentation. RENDER-ONLY - nothing in the simulation, the scoring
+     or the collision path reads either of these. PLAYER_R below is unchanged
+     and is still the whole of the player's collision geometry; the hull is
+     merely DRAWN larger than it (see js/rocket.js, HULL_F). */
+  var BURN_FADE    = 0.42;  // seconds for a tap's thruster flare to die down
+  var AIM_HALF     = 0.035; // heading ease half-life, seconds
+  var THRUST_REF   = 900;   // speed that reads as "engine wide open", px/s
+
   var SETTLE_RATE  = 240;   // px/s the tether eases out to its resting length
   var PREDICT_T    = 1.15;  // seconds of flight the release guide looks ahead
   var PLAYER_R     = 8;
@@ -136,7 +144,7 @@
 
   /* The rift and the flight timer are gone, so 'rift' and 'drift' would now be
      lying to the player. There are exactly two ways to lose, and both of them
-     are "the ball left the screen". */
+     are "the rocket left the screen". */
   var CAUSE = {
     fell: 'YOU FELL OUT OF THE SKY',
     meteor: 'A METEOROID TOOK YOU OUT',
@@ -180,10 +188,43 @@
        art classes, so they stay. */
     this.glowPlayer = SK.makeGlow(52, COL.player.join(','), 0.9);
     this.glowShard  = SK.makeGlow(34, COL.shard.join(','), 0.9);
-    /* The title screen's demo body is not a simulated node - it has no mass
-       and no `art`, so it has no formation class to ask for a halo. It keeps
-       the original cyan one. */
-    this.glowTitle  = SK.makeGlow(64, COL.node.join(','), 0.85);
+    /* Scratch vector for the rocket's nozzle position. Reused so the trail
+       emitter allocates nothing during play, matching the particle pool. */
+    this._nz = { x: 0, y: 0 };
+    /* ---- title-screen cast -------------------------------------------
+       The title used to draw a flat cyan ring with a white dot on it: the
+       art of a build that shipped before formation classes, spectral stars
+       and meteoroids existed, advertising a game that is no longer the one
+       behind the tap.
+       These are NOT simulated nodes - they are never pushed into this.nodes,
+       never stepped and never collided. They are plain data shaped like a
+       body so js/celestial.js can paint them with the SAME routines the real
+       world uses, which is what keeps the first screen honest: when the art
+       changes, the title changes with it for free.
+       Fixed `art` values (not this.rand()) so the title is identical on every
+       launch and cannot consume from the seeded chain. */
+    /* art = 0.05 at mass 1.0 resolves to the RINGED formation class - chosen
+       because it is the most obviously procedural body in the roster, so the
+       first screen advertises the art system rather than a plain sphere. The
+       value is a class SELECTOR, not a magic number: js/celestial.js maps
+       (mass, art) -> class, and test/rocket_shots.mjs style seed-search is how
+       any other class would be requested. */
+    this.titleHero = {                 // the body the demo rocket orbits
+      x: 0, y: 0, art: 0.05, mass: 1.0, kind: 'planet', type: 'normal',
+      idx: 0, phase: 0.7, spent: false, hooked: true, pop: 0, decay: 0,
+      radius: bodyRadius(1.0)
+    };
+    this.titleCast = [                 // the legend row: what is out there
+      /* art = 0.40 at mass 0.92 -> the OCEAN class: the icon under the word
+         "PLANET" should look like the thing the word means. */
+      { x: 0, y: 0, art: 0.40, mass: 0.92, kind: 'planet', type: 'normal',
+        idx: 1, phase: 1.9, spent: false, hooked: false, pop: 0, decay: 0,
+        radius: bodyRadius(0.92) },
+      { x: 0, y: 0, art: 0.18, mass: 3.10, kind: 'star', type: 'normal',
+        idx: 2, phase: 0.2, spent: false, hooked: false, pop: 0, decay: 0,
+        radius: bodyRadius(3.10) }
+    ];
+    this.titleRock = { x: 0, y: 0, homeX: 0, amp: 16, phase: 2.1, art: 0.47 };
 
     this.stars = this._makeStars();
     this.nebula = this._makeNebula();
@@ -375,9 +416,22 @@
       speed: 0,
       dir: 1,
       flyT: 0,
-      trailT: 0
+      trailT: 0,
+      /* --- render-only, never read by the simulation ---------------------
+         `aim` is the drawn heading of the rocket, eased towards the true
+         velocity direction on the FIXED step so a hook cannot snap the hull
+         through 180 degrees in one frame. `burn` is the thruster impulse a
+         tap-release lights, decaying on the sim clock.
+         Both are advanced in _step() rather than in the draw call: draw runs
+         a variable number of times per tick, so animating there would make
+         the ship's look depend on frame scheduling - the exact bug node.pop
+         already had. Neither value is read by any physics or scoring path,
+         and neither appears in snapshot(), so the harnesses are untouched. */
+      aim: -Math.PI / 2,
+      burn: 0
     };
     this.player.speed = this._vTan(this.player);
+    this.player.aim = SK.Rocket.heading(this.player);
     first.hooked = true;
 
     this.pendNode = null;
@@ -701,6 +755,9 @@
     p.vy = cs * p.dir * p.speed;
     p.mode = 'fly';
     p.flyT = 0;
+    /* The tap lit the engine. Render-only: this is the one place the player's
+       input becomes visible ON the ship instead of only in the trajectory. */
+    p.burn = 1;
     this.pendNode = null;
     this.lastForced = !!forced;
     this.tutHold = false;
@@ -780,6 +837,10 @@
 
     node.pop = 1;
     this.tetherPulse = 1;
+    /* Render-only: a short retro burn as the tether bites. It is smaller than
+       a release burn on purpose - catching is not a launch, and the two have
+       to stay distinguishable at a glance. */
+    p.burn = Math.max(p.burn, tight ? 0.55 : 0.35);
     this.shake = Math.min(this.shake + (tight ? 7 : 3.5), 14);
 
     var col = bodyCol(node);
@@ -926,7 +987,7 @@
     }
 
     /* ---- the two ways to lose --------------------------------------
-       Both are the same sentence: the ball left the screen. Horizontal was
+       Both are the same sentence: the rocket left the screen. Horizontal was
        already here; vertical is new, and it is what replaces the rift.
        The camera only ever climbs, so the bottom edge is a RATCHET: every
        hook you land permanently raises the floor beneath you. Stand still and
@@ -1013,15 +1074,37 @@
       if (this.labels[i].t > 0) this.labels[i].t = Math.max(0, this.labels[i].t - dt);
     }
 
-    /* motion trail */
+    /* ---- rocket render state (no physics reads this back) --------------
+       Advanced here rather than in the draw call for the same reason node.pop
+       was moved here: draw runs a variable number of times per tick, so a
+       cosmetic value animated there depends on render scheduling. */
+    if (p.burn > 0) p.burn = Math.max(0, p.burn - dt / BURN_FADE);
+    /* Ease the drawn heading onto the true one. Frame-rate independent, and
+       fed the FIXED dt, so the turn takes the same wall time on any device. */
+    p.aim = SK.Rocket.turn(p.aim, SK.Rocket.heading(p),
+      1 - Math.pow(2, -dt / AIM_HALF));
+
+    /* Exhaust trail. It leaves the NOZZLE, not the hull centre, and it is
+       thrown backwards along the heading instead of in a symmetric puff - a
+       cloud centred on the ship read as damage, a directed plume reads as
+       drive. Colour flashes amber for the length of a burn so a release is
+       legible from the trail alone.
+       Math.random() here is deliberate and safe: it is a separate stream from
+       the seeded this.rand() chain that generates the world, particles never
+       feed back into the sim, and the existing trail already used it. */
     p.trailT -= dt;
     if (p.trailT <= 0) {
       p.trailT = 0.018;
-      var spread = p.mode === 'fly' ? 18 : 10;
-      this.particles.spawn(p.x, p.y,
-        (Math.random() * 2 - 1) * spread, (Math.random() * 2 - 1) * spread,
-        p.mode === 'fly' ? 0.26 : 0.18, p.mode === 'fly' ? 2.2 : 1.7,
-        COL.node, 1.6, true);
+      var nz = SK.Rocket.nozzle(p.x, p.y, p.aim, PLAYER_R, this._nz);
+      var back = p.aim + Math.PI;
+      var ex = 46 + p.burn * 150;                        // exhaust speed
+      var spread = (p.mode === 'fly' ? 26 : 16) * (0.5 + p.burn);
+      this.particles.spawn(nz.x, nz.y,
+        Math.cos(back) * ex + (Math.random() * 2 - 1) * spread,
+        Math.sin(back) * ex + (Math.random() * 2 - 1) * spread,
+        (p.mode === 'fly' ? 0.26 : 0.20) + p.burn * 0.14,
+        (p.mode === 'fly' ? 2.2 : 1.8) + p.burn * 1.5,
+        p.burn > 0.35 ? SK.Rocket.FLAME_BURN : COL.node, 1.6, true);
     }
 
     /* camera only ever climbs */
@@ -1345,22 +1428,28 @@
       }
     }
 
-    /* player */
+    /* player - the rocket.
+       It used to be a white dot with a cyan outline. A dot has no front, so
+       the only thing on screen that said which way a tap would fire you was
+       the dashed guide. The hull points along the SAME vector the guide draws
+       and the same one _release() hands the physics, so heading is now
+       readable off the ship itself.
+       All of the art lives in js/rocket.js; PLAYER_R (collision) is unchanged
+       and the hull is simply drawn larger than it. */
     if (this.state === 'playing') {
       /* The ring used to be a charge meter counting down FLIGHT_MAX. There is
          no flight timer any more, so it reports the thing that CAN kill you:
-         how close the ball is to dropping out of the bottom of the view. */
+         how close the rocket is to dropping out of the bottom of the view. */
       var fallGap = (this.camY + H) - p.y;
-      SK.drawGlow(ctx, this.glowPlayer, p.x, p.y, 0.55 + 0.10 * Math.sin(this.time * 7), 0.7);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, PLAYER_R, 0, TAU);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = (fallGap < 150)
-        ? 'rgba(255,90,110,' + (0.5 + 0.5 * Math.sin(this.time * 22)).toFixed(3) + ')'
-        : rgba(COL.node, 0.9);
-      ctx.stroke();
+      SK.drawGlow(ctx, this.glowPlayer, p.x, p.y,
+        0.42 + 0.08 * Math.sin(this.time * 7) + p.burn * 0.22, 0.55 + p.burn * 0.25);
+      SK.Rocket.draw(ctx, p.x, p.y, p.aim, PLAYER_R, this.time, {
+        burn: p.burn,
+        /* Steady plume tracks the speed this body actually gives you, so a
+           star hook visibly runs the engine harder than a planet hook. */
+        thrust: clamp(this._vTan(p) / THRUST_REF, 0, 1),
+        warn: fallGap < 150 ? 1 : 0
+      });
     }
   };
 
@@ -1422,48 +1511,95 @@
     this._drawMute(ctx);
   };
 
+  /* The first screen. It is the game's only advertisement, so everything on
+     it has to be currently true:
+       - the hero is the ROCKET the player actually flies, on a tether, lit,
+         pointing where a tap would fire it;
+       - the body it orbits is painted by js/celestial.js with the same
+         routines the live world uses, so the title inherits every future art
+         change instead of drifting away from the build again;
+       - the legend names the three things that are in the game NOW - planets,
+         stars and meteoroids - because the previous copy predated all three
+         and the meteoroid hazard was advertised nowhere at all;
+       - the controls line names every input that works, not just the touch
+         one, since the game is played on desktop too. */
   Game.prototype._drawTitle = function (ctx) {
-    var cx = W / 2, cy = 366, r = 88;
+    var cx = W / 2, cy = 352, r = 88;
     /* The demo used to orbit at a fixed 1.5 rad/s - a 4.19 s lap, against a
        real opening lap of well under 1.5 s. It was advertising a different,
        much calmer game than the one behind the tap. Drive it with the SAME
        gravity relation the player is about to be handed: a 1.0-mass body. */
     var a = this.titleT * Math.sqrt(G / (r * r * r));
+    var hero = this.titleHero;
+    hero.x = cx; hero.y = cy;
 
     ctx.strokeStyle = 'rgba(53,230,255,0.16)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
 
-    SK.drawGlow(ctx, this.glowTitle, cx, cy, 0.8, 0.6);
-    ctx.beginPath(); ctx.arc(cx, cy, NODE_R, 0, TAU);
-    ctx.fillStyle = 'rgba(53,230,255,0.22)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(53,230,255,0.95)'; ctx.lineWidth = 2.4; ctx.stroke();
+    /* The hero body, painted by the real art module. */
+    var heroPulse = 0.5 + 0.5 * Math.sin(this.titleT * 2.4 + hero.phase);
+    SK.drawGlow(ctx, SK.Celestial.glowFor(hero), cx, cy, 3.0 + heroPulse * 0.2, 0.5);
+    SK.Celestial.drawBody(ctx, hero, hero.radius * 2.1, true, heroPulse, this.titleT);
 
+    /* Tether + rocket. `a + PI/2` is the tangent at angle `a` for a
+       counter-clockwise orbit: the same relation js/rocket.js derives in
+       flight, so the demo ship is banked exactly like the live one. */
     var px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
     ctx.strokeStyle = 'rgba(53,230,255,0.35)';
     ctx.lineWidth = 1.6;
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(px, py); ctx.stroke();
-    SK.drawGlow(ctx, this.glowPlayer, px, py, 0.9, 0.85);
-    ctx.beginPath(); ctx.arc(px, py, PLAYER_R, 0, TAU);
-    ctx.fillStyle = '#fff'; ctx.fill();
+    SK.drawGlow(ctx, this.glowPlayer, px, py, 0.55, 0.7);
+    SK.Rocket.draw(ctx, px, py, a + Math.PI / 2, PLAYER_R * 1.35, this.titleT,
+      { burn: 0.30 + 0.30 * Math.sin(this.titleT * 2.2), thrust: 0.5 });
 
-    txt(ctx, 'SKYHOOK', W / 2, 196, 62, '#ffffff', 'center', 800, 'rgba(53,230,255,0.9)', 30);
-    txt(ctx, 'O R B I T   -   R E L E A S E   -   C L I M B', W / 2, 230, 13, 'rgba(150,210,240,0.75)', 'center', 600);
+    txt(ctx, 'SKYHOOK', W / 2, 182, 62, '#ffffff', 'center', 800, 'rgba(53,230,255,0.9)', 30);
+    txt(ctx, 'O R B I T   -   R E L E A S E   -   C L I M B', W / 2, 216, 13, 'rgba(150,210,240,0.75)', 'center', 600);
 
     /* The old CTA said "TAP / SPACE - to let go of the tether", but the first
        tap does not release anything: it starts the run. Say what the button
-       actually does, then say what the NEXT one does. */
+       actually does, then say what the NEXT one does - and name the keys,
+       which the touch-only copy never did. */
     var blink = 0.65 + 0.35 * Math.sin(this.titleT * 4);
-    txt(ctx, 'TAP TO START', W / 2, 560, 26, 'rgba(255,255,255,' + blink.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.6)', 16);
-    txt(ctx, 'Tap again to release. Hooks connect automatically.', W / 2, 588, 13, 'rgba(150,190,220,0.7)', 'center', 500);
+    txt(ctx, 'TAP TO START', W / 2, 512, 26, 'rgba(255,255,255,' + blink.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.6)', 16);
+    txt(ctx, 'Tap, click or SPACE fires the thruster and lets go.', W / 2, 540, 13, 'rgba(150,190,220,0.72)', 'center', 500);
+    txt(ctx, 'The next hook connects itself.   M mutes.', W / 2, 560, 13, 'rgba(150,190,220,0.55)', 'center', 500);
 
-    txt(ctx, 'BEST', W / 2, 660, 13, 'rgba(150,190,220,0.55)', 'center', 700);
-    txt(ctx, String(this.best), W / 2, 702, 38, 'rgba(255,215,94,0.95)', 'center', 800, 'rgba(255,215,94,0.5)', 18);
+    this._drawLegend(ctx, 638);
 
-    txt(ctx, 'stars pull harder and throw you further than planets', W / 2, 792, 12, 'rgba(140,175,205,0.5)', 'center', 500);
-    txt(ctx, 'stay on screen and the climb never ends', W / 2, 812, 12, 'rgba(140,175,205,0.5)', 'center', 500);
+    txt(ctx, 'BEST', W / 2, 752, 13, 'rgba(150,190,220,0.55)', 'center', 700);
+    txt(ctx, String(this.best), W / 2, 792, 36, 'rgba(255,215,94,0.95)', 'center', 800, 'rgba(255,215,94,0.5)', 18);
+
+    txt(ctx, 'stay on screen and the climb never ends', W / 2, 832, 12, 'rgba(140,175,205,0.5)', 'center', 500);
 
     this._drawMute(ctx);
+  };
+
+  /* Three columns: what you hook, what slings you, what kills you. Drawn with
+     the live art routines - these icons cannot go stale, because they ARE the
+     in-game bodies at a smaller radius. */
+  Game.prototype._drawLegend = function (ctx, y) {
+    var cols = [W * 0.5 - 148, W * 0.5, W * 0.5 + 148];
+    var i, b, pulse;
+
+    for (i = 0; i < 2; i++) {
+      b = this.titleCast[i];
+      b.x = cols[i]; b.y = y;
+      pulse = 0.5 + 0.5 * Math.sin(this.titleT * 2.4 + b.phase);
+      SK.drawGlow(ctx, SK.Celestial.glowFor(b), b.x, b.y, 1.5 + pulse * 0.15, 0.42);
+      SK.Celestial.drawBody(ctx, b, 17, true, pulse, this.titleT);
+    }
+
+    var rock = this.titleRock;
+    rock.x = cols[2]; rock.y = y; rock.homeX = cols[2];
+    SK.Celestial.drawMeteor(ctx, rock, 13, this.titleT);
+
+    txt(ctx, 'PLANET', cols[0], y + 40, 11, 'rgba(53,230,255,0.85)', 'center', 800);
+    txt(ctx, 'gentle, forgiving', cols[0], y + 57, 10, 'rgba(140,175,205,0.6)', 'center', 500);
+    txt(ctx, 'STAR', cols[1], y + 40, 11, 'rgba(255,224,140,0.9)', 'center', 800);
+    txt(ctx, 'pulls harder, slings far', cols[1], y + 57, 10, 'rgba(140,175,205,0.6)', 'center', 500);
+    txt(ctx, 'METEOROID', cols[2], y + 40, 11, 'rgba(255,110,130,0.9)', 'center', 800);
+    txt(ctx, 'one touch and you are out', cols[2], y + 57, 10, 'rgba(140,175,205,0.6)', 'center', 500);
   };
 
   Game.prototype._drawOver = function (ctx) {

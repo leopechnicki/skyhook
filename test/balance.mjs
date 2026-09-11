@@ -115,6 +115,12 @@ function loadGame(root) {
   const artPath = path.join(root, 'js/celestial.js');
   if (fs.existsSync(artPath)) vm.runInContext(fs.readFileSync(artPath, 'utf8'), sandbox);
 
+  /* The rocket module. Not optional in spirit - _step() asks it for the ship's
+     heading every tick - but loaded with the same existsSync guard so an A/B
+     against a pre-rocket build still runs. */
+  const rocketPath = path.join(root, 'js/rocket.js');
+  if (fs.existsSync(rocketPath)) vm.runInContext(fs.readFileSync(rocketPath, 'utf8'), sandbox);
+
   vm.runInContext(gameSrc, sandbox);
 
   /* Read the tuning constants OUT OF the build under test instead of
