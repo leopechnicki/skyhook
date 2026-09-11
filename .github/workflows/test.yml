@@ -1,0 +1,97 @@
+# SKYHOOK test gate.
+#
+# Leo tests the MERGED build now, not the PR - so CI is the only thing standing
+# between a regression and main. Every check here must be able to fail; a green
+# tick that cannot go red is worse than no tick at all, because it is believed.
+#
+# Two jobs, split by cost so a broken world-stream is known in ~40s instead of
+# waiting on a browser download:
+#   logic    pure Node. Golden world stream + the balance gate. No browser.
+#   browser  real Chromium via Playwright. Full game loop + frame-time harness.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same branch makes the older run irrelevant - cancel it.
+# Never cancel main: those runs are the record of what actually landed.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  logic:
+    name: logic (world + balance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The world is generated from one seeded RNG chain, so a single stray
+      # rand() call silently regenerates the entire game. This asserts the
+      # generated stream byte-for-byte against a golden fixture. Sub-second.
+      - name: World stream (physics unchanged)
+        run: node test/world.mjs
+
+      # --ci is what makes this a gate rather than a printout: it exits
+      # non-zero on losability failure only. The long-standing "skill gradient
+      # TOO FLAT" readout is reported as a warning and does NOT fail the build
+      # - it is an open tuning question, not a regression any PR introduced.
+      - name: Balance gate
+        run: node test/balance.mjs --ci
+
+  browser:
+    name: browser (smoke + frame time)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # --with-deps pulls the system libraries headless Chromium needs on a
+      # bare runner. The tests prefer a local Google Chrome and fall back to
+      # this bundled Chromium, which is the path CI takes.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Drives the real game through the real input path: title -> play ->
+      # score -> die -> game over -> restart -> persistence, on desktop, on a
+      # 390x844 phone viewport, and from file:// with no server.
+      - name: Smoke (full game loop)
+        run: node test/smoke.mjs
+
+      # Fails on page errors raised while rendering under 4x CPU throttling.
+      # It reports frame time but deliberately does not gate on it: runner
+      # timing is too noisy to threshold without making the build flaky.
+      - name: Frame time (no errors under load)
+        run: node test/perf.mjs
+
+      # Screenshots are the first thing worth looking at when smoke fails.
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-screenshots
+          path: test/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7

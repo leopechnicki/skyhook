@@ -519,7 +519,8 @@ const casualSurvives2min = out['casual'].survAt[120] !== undefined
   ? out['casual'].survAt[120] : survivalAt(out['casual'].km, 120);
 console.log(`\n  losability: a "casual" player still alive after 2 min: ${(casualSurvives2min * 100).toFixed(1)}%  ` +
   `${casualSurvives2min < 0.5 ? 'OK' : 'FAILURE'}`);
-if (casualSurvives2min >= 0.5 || out['casual'].nDied === 0) {
+const losabilityFailed = casualSurvives2min >= 0.5 || out['casual'].nDied === 0;
+if (losabilityFailed) {
   console.log('  !! LOSABILITY FAILURE: a mediocre player is more likely than not to still be');
   console.log('     alive after two minutes. Endless is not the same as consequence-free.');
 }
@@ -530,3 +531,42 @@ if (out['expert'].nDied > 0 && out['expert'].hazard < 0.01) {
   console.log('  !! CEILING WARNING: expert hazard is near zero - mastery ends the challenge.');
 }
 if (has('json')) console.log('\nJSON ' + JSON.stringify(out));
+
+/* ---------------------------------------------------------------------------
+ * --ci  -  turn this instrument into a gate.
+ *
+ * Without a flag this file is a MEASUREMENT harness: it prints numbers and
+ * always exits 0. That is the right default for a human tuning the game, but
+ * it means CI running `node test/balance.mjs` is theatre - the check is green
+ * even when the readout itself says FAILURE. So --ci selects the small set of
+ * findings that mean "the game is broken" and exits non-zero on those.
+ *
+ * HARD (fails the build): losability. If a mediocre player is more likely than
+ * not to survive two minutes, the game has stopped being losable. That is a
+ * regression in the product, not a matter of taste.
+ *
+ * SOFT (printed, never fails): the skill/survival gradients and the ceiling
+ * warning. The score-rate gradient has sat around 2.1x for a while; it is a
+ * known open tuning question, not a regression, and gating on it would paint
+ * every PR red for a reason no PR caused. Sample-size notes are soft too -
+ * they describe the measurement, not the game.
+ * ------------------------------------------------------------------------- */
+if (has('ci')) {
+  const hard = [];
+  if (losabilityFailed) {
+    hard.push(`losability: casual still alive at 2 min = ${(casualSurvives2min * 100).toFixed(1)}% `
+      + `(must be < 50%), casual deaths = ${out['casual'].nDied}`);
+  }
+  const soft = [];
+  if (gradient < 3) soft.push(`skill gradient ${gradient.toFixed(1)}x is below the 3x target (TOO FLAT)`);
+  if (lifeGradient < 3) soft.push(`survival gradient ${lifeGradient.toFixed(1)}x is below the 3x target (TOO FLAT)`);
+  if (out['expert'].nDied > 0 && out['expert'].hazard < 0.01) soft.push('expert hazard is near zero (CEILING WARNING)');
+
+  console.log('\n--- ci gate ---');
+  for (const w of soft) console.log(`  warn  ${w}`);
+  for (const h of hard) console.log(`  FAIL  ${h}`);
+  if (!hard.length) {
+    console.log(`  balance gate PASS${soft.length ? ` (${soft.length} warning${soft.length > 1 ? 's' : ''}, not gating)` : ''}`);
+  }
+  process.exit(hard.length ? 1 : 0);
+}
