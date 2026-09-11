@@ -80,6 +80,13 @@ jobs:
       - name: Smoke (full game loop)
         run: node test/smoke.mjs
 
+      # The art pass only pays for itself while the whole reachable sprite set
+      # fits under CACHE_MAX; one class past it and the game silently goes
+      # back to repainting every sprite every frame. This asserts the real
+      # reachable count against the ceiling, and that eviction is LRU.
+      - name: Sprite cache ceiling
+        run: node test/sprites.mjs
+
       # Fails on page errors raised while rendering under 4x CPU throttling.
       # It reports frame time but deliberately does not gate on it: runner
       # timing is too noisy to threshold without making the build flaky.
