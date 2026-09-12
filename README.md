@@ -106,21 +106,54 @@ banner appears with zero layout shift (CLS). It is the only place an ad unit sho
 ever be inserted -- no publisher IDs, no external scripts, and nothing tracking-related
 exists anywhere else in the codebase.
 
+## Global leaderboard (optional, off by default)
+
+The game ships with accounts **off**, and that is the supported default, not an
+unfinished state. With `js/config.js` empty, SKYHOOK makes no network request of
+any kind, draws no account UI, and keeps high scores in localStorage exactly as it
+always has -- including from a double-clicked `index.html` with no server and no
+internet. Playing never requires an account.
+
+Fill in a free Supabase project URL and anon key and a LEADERBOARD button appears,
+players can sign in with Google or email/password, and finished runs are ranked
+globally. Signing up asks for a username, an email and a password -- nothing else.
+
+Setup is five steps: **[docs/LEADERBOARD_SETUP.md](docs/LEADERBOARD_SETUP.md)**.
+
+All the security lives in `supabase/schema.sql`, because the anon key is public by
+design and the client is therefore entirely attacker-controlled. Row Level Security
+is on for every table; a player may insert only rows carrying their own `auth.uid()`
+and may never update or delete a score, not even their own; the public board is a
+view exposing username, score and run stats only, and no email address is reachable
+from the game at all. Impossible scores and submission flooding are rejected by
+CHECK constraints and a BEFORE INSERT trigger -- under every write path, not in an
+RPC that could be stepped around.
+
+If the backend is unreachable or paused, the game does not throw, does not show a
+broken login box, still records the local high score, and holds the run for upload
+later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
+
 ## Architecture
 
 | File | Lines | Purpose |
 |---|---|---|
-| `index.html` | 71 | Shell: canvas, ad slot, script loading |
-| `css/style.css` | 112 | Layout only (all game visuals are canvas-drawn) |
+| `index.html` | 138 | Shell: canvas, ad slot, script loading |
+| `css/style.css` | 366 | Layout only (all game visuals are canvas-drawn) |
 | `js/utils.js` | 145 | Math helpers, PRNG, localStorage wrapper, particle system, glow sprites |
 | `js/audio.js` | 159 | Fully synthesized audio via Web Audio API (no sample files) |
 | `js/celestial.js` | 879 | Body ART only: planet formation classes, spectral star colours, meteoroid rocks. Sprite-cached, zero physics |
 | `js/rocket.js` | 396 | Player ART only: hull sprite, heading, thruster plume. Sprite-cached, zero physics |
-| `js/game.js` | ~1770 | Core game: celestial bodies, gravity, orbiting, flying, latching, meteoroids, shards, rendering |
-| `js/main.js` | 176 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
-| `test/smoke.mjs` | 372 | Playwright end-to-end smoke test (25 checks) |
+| `js/game.js` | ~1910 | Core game: celestial bodies, gravity, orbiting, flying, latching, meteoroids, shards, rendering |
+| `js/main.js` | 187 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
+| `js/config.js` | 29 | Supabase URL + anon key. **Empty in the repo** -- empty means offline, and offline is the default |
+| `js/online.js` | 723 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
+| `js/ui_online.js` | 388 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
+| `supabase/schema.sql` | 313 | Tables, RLS policies, plausibility CHECKs, rate-limit trigger, public board view |
+| `test/smoke.mjs` | 372 | Playwright end-to-end smoke test |
 | `test/balance.mjs` | 532 | Headless difficulty/balance harness (no browser) |
 | `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |
+| `test/online.mjs` | 622 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
+| `test/leaderboard_ui.mjs` | 531 | The account layer in a real browser against a mock Supabase -- plus the config-less build and a dead backend |
 
 Runtime dependencies: none. The only dev dependency is Playwright, and only for the smoke test.
 
@@ -136,6 +169,9 @@ npm run test:balance   # node test/balance.mjs        - difficulty sweep
 npm run test:world     # node test/world.mjs          - golden world stream (fast, pass/fail)
 npm run test:art       # node test/art_shots.mjs      - planet/star/meteoroid contact sheets
 npm run test:rocket    # node test/rocket_shots.mjs   - rocket orientation + thruster + frame time
+npm run test:online    # node test/online.mjs        - accounts/wire protocol, no browser (fast)
+npm run test:leaderboard # node test/leaderboard_ui.mjs - account overlay in a real browser
+npm run test:ci        # everything CI runs, in CI's order
 npm run shots          # node test/shipping_shots.mjs - regenerate README + og:image shots
 ```
 
