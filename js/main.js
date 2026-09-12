@@ -112,6 +112,17 @@
 
   global.addEventListener('keydown', function (e) {
     if (e.repeat) return;
+
+    /* SPACE is "fire the thruster" AND the key that types a space into a
+       password field. Before accounts existed there was no field to type
+       into; now there is, and an unguarded listener would start a run under
+       the player mid-password - or worse, swallow the space so the password
+       they typed is not the one they think they typed. Two guards: any open
+       overlay owns the keyboard, and so does any focused form control. */
+    if (SK.UI && SK.UI.isOpen && SK.UI.isOpen()) return;
+    var tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
+
     var k = e.code || e.key;
     if (k === 'Space' || k === 'Enter' || k === 'ArrowUp' || k === 'KeyW' || k === ' ') {
       e.preventDefault();

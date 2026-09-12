@@ -275,6 +275,26 @@
     this.muteHit   = { x: W - 66, y: 6,  w: 60, h: 60 };          // 48.7 CSS px @390w
     this.retryRect = { x: W / 2 - 130, y: 640, w: 260, h: 64 };   // 211x52 CSS px
 
+    /* ---- online (accounts + global leaderboard) -----------------------
+       The game does not know what Supabase is and never will. It owns two
+       things: a flag saying whether an account layer exists at all, and two
+       hit rects that ask for it. js/ui_online.js sets `online` and installs
+       `onUi`; with no js/config.js filled in, `ready` stays false, the two
+       buttons are never drawn, nothing is hit-testable, and every screen is
+       pixel-identical to the build that shipped before this feature.
+       That is the contract: playing NEVER requires an account, and a dead
+       backend costs nobody a run. */
+    this.online = {
+      ready: false,       // is there a configured backend at all?
+      signedIn: false,
+      username: '',
+      rank: 0,            // global rank of the run just finished, 0 = unknown
+      status: ''          // one short line for the game-over screen
+    };
+    this.onUi = null;     // function (event, payload, game) - installed by the UI layer
+    this.boardRect     = { x: W / 2 - 116, y: 794, w: 232, h: 44 }; // title screen
+    this.boardRectOver = { x: W / 2 - 110, y: 720, w: 220, h: 46 }; // game over
+
     this.tutorialDone = SK.Store.get('skyhook.tutorialComplete', '0') === '1';
     this.tutorial = false;
     this.tutStep = 0;
@@ -695,6 +715,28 @@
       this.newBest = true;
       SK.Store.set('skyhook.best', this.best);
     }
+
+    /* The local best above is the score that always counts. This is the
+       OPTIONAL second copy: handed to the UI layer, which may submit it, may
+       park it for later, or - with no backend configured - may not exist at
+       all. Duration comes off the SIM clock, not the wall clock, so a run is
+       measured in the same units the server validates it in.
+       Emitted last, so nothing an outside listener does can interfere with
+       the death sequence itself. */
+    this._ui('runEnded', {
+      score: this.score,
+      hooks: this.hooks,
+      altitude: this.altitude,
+      durationMs: Math.round(this.time * 1000)
+    });
+  };
+
+  /* The one door out of the game loop. Wrapped so a throwing listener can
+     never take the game down with it: a leaderboard that errors is a
+     leaderboard that errors, not a lost run. */
+  Game.prototype._ui = function (event, payload) {
+    if (typeof this.onUi !== 'function') return;
+    try { this.onUi(event, payload, this); } catch (e) { /* never fatal */ }
   };
 
   Game.prototype.action = function () {
@@ -744,6 +786,21 @@
     var onCanvas = lx >= 0 && lx <= W && ly >= 0 && ly <= H;
 
     if (onCanvas && inRect(this.muteHit, lx, ly)) { this.toggleMute(); return; }
+
+    /* The leaderboard buttons exist only when a backend does. Hit-tested
+       before the generic tap-anywhere action, so opening the board can never
+       double as "start a run" - and, when online.ready is false, these two
+       branches are dead code that cannot swallow a tap. */
+    if (this.online.ready && onCanvas) {
+      if (this.state === 'title' && inRect(this.boardRect, lx, ly)) {
+        this._ui('openBoard', null);
+        return;
+      }
+      if (this.state === 'over' && this.overT > RETRY_LOCK && inRect(this.boardRectOver, lx, ly)) {
+        this._ui('openBoard', null);
+        return;
+      }
+    }
 
     if (this.state === 'over' && this.overT > RETRY_LOCK) {
       if (onCanvas && inRect(this.retryRect, lx, ly)) { this.start(); return; }
@@ -1503,6 +1560,27 @@
     ctx.globalAlpha = 1;
   };
 
+  /* A quiet, hit-tested secondary button: same neon-outline language as Retry
+     but never pulsing, because it must not compete with the primary action on
+     either screen. Retry is deliberately NOT refactored onto this - it is
+     proven code on the hottest screen in the game, and a shared helper would
+     put a new bug one edit away from it. */
+  Game.prototype._drawPanelButton = function (ctx, r, label, alpha) {
+    var a = clamp(alpha === undefined ? 1 : alpha, 0, 1);
+    ctx.save();
+    ctx.fillStyle = 'rgba(53,230,255,' + (0.07 * a).toFixed(3) + ')';
+    ctx.strokeStyle = 'rgba(53,230,255,' + (0.38 * a).toFixed(3) + ')';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, 10);
+    else ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    txt(ctx, label, r.x + r.w / 2, r.y + r.h / 2 + 6, 16,
+      'rgba(200,235,255,' + (0.92 * a).toFixed(2) + ')', 'center', 700);
+  };
+
   Game.prototype._drawHud = function (ctx) {
     /* Scrim: guarantees the score stays legible when a bright node scrolls
        up behind it. */
@@ -1587,10 +1665,28 @@
 
     this._drawLegend(ctx, 638);
 
-    txt(ctx, 'BEST', W / 2, 752, 13, 'rgba(150,190,220,0.55)', 'center', 700);
-    txt(ctx, String(this.best), W / 2, 792, 36, 'rgba(255,215,94,0.95)', 'center', 800, 'rgba(255,215,94,0.5)', 18);
+    /* Two layouts for the bottom band. Without a backend it is exactly the
+       one that shipped before accounts existed - same y values, same copy,
+       byte-for-byte the same screen. With a backend the BEST block moves up
+       14 px to make room for the leaderboard button and the account line,
+       which replaces the tagline: who you are signed in as is information the
+       player can act on, and "stay on screen" is a restatement of the rule the
+       legend above already teaches. */
+    if (this.online.ready) {
+      txt(ctx, 'BEST', W / 2, 738, 13, 'rgba(150,190,220,0.55)', 'center', 700);
+      txt(ctx, String(this.best), W / 2, 776, 34, 'rgba(255,215,94,0.95)', 'center', 800, 'rgba(255,215,94,0.5)', 18);
+      this._drawPanelButton(ctx, this.boardRect, 'LEADERBOARD', 1);
+      txt(ctx,
+        this.online.signedIn
+          ? ('signed in as ' + this.online.username)
+          : 'sign in to save your score globally',
+        W / 2, 862, 11, 'rgba(140,175,205,0.55)', 'center', 500);
+    } else {
+      txt(ctx, 'BEST', W / 2, 752, 13, 'rgba(150,190,220,0.55)', 'center', 700);
+      txt(ctx, String(this.best), W / 2, 792, 36, 'rgba(255,215,94,0.95)', 'center', 800, 'rgba(255,215,94,0.5)', 18);
 
-    txt(ctx, 'stay on screen and the climb never ends', W / 2, 832, 12, 'rgba(140,175,205,0.5)', 'center', 500);
+      txt(ctx, 'stay on screen and the climb never ends', W / 2, 832, 12, 'rgba(140,175,205,0.5)', 'center', 500);
+    }
 
     this._drawMute(ctx);
   };
@@ -1670,6 +1766,18 @@
       ctx.restore();
       txt(ctx, 'TAP TO RETRY', W / 2, rr.y + 41, 24,
         'rgba(255,255,255,' + pulse.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.6)', 16);
+
+      if (this.online.ready) this._drawPanelButton(ctx, this.boardRectOver, 'LEADERBOARD', t);
+    }
+
+    /* One line about where this run landed globally. Drawn in the gap between
+       the BEST block and Retry, and only when there is a backend to be
+       ranked by. The text is written by js/ui_online.js - the game does not
+       know whether it is a rank, a "saving...", or a reason it could not be
+       saved, and does not need to. */
+    if (this.online.ready && this.online.status) {
+      txt(ctx, this.online.status, W / 2, 596, 14,
+        'rgba(150,210,240,' + (0.8 * t).toFixed(2) + ')', 'center', 600);
     }
   };
 
@@ -1781,7 +1889,14 @@
       angRate: p.node ? this.angRate(p) : 0,
       fallGap: (this.camY + H) - p.y,
       cause: this.cause,
-      persistent: SK.Store.persistent
+      persistent: SK.Store.persistent,
+      online: {
+        ready: this.online.ready,
+        signedIn: this.online.signedIn,
+        username: this.online.username,
+        rank: this.online.rank,
+        status: this.online.status
+      }
     };
   };
 
