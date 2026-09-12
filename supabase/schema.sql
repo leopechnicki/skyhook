@@ -208,6 +208,19 @@ alter table public.scores   enable row level security;
 -- A signed-in user may create their own row - which normally the trigger above
 -- already did - and may never touch anyone else's. No UPDATE policy and no
 -- DELETE policy exist, so those operations are denied to everyone.
+--
+-- READ THIS BEFORE SOMEBODY ASKS YOU TO RENAME THEM. The missing UPDATE policy
+-- makes a username PERMANENT - for the player, and for you from the dashboard
+-- unless you reach for the secret admin key that bypasses RLS entirely. That
+-- is deliberate: a rename is how you impersonate the person above you, on a
+-- board whose score history is append-only precisely so it cannot be
+-- rewritten. It also means a Google account is stuck with whatever
+-- handle_new_user() derived for it, since Google sends no username and the
+-- player was never asked. The signup form says so before the button is
+-- pressed (index.html), and docs/LEADERBOARD_SETUP.md says so to whoever runs
+-- the project. If you ever decide renames should be possible, adding an
+-- UPDATE policy here is not enough on its own - decide first what stops a
+-- rename racing the board.
 drop policy if exists profiles_public_read on public.profiles;
 create policy profiles_public_read
   on public.profiles for select

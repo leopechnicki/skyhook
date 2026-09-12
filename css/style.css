@@ -180,6 +180,14 @@ body {
 }
 .ol-close:hover { color: #fff; background: rgba(53, 230, 255, 0.10); }
 
+.ol-hint {
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(150, 190, 220, 0.6);
+}
+
 .ol-account {
   margin: 0 0 12px;
   font-size: 12px;

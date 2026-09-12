@@ -406,6 +406,22 @@ const TOKEN_OK = {
   const refused = await s2.Online.submitRun({ score: 2600, hooks: 30, altitude: 1200, durationMs: 55000 });
   check('a server-refused run is reported, not queued for replay',
     refused.submitted === false && refused.queued === false && !s2.Online.pendingRun());
+
+  /* The two refusals must be distinguishable, because the UI says different
+     things about them. A run the SERVER turned away is worth telling somebody
+     about. A run THIS CLIENT would not send - a sub-second death - was never
+     at risk of being lost, and calling that "score not saved" invents a
+     failure and cheapens the message for the day it is real. */
+  check('a server refusal is not flagged as a local one', refused.local !== true);
+
+  const s3 = makeSandbox();
+  s3.Online.configure(CONFIG);
+  const tooShort = await s3.Online.submitRun({ score: 0, hooks: 0, altitude: 0, durationMs: 200 });
+  check('a run the client itself refuses is flagged local',
+    tooShort.submitted === false && tooShort.queued === false && tooShort.local === true,
+    JSON.stringify(tooShort));
+  check('...and it is not parked in the queue either', !s3.Online.pendingRun());
+  check('...and it never touched the network', s3.calls.length === 0);
 }
 
 /* ==========================================================================

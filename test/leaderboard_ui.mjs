@@ -11,11 +11,15 @@
  * real JSON parsing - no route interception, no CORS theatre, no stub that can
  * drift away from what a browser would actually do.
  *
- * Two pages are tested and the second matters as much as the first:
- *   /online/  config present  -> the whole feature
+ * Three pages are tested, and the two that are not the happy path matter more
+ * than the one that is:
  *   /         config empty    -> the shipped default. No overlay, no button,
  *                                no request that leaves the page, and a tap
  *                                where the button WOULD be still starts a run.
+ *   /online/  config present  -> the whole feature.
+ *   /dead/    config pointing at a port nothing is listening on -> the game
+ *                                still starts, still records a local high
+ *                                score, and never throws.
  *
  * Run:  node test/leaderboard_ui.mjs   (Playwright required, like smoke.mjs)
  */
@@ -304,6 +308,11 @@ async function main() {
       `inputs=${await page.locator('#ol-form input').count()}`);
     check('create-account tells the browser it is a NEW password (password managers)',
       (await page.locator('#ol-password').getAttribute('autocomplete')) === 'new-password');
+    /* There is no UPDATE policy on profiles, so this name is permanent for
+       everyone including Leo. Saying so after the fact is not saying so. */
+    check('create-account warns that the username is permanent BEFORE it is chosen',
+      /cannot be changed/i.test(await page.locator('#ol-username-field').textContent()),
+      (await page.locator('#ol-username-field').textContent()).trim());
 
     await page.locator('#ol-toggle').click();
     check('toggling back returns to sign-in',
@@ -388,6 +397,23 @@ async function main() {
       await page.evaluate('window.__SKYHOOK.game.online.status'));
     check('the game-over screen can still be retried (Retry was not displaced)',
       (await page.evaluate('window.__SKYHOOK.game.retryRect.y')) === 640);
+
+    /* A run the client itself refuses to send - a death inside half a second,
+       which a meteoroid on the opening screen can genuinely produce - lost
+       nothing. Telling that player "score not saved" invents a failure they
+       did not suffer, and trains them to ignore the line on the day it is
+       true. It must say nothing at all. */
+    api.length = 0;
+    await page.evaluate(`(() => {
+      const g = window.__SKYHOOK.game;
+      g.start(99); g.time = 0.2; g.score = 0; g.hooks = 0; g.altitude = 0; g.die('fell');
+    })()`);
+    await wait(500);
+    check('a run too short to be real says nothing, not "score not saved"',
+      (await page.evaluate('window.__SKYHOOK.game.online.status')) === '',
+      JSON.stringify(await page.evaluate('window.__SKYHOOK.game.online.status')));
+    check('...and it was never sent',
+      !api.some(c => c.url.startsWith('/rest/v1/scores')), api.map(c => c.url).join(' | '));
 
     /* The board button on the game-over screen. It is hit-testable only once
        the results screen has settled past RETRY_LOCK, which is the same guard

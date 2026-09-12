@@ -285,16 +285,26 @@
     if (!s.signedIn) {
       /* Park it. When they sign in, flushPending sends the best one, so
          choosing to make an account later never costs them the run that made
-         them want one. */
-      Online.submitRun(run);
-      setStatus('sign in to put this run on the board');
+         them want one. Nothing is said about a run that was not even worth
+         parking - see the note below. */
+      Online.submitRun(run).then(function (res) {
+        setStatus(res.queued ? 'sign in to put this run on the board' : '');
+      });
       return;
     }
 
     setStatus('saving score...');
     Online.submitRun(run).then(function (res) {
       if (!res.submitted) {
-        setStatus(res.queued ? 'saved here - will upload later' : 'score not saved');
+        /* Three outcomes, and they must not share a sentence. Queued is a
+           promise to try again. A SERVER refusal is worth telling somebody
+           about. A refusal this client made itself - a run under half a
+           second, a run with no score - lost nothing, so saying "score not
+           saved" invents a failure and cheapens the message for the day it
+           is real. Say nothing. */
+        if (res.queued) setStatus('saved here - will upload later');
+        else if (res.local) setStatus('');
+        else setStatus('score not saved');
         return null;
       }
       return Online.myRank().then(function (mine) {

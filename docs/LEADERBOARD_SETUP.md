@@ -124,6 +124,21 @@ the hook count and the hook count against the clock, and allows no more than ten
 submissions a minute per account. Scores can only ever be added, never edited or
 deleted, by anyone using the public key.
 
+## Usernames are permanent
+
+A username cannot be changed - not by the player, and not by you from the
+dashboard without using the `service_role` key. That is on purpose: renaming is
+how somebody impersonates the player above them, on a board whose score history
+is append-only exactly so it cannot be rewritten. The signup form says so before
+anybody presses the button.
+
+It has one consequence worth knowing before the first person asks you: Google
+does not send a username, so an account created with "Continue with Google" gets
+one derived from the Google display name or the front half of the address, and
+the player never chose it. They can see it on the board immediately. If somebody
+truly needs a different name, the honest answer is to create a new account with
+email and password - their old scores stay under the old name.
+
 ## What players can see about each other
 
 Only what is on the board: username, score, hooks, altitude, date. Email

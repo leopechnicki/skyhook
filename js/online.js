@@ -617,8 +617,12 @@
        failure mode for a leaderboard. */
     submitRun: function (run) {
       var bad = validateRun(run);
-      if (bad) return Promise.resolve({ submitted: false, queued: false, reason: bad });
-      if (!cfg) return Promise.resolve({ submitted: false, queued: false, reason: 'offline' });
+      /* `local` separates "this client refused to send it" from "the server
+         turned it away". They are the same outcome to this module and very
+         different things to say to a player: a sub-second death was never at
+         risk of being lost, so reporting it as a failure invents one. */
+      if (bad) return Promise.resolve({ submitted: false, queued: false, local: true, reason: bad });
+      if (!cfg) return Promise.resolve({ submitted: false, queued: false, local: true, reason: 'offline' });
       if (!session) {
         queuePending(run);
         return Promise.resolve({ submitted: false, queued: true, reason: 'not signed in' });

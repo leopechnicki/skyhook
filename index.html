@@ -96,6 +96,11 @@
             <label for="ol-username">Username</label>
             <input type="text" id="ol-username" name="username" autocomplete="username"
                    maxlength="16" spellcheck="false" placeholder="3-16 letters, numbers or _">
+            <!-- Not decoration. There is no UPDATE policy on profiles, by
+                 design, so this name is permanent for everyone including
+                 Leo. Somebody typing it deserves to know that before they
+                 press the button, not after. -->
+            <small class="ol-hint">This is how you appear on the board, and it cannot be changed later.</small>
           </div>
           <div class="ol-field">
             <label for="ol-email">Email</label>
