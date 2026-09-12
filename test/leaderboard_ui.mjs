@@ -1,0 +1,531 @@
+/* SKYHOOK leaderboard UI gate  -  the account layer in a real browser.
+ *
+ * test/online.mjs proves the wire protocol with a stubbed fetch. This proves
+ * the part a player touches: that the button exists only when it should, that
+ * the panel opens, that typing a password does not fire the thruster, and that
+ * finishing a run actually puts a row on the board.
+ *
+ * The mock Supabase is served by THIS test's own http server, on the same
+ * origin as the page, and js/config.js is swapped for one pointing at it. So
+ * every request below goes through the browser's real fetch, real headers and
+ * real JSON parsing - no route interception, no CORS theatre, no stub that can
+ * drift away from what a browser would actually do.
+ *
+ * Two pages are tested and the second matters as much as the first:
+ *   /online/  config present  -> the whole feature
+ *   /         config empty    -> the shipped default. No overlay, no button,
+ *                                no request that leaves the page, and a tap
+ *                                where the button WOULD be still starts a run.
+ *
+ * Run:  node test/leaderboard_ui.mjs   (Playwright required, like smoke.mjs)
+ */
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(HERE, '..');
+const HEADED = process.argv.includes('--headed');
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml'
+};
+
+const results = [];
+function check(name, ok, detail = '') {
+  results.push({ name, ok: !!ok, detail });
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -> ' + detail : ''}`);
+}
+
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+/* --------------------------------------------------------------------------
+ * The mock project. Same shapes GoTrue and PostgREST really answer with.
+ * ------------------------------------------------------------------------ */
+const SESSION = {
+  access_token: 'jwt-access-1',
+  refresh_token: 'refresh-1',
+  expires_in: 3600,
+  token_type: 'bearer',
+  user: { id: 'user-uuid-1', email: 'leo@example.com' }
+};
+
+const BOARD = [
+  { rank: 1, username: 'klaudia', score: 9100, hooks: 74, altitude: 3900, created_at: '2026-09-10T10:00:00Z' },
+  { rank: 2, username: 'leo', score: 1840, hooks: 22, altitude: 913, created_at: '2026-09-13T10:00:00Z' },
+  { rank: 3, username: 'lucas', score: 620, hooks: 9, altitude: 210, created_at: '2026-09-11T10:00:00Z' }
+];
+
+const api = [];   // every call the page made to the mock project
+
+function handleApi(req, res, body) {
+  const url = req.url.replace(/^\/api/, '');
+  let parsed = null;
+  try { parsed = body ? JSON.parse(body) : null; } catch { parsed = body; }
+  api.push({ method: req.method, url, body: parsed, headers: req.headers });
+
+  const json = (status, payload) => {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(payload === null ? '' : JSON.stringify(payload));
+  };
+
+  if (url.startsWith('/auth/v1/signup')) return json(200, SESSION);
+  if (url.startsWith('/auth/v1/token')) return json(200, SESSION);
+  if (url.startsWith('/auth/v1/logout')) { res.writeHead(204).end(); return; }
+  if (url.startsWith('/auth/v1/user')) return json(200, SESSION.user);
+  if (url.startsWith('/rest/v1/profiles')) return json(200, [{ username: 'leo' }]);
+  if (url.startsWith('/rest/v1/leaderboard')) return json(200, BOARD);
+  if (url.startsWith('/rest/v1/rpc/my_rank')) return json(200, [{ rank: 2, score: 1840, username: 'leo' }]);
+  if (url.startsWith('/rest/v1/scores')) { res.writeHead(201, { 'Content-Type': 'application/json' }).end('{}'); return; }
+  return json(404, { message: 'no such endpoint: ' + url });
+}
+
+/* A port with nothing behind it, so "the backend is down" is a real refused
+   connection rather than a stubbed rejection. Bound then immediately released:
+   the OS hands out ephemeral ports in sequence, so the one we just gave back
+   is the one least likely to be taken by something else mid-run. */
+async function closedPort() {
+  const probe = http.createServer();
+  await new Promise(r => probe.listen(0, '127.0.0.1', r));
+  const port = probe.address().port;
+  await new Promise(r => probe.close(r));
+  return port;
+}
+
+function startServer(deadPort) {
+  const server = http.createServer((req, res) => {
+    const clean = decodeURIComponent(req.url.split('?')[0]);
+
+    if (clean.startsWith('/api/')) {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => handleApi(req, res, body));
+      return;
+    }
+
+    /* Three sites off one server, same files, three configs:
+         /         no config      - the repo exactly as it ships
+         /online/  live config    - the whole feature
+         /dead/    config that points at a port nothing is listening on */
+    const configured = clean.startsWith('/online');
+    const dead = clean.startsWith('/dead');
+    let rel = clean;
+    if (configured) rel = clean.replace(/^\/online\/?/, '/');
+    else if (dead) rel = clean.replace(/^\/dead\/?/, '/');
+    if (rel === '/' || rel === '') rel = '/index.html';
+
+    if ((configured || dead) && rel === '/js/config.js') {
+      const apiPort = dead ? deadPort : server.address().port;
+      res.writeHead(200, { 'Content-Type': MIME['.js'] });
+      res.end(
+        'window.SKYHOOK_CONFIG = {\n' +
+        `  supabaseUrl: 'http://127.0.0.1:${apiPort}/api',\n` +
+        "  supabaseAnonKey: 'anon-test-key',\n" +
+        '  boardLimit: 50\n' +
+        '};\n'
+      );
+      return;
+    }
+
+    const file = path.join(ROOT, rel);
+    if (!file.startsWith(ROOT)) { res.writeHead(403).end(); return; }
+    fs.readFile(file, (err, buf) => {
+      if (err) { res.writeHead(404).end('not found'); return; }
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+      res.end(buf);
+    });
+  });
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+/* The canvas is letterboxed inside #stage, so a logical (480x880) coordinate
+   has to be mapped through the element's real box to be clickable. */
+async function tapLogical(page, lx, ly) {
+  const box = await page.locator('#game').boundingBox();
+  await page.mouse.click(box.x + (lx / 480) * box.width, box.y + (ly / 880) * box.height);
+}
+
+function attachLogs(page, bucket, label, opts = {}) {
+  /* Chrome reports a 204 No Content answer to fetch() as a FAILED request
+     (net::ERR_ABORTED) even though the response arrived and the promise
+     resolves: there is simply no body to hand to the loader. GoTrue really
+     does answer /auth/v1/logout with 204, so without this the sign-out path
+     is permanently, wrongly red. Only that exact combination is forgiven -
+     a 204 that we saw a response for. Everything else still fails the gate. */
+  const noContent = new Set();
+  const key = r => `${r.method()} ${r.url()}`;
+  page.on('response', r => { if (r.status() === 204) noContent.add(key(r.request())); });
+
+  /* Section C deliberately points the page at a port nothing is listening on,
+     so connection failures to that origin are the thing under test, not a
+     defect. Nothing else may be ignored. */
+  const expected = opts.expectFailuresFrom || null;
+
+  page.on('console', m => {
+    if (m.type() !== 'error') return;
+    /* Chrome's "Failed to load resource" line carries the URL in location(),
+       not in text(), so both have to be checked to recognise the failures
+       section C is deliberately causing. */
+    if (expected && (m.text().includes(expected) || (m.location()?.url || '').startsWith(expected))) return;
+    bucket.push(`[${label}] console: ${m.text()} @ ${m.location()?.url || '?'}`);
+  });
+  page.on('pageerror', e => bucket.push(`[${label}] pageerror: ${e.message}`));
+  page.on('requestfailed', r => {
+    const u = r.url();
+    if (u.startsWith('data:')) return;
+    if (expected && u.startsWith(expected)) return;
+    if (noContent.has(key(r))) return;
+    bucket.push(`[${label}] requestfailed: ${u} ${r.failure()?.errorText}`);
+  });
+}
+
+async function main() {
+  const deadPort = await closedPort();
+  const server = await startServer(deadPort);
+  const port = server.address().port;
+  const base = `http://127.0.0.1:${port}/`;
+  const deadOrigin = `http://127.0.0.1:${deadPort}`;
+  const errors = [];
+
+  const launchOpts = { headless: !HEADED, args: ['--mute-audio', '--autoplay-policy=no-user-gesture-required'] };
+  let browser;
+  try { browser = await chromium.launch({ channel: 'chrome', ...launchOpts }); }
+  catch { browser = await chromium.launch(launchOpts); }
+
+  try {
+    /* ==================================================================
+     * A. The shipped default: no config, therefore no account layer.
+     * ================================================================ */
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const page = await ctx.newPage();
+      attachLogs(page, errors, 'default');
+
+      const external = [];
+      page.on('request', r => {
+        const u = r.url();
+        if (!u.startsWith(base) && !u.startsWith('data:')) external.push(u);
+      });
+
+      await page.goto(base, { waitUntil: 'load' });
+      await page.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(300);
+
+      const snap = await page.evaluate('window.__SKYHOOK.snapshot()');
+      check('default build: the game does not believe it has a backend',
+        snap.online && snap.online.ready === false, JSON.stringify(snap.online));
+      check('default build: the overlay is not visible',
+        (await page.locator('#ol').isVisible()) === false);
+      check('default build: no account UI was drawn on the title screen',
+        snap.online.signedIn === false && snap.online.username === '');
+
+      /* The button's hit rect must be genuinely dead, not merely invisible.
+         A tap at its exact centre has to fall through to "start the run". */
+      await tapLogical(page, 240, 816);
+      await wait(200);
+      const after = await page.evaluate('window.__SKYHOOK.game.state');
+      check('default build: a tap where the button WOULD be still starts the game',
+        after === 'playing', `state=${after}`);
+
+      check('default build: not one request left the page', external.length === 0,
+        external.slice(0, 4).join(' | '));
+      await ctx.close();
+    }
+
+    /* ==================================================================
+     * B. Configured: the whole feature.
+     * ================================================================ */
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    attachLogs(page, errors, 'online');
+
+    await page.goto(base + 'online/', { waitUntil: 'load' });
+    await page.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+    await wait(400);
+
+    let snap = await page.evaluate('window.__SKYHOOK.snapshot()');
+    check('configured build: the game knows a backend exists',
+      snap.online.ready === true, JSON.stringify(snap.online));
+    check('configured build: still signed out on first load', snap.online.signedIn === false);
+    check('configured build: the overlay stays closed until asked for',
+      (await page.locator('#ol').isVisible()) === false);
+    check('configured build: nothing was requested from the API before the player asked',
+      api.length === 0, api.map(c => c.url).join(' | '));
+
+    /* ---- open the board from the title screen ---- */
+    await tapLogical(page, 240, 816);
+    await wait(500);
+
+    check('tapping LEADERBOARD opens the panel instead of starting a run',
+      (await page.locator('#ol').isVisible()) === true &&
+      (await page.evaluate('window.__SKYHOOK.game.state')) === 'title');
+    check('the board panel is a real dialog',
+      (await page.locator('.ol-panel').getAttribute('role')) === 'dialog' &&
+      (await page.locator('.ol-panel').getAttribute('aria-modal')) === 'true');
+
+    const rows = page.locator('#ol-list .ol-row');
+    check('the top scores render', (await rows.count()) === 3, `rows=${await rows.count()}`);
+    check('a row shows rank, name and score',
+      (await rows.nth(0).locator('.ol-rank').textContent()) === '#1' &&
+      (await rows.nth(0).locator('.ol-name').textContent()) === 'klaudia' &&
+      (await rows.nth(0).locator('.ol-score').textContent()) === '9100');
+    check('a signed-out player is told what signing in is for',
+      /guest/i.test(await page.locator('#ol-account').textContent()));
+    check('the board itself is readable while signed out (it is public data)',
+      api.some(c => c.url.startsWith('/rest/v1/leaderboard')));
+    check('the public board was read with the anon key, not a user token',
+      api.find(c => c.url.startsWith('/rest/v1/leaderboard')).headers.authorization === 'Bearer anon-test-key');
+    check('no email address appears anywhere in the rendered board',
+      !(await page.locator('#ol-list').textContent()).includes('@'));
+
+    /* ---- into the auth view ---- */
+    await page.locator('#ol-signin').click();
+    check('the sign-in view offers Google',
+      (await page.locator('#ol-google').isVisible()) === true &&
+      /google/i.test(await page.locator('#ol-google').textContent()));
+    check('sign-in asks for email and password only',
+      (await page.locator('#ol-email').isVisible()) === true &&
+      (await page.locator('#ol-password').isVisible()) === true &&
+      (await page.locator('#ol-username').isVisible()) === false);
+
+    await page.locator('#ol-toggle').click();
+    check('the create-account view asks for exactly username, email, password',
+      (await page.locator('#ol-username').isVisible()) === true &&
+      (await page.locator('#ol-email').isVisible()) === true &&
+      (await page.locator('#ol-password').isVisible()) === true &&
+      (await page.locator('#ol-form input').count()) === 3,
+      `inputs=${await page.locator('#ol-form input').count()}`);
+    check('create-account tells the browser it is a NEW password (password managers)',
+      (await page.locator('#ol-password').getAttribute('autocomplete')) === 'new-password');
+
+    await page.locator('#ol-toggle').click();
+    check('toggling back returns to sign-in',
+      (await page.locator('#ol-username').isVisible()) === false &&
+      (await page.locator('#ol-password').getAttribute('autocomplete')) === 'current-password');
+
+    /* ---- SPACE is a character here, not a thruster ----
+       Before accounts there was no field to type into and SPACE could safely
+       be global. This is the regression that would otherwise ship: a space in
+       a password starting a run underneath the dialog. */
+    await page.locator('#ol-password').click();
+    await page.keyboard.type('hunter2 hunter2');
+    const stateWhileTyping = await page.evaluate('window.__SKYHOOK.game.state');
+    const typed = await page.locator('#ol-password').inputValue();
+    check('SPACE typed into the password field does NOT start a run',
+      stateWhileTyping === 'title', `state=${stateWhileTyping}`);
+    check('SPACE typed into the password field lands in the field',
+      typed === 'hunter2 hunter2', JSON.stringify(typed));
+
+    /* ---- sign in for real ---- */
+    await page.locator('#ol-password').fill('hunter2hunter2');
+    await page.locator('#ol-email').fill('leo@example.com');
+    await page.locator('#ol-submit').click();
+    await page.waitForFunction('window.__SKYHOOK.game.online.signedIn === true', null, { timeout: 8000 });
+    await wait(400);
+
+    const login = api.find(c => c.url.startsWith('/auth/v1/token'));
+    check('sign-in posts to the password grant',
+      !!login && login.method === 'POST' && login.url.includes('grant_type=password'));
+    check('sign-in sends only email and password',
+      JSON.stringify(Object.keys(login.body).sort()) === '["email","password"]',
+      JSON.stringify(Object.keys(login.body)));
+    check('the game now knows who is playing',
+      (await page.evaluate('window.__SKYHOOK.game.online.username')) === 'leo');
+    check('the panel says who is signed in',
+      /signed in as leo/i.test(await page.locator('#ol-account').textContent()));
+    check('the sign-out button appeared and sign-in went away',
+      (await page.locator('#ol-signout').isVisible()) === true &&
+      (await page.locator('#ol-signin').isVisible()) === false);
+    check('your own row is highlighted on the board',
+      (await page.locator('#ol-list .ol-row.is-me .ol-name').textContent()) === 'leo');
+    check('your rank is stated plainly',
+      /#2/.test(await page.locator('#ol-myrank').textContent()),
+      await page.locator('#ol-myrank').textContent());
+    check('the password was cleared from the DOM after signing in',
+      (await page.locator('#ol-password').inputValue()) === '');
+
+    /* ---- Escape closes, and the canvas gets its keyboard back ---- */
+    await page.keyboard.press('Escape');
+    await wait(200);
+    check('Escape closes the panel', (await page.locator('#ol').isVisible()) === false);
+    check('the title screen now shows the signed-in pilot',
+      (await page.evaluate('window.__SKYHOOK.snapshot()')).online.username === 'leo');
+
+    /* ---- finish a run: it must reach the board ---- */
+    api.length = 0;
+    await page.evaluate(`(() => {
+      const g = window.__SKYHOOK.game;
+      g.skipTutorial(true);
+      g.start(4242);
+      /* Fast-forward the run rather than playing it - test/smoke.mjs already
+         proves the loop, and what is under test here is the submission. */
+      g.time = 41.25;
+      g.score = 1840;
+      g.hooks = 22;
+      g.altitude = 913;
+      g.die('fell');
+    })()`);
+    await page.waitForFunction(
+      'window.__SKYHOOK.game.online.status.indexOf("RANK") === 0', null, { timeout: 8000 });
+
+    const post = api.find(c => c.url.startsWith('/rest/v1/scores'));
+    check('finishing a run submits it', !!post && post.method === 'POST');
+    check('the submitted run is the run that was played',
+      post.body.score === 1840 && post.body.hooks === 22 &&
+      post.body.altitude === 913 && post.body.duration_ms === 41250,
+      JSON.stringify(post.body));
+    check('the submission is authenticated as the player',
+      post.headers.authorization === 'Bearer jwt-access-1');
+    check('the game-over screen is told the global rank',
+      (await page.evaluate('window.__SKYHOOK.game.online.status')) === 'RANK #2 GLOBAL',
+      await page.evaluate('window.__SKYHOOK.game.online.status'));
+    check('the game-over screen can still be retried (Retry was not displaced)',
+      (await page.evaluate('window.__SKYHOOK.game.retryRect.y')) === 640);
+
+    /* The board button on the game-over screen. It is hit-testable only once
+       the results screen has settled past RETRY_LOCK, which is the same guard
+       that stops a death-frame tap from instantly restarting the run. */
+    await page.waitForFunction(
+      'window.__SKYHOOK.game.state === "over" && window.__SKYHOOK.game.overT > 0.3',
+      null, { timeout: 8000 });
+    await tapLogical(page, 240, 743);
+    await wait(400);
+    check('LEADERBOARD on the game-over screen opens the panel, not a retry',
+      (await page.locator('#ol').isVisible()) === true &&
+      (await page.evaluate('window.__SKYHOOK.game.state')) === 'over');
+    await page.locator('#ol-close').click();
+    await wait(200);
+
+    /* ---- sign out ---- */
+    await page.waitForFunction(
+      'window.__SKYHOOK.game.state === "over" && window.__SKYHOOK.game.overT > 0.3',
+      null, { timeout: 8000 });
+    await tapLogical(page, 240, 743);
+    await page.waitForSelector('#ol-signout', { state: 'visible', timeout: 8000 });
+    await page.locator('#ol-signout').click();
+    await page.waitForFunction('window.__SKYHOOK.game.online.signedIn === false', null, { timeout: 8000 });
+    check('signing out returns the player to guest',
+      /guest/i.test(await page.locator('#ol-account').textContent()));
+    check('signing out clears the stored session',
+      (await page.evaluate('localStorage.getItem("skyhook.session")')) === null ||
+      (await page.evaluate('localStorage.getItem("skyhook.session")')) === '');
+    check('the board is still readable after signing out',
+      (await page.locator('#ol-list .ol-row').count()) === 3);
+
+    await ctx.close();
+
+    /* ==================================================================
+     * C. Configured, but the backend is DOWN.
+     *
+     * The highest-risk regression in this whole feature, and the one a
+     * mocked-happy-path suite never sees: Leo's project is paused, his wifi
+     * drops, Supabase has an outage - and a game that never needed a network
+     * to be played is now broken by one it does not need. Nothing below is
+     * about the leaderboard working. It is about the GAME still working when
+     * the leaderboard cannot.
+     * ================================================================ */
+    {
+      const dctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const dpage = await dctx.newPage();
+      const dead = [];
+      attachLogs(dpage, dead, 'dead', { expectFailuresFrom: deadOrigin });
+
+      await dpage.goto(base + 'dead/', { waitUntil: 'load' });
+      await dpage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(400);
+
+      check('dead backend: the page still booted',
+        (await dpage.evaluate('window.__SKYHOOK.snapshot()')).online.ready === true);
+
+      /* Open the board. It cannot load - the question is what the player sees. */
+      await tapLogical(dpage, 240, 816);
+      await dpage.waitForFunction(
+        'document.getElementById("ol-board-msg").textContent.indexOf("Loading") < 0',
+        null, { timeout: 15000 });
+      const msg = await dpage.locator('#ol-board-msg').textContent();
+      check('dead backend: the board says one plain sentence', msg.length > 0 && msg.length < 120, msg);
+      check('dead backend: that sentence is not a stack trace or a URL',
+        !/\n|https?:\/\/|at\s+\w+\s*\(|TypeError|Error:/.test(msg), msg);
+      check('dead backend: no half-rendered board is left behind',
+        (await dpage.locator('#ol-list .ol-row').count()) === 0);
+      check('dead backend: the panel is still usable (it can be closed)',
+        (await dpage.locator('#ol-close').isVisible()) === true);
+
+      /* A sign-in attempt against nothing must fail like a sentence, and must
+         give the button back - a permanently disabled form is the "broken auth
+         UI" this whole section exists to rule out. */
+      await dpage.locator('#ol-signin').click();
+      await dpage.locator('#ol-email').fill('leo@example.com');
+      await dpage.locator('#ol-password').fill('hunter2hunter2');
+      await dpage.locator('#ol-submit').click();
+      await dpage.waitForFunction(
+        'document.getElementById("ol-submit").disabled === false', null, { timeout: 15000 });
+      const authMsg = await dpage.locator('#ol-auth-msg').textContent();
+      check('dead backend: a sign-in attempt reports one readable line',
+        authMsg.length > 0 && authMsg.length < 120 && !/\n|Error:|TypeError/.test(authMsg), authMsg);
+      check('dead backend: the form is not left stuck in a busy state',
+        (await dpage.locator('#ol-submit').isDisabled()) === false &&
+        (await dpage.locator('#ol-google').isDisabled()) === false);
+      check('dead backend: still signed out, not half signed in',
+        (await dpage.evaluate('window.__SKYHOOK.game.online.signedIn')) === false);
+
+      await dpage.keyboard.press('Escape');
+      await wait(200);
+
+      /* And now the only thing that actually matters. */
+      await dpage.evaluate('window.__SKYHOOK.skipTutorial(true)');
+      await tapLogical(dpage, 240, 400);
+      await wait(300);
+      check('dead backend: the game still starts',
+        (await dpage.evaluate('window.__SKYHOOK.game.state')) === 'playing');
+
+      await dpage.evaluate(`(() => {
+        const g = window.__SKYHOOK.game;
+        g.time = 41.25; g.score = 1840; g.hooks = 22; g.altitude = 913;
+        g.die('fell');
+      })()`);
+      await wait(600);
+
+      check('dead backend: the local high score was still recorded',
+        (await dpage.evaluate('localStorage.getItem("skyhook.best")')) === '1840',
+        String(await dpage.evaluate('localStorage.getItem("skyhook.best")')));
+      check('dead backend: the run is parked for a later upload, not thrown away',
+        JSON.parse(await dpage.evaluate('localStorage.getItem("skyhook.pendingRun")') || 'null')?.score === 1840);
+      check('dead backend: the game reached the results screen',
+        (await dpage.evaluate('window.__SKYHOOK.game.state')) === 'over');
+
+      /* rAF is still running: a rejected promise did not take the loop down. */
+      const t0 = await dpage.evaluate('window.__SKYHOOK.game.overT');
+      await wait(400);
+      check('dead backend: the game loop is still alive afterwards',
+        (await dpage.evaluate('window.__SKYHOOK.game.overT')) > t0);
+
+      check('dead backend: not one uncaught error reached the page', dead.length === 0,
+        dead.slice(0, 4).join(' | '));
+      await dctx.close();
+    }
+  } finally {
+    await browser.close();
+    server.close();
+  }
+
+  check('no console errors / page errors / failed requests', errors.length === 0,
+    errors.slice(0, 6).join(' | '));
+
+  const failed = results.filter(r => !r.ok);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+  if (failed.length) {
+    console.log('\nFAILURES:');
+    failed.forEach(f => console.log(`  - ${f.name} ${f.detail}`));
+    process.exit(1);
+  }
+}
+
+main().catch(e => { console.error(e); process.exit(1); });
