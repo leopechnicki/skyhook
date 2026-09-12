@@ -56,14 +56,83 @@
     <div id="ad-slot-inner"></div>
   </aside>
 
+  <!-- =========================================================
+       ACCOUNT / LEADERBOARD OVERLAY  -  HIDDEN BY DEFAULT
+       ---------------------------------------------------------
+       Real DOM rather than canvas, on purpose: this is the one
+       part of SKYHOOK a player TYPES into. A canvas-drawn text
+       field has no password manager, no mobile keyboard, no
+       autofill, no screen reader and no focus ring. The game
+       stays on the canvas; the form stays in the document.
+
+       It sits OUTSIDE #stage so its clicks can never reach the
+       game's pointer listeners, and it does not exist visually
+       until js/ui_online.js is told there is a backend to talk
+       to (js/config.js filled in). With no config it is inert
+       markup and the game is untouched.
+       ========================================================= -->
+  <div id="ol" class="ol" hidden aria-hidden="true">
+    <div class="ol-panel" role="dialog" aria-modal="true" aria-labelledby="ol-title">
+      <button type="button" id="ol-close" class="ol-close" aria-label="Close">&#215;</button>
+      <h2 id="ol-title" class="ol-title">GLOBAL LEADERBOARD</h2>
+
+      <section id="ol-board" class="ol-view">
+        <p id="ol-account" class="ol-account"></p>
+        <ol id="ol-list" class="ol-list"></ol>
+        <p id="ol-board-msg" class="ol-msg" role="status" aria-live="polite"></p>
+        <p id="ol-myrank" class="ol-myrank"></p>
+        <div class="ol-actions">
+          <button type="button" id="ol-signin" class="ol-btn ol-btn-primary">SIGN IN / CREATE ACCOUNT</button>
+          <button type="button" id="ol-signout" class="ol-btn" hidden>SIGN OUT</button>
+        </div>
+      </section>
+
+      <section id="ol-auth" class="ol-view" hidden>
+        <button type="button" id="ol-google" class="ol-btn ol-btn-google">Continue with Google</button>
+        <p class="ol-or"><span>or</span></p>
+
+        <form id="ol-form" novalidate autocomplete="on">
+          <div class="ol-field" id="ol-username-field" hidden>
+            <label for="ol-username">Username</label>
+            <input type="text" id="ol-username" name="username" autocomplete="username"
+                   maxlength="16" spellcheck="false" placeholder="3-16 letters, numbers or _">
+          </div>
+          <div class="ol-field">
+            <label for="ol-email">Email</label>
+            <input type="email" id="ol-email" name="email" autocomplete="email"
+                   spellcheck="false" placeholder="you@example.com">
+          </div>
+          <div class="ol-field">
+            <label for="ol-password">Password</label>
+            <input type="password" id="ol-password" name="password"
+                   autocomplete="current-password" placeholder="at least 8 characters">
+          </div>
+          <button type="submit" id="ol-submit" class="ol-btn ol-btn-primary">SIGN IN</button>
+        </form>
+
+        <p id="ol-auth-msg" class="ol-msg" role="alert"></p>
+        <div class="ol-links">
+          <button type="button" id="ol-toggle" class="ol-link">Create an account</button>
+          <button type="button" id="ol-back" class="ol-link">Back to leaderboard</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
 </div>
 
+<!-- config.js first: it only sets a global, and js/online.js reads it. It is
+     empty in the repo, which is what keeps the default build offline. -->
+<script src="js/config.js"></script>
 <script src="js/utils.js"></script>
 <script src="js/audio.js"></script>
 <script src="js/celestial.js"></script>
 <script src="js/rocket.js"></script>
 <script src="js/game.js"></script>
+<script src="js/online.js"></script>
 <script src="js/main.js"></script>
+<!-- Last: needs both SK.Online and the game instance main.js creates. -->
+<script src="js/ui_online.js"></script>
 <!-- Ad network loader script (e.g. AdSense) would go here, after the game scripts. -->
 </body>
 </html>

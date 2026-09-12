@@ -15,9 +15,11 @@
     "test:sprites": "node test/sprites.mjs",
     "test:perf": "node test/perf.mjs",
     "test:art": "node test/art_shots.mjs",
+    "test:online": "node test/online.mjs",
+    "test:leaderboard": "node test/leaderboard_ui.mjs",
     "test:rocket": "node test/rocket_shots.mjs",
     "shots": "node test/shipping_shots.mjs",
-    "test:ci": "node test/world.mjs && node test/balance.mjs --ci && node test/smoke.mjs && node test/sprites.mjs && node test/perf.mjs"
+    "test:ci": "node test/world.mjs && node test/balance.mjs --ci && node test/online.mjs && node test/smoke.mjs && node test/sprites.mjs && node test/leaderboard_ui.mjs && node test/perf.mjs"
   },
   "devDependencies": {
     "playwright": "^1.55.1"

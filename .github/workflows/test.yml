@@ -53,6 +53,16 @@ jobs:
       - name: Balance gate
         run: node test/balance.mjs --ci
 
+      # The account layer's wire protocol, in a vm sandbox with a scripted
+      # fetch - no browser, no network, under a second. The first assertions
+      # it makes are the ones that matter most: with no js/config.js the game
+      # makes ZERO requests and behaves exactly as it did before accounts
+      # existed. It also greps supabase/schema.sql for the security rules
+      # (RLS on, no UPDATE, no DELETE, no email in the public view), because
+      # a threat model nothing checks is a comment.
+      - name: Online layer (offline default + RLS rules)
+        run: node test/online.mjs
+
   browser:
     name: browser (smoke + frame time)
     runs-on: ubuntu-latest
@@ -86,6 +96,15 @@ jobs:
       # reachable count against the ceiling, and that eviction is LRU.
       - name: Sprite cache ceiling
         run: node test/sprites.mjs
+
+      # The account overlay in a real browser, against a mock Supabase served
+      # from this test's own http server. Covers the shipped config-less build
+      # (no button, no request, a tap where the button would be still starts a
+      # run) and - the regression worth having CI for - a CONFIGURED build
+      # whose backend is refusing connections: the game must still start, still
+      # record a local high score, and never throw.
+      - name: Leaderboard UI (incl. dead-backend fallback)
+        run: node test/leaderboard_ui.mjs
 
       # Fails on page errors raised while rendering under 4x CPU throttling.
       # It reports frame time but deliberately does not gate on it: runner
