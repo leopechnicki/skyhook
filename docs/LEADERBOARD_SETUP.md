@@ -118,11 +118,19 @@ left email confirmation on, click the link in the email first.
 **Redirect URLs** in step 3.5, or a redirect URI in Google Cloud that does not
 match the callback Supabase gave you, character for character.
 
-**Somebody submitted an impossible score.** They did not - the database refuses
-it. `supabase/schema.sql` caps what a run can contain, checks the score against
-the hook count and the hook count against the clock, and allows no more than ten
-submissions a minute per account. Scores can only ever be added, never edited or
-deleted, by anyone using the public key.
+**Somebody submitted a suspiciously high score.** The database refuses anything
+the game cannot physically produce: `supabase/schema.sql` caps what a run can
+contain, checks the score against the hook count and the hook count against the
+clock, and allows no more than ten submissions a minute per account. Scores can
+only ever be added, never edited or deleted, by anyone using the public key.
+
+What it cannot do is prove a run was really played. The score is calculated in
+the browser, so somebody willing to make an account and hand-craft a request can
+still post a number that sits inside those bounds. Being certain would mean
+replaying the whole run on a server, and SKYHOOK deliberately does not have one.
+The bounds make a nine-figure score impossible; they make a dishonest plausible
+one merely inconvenient. For a game with no prize attached, that is the trade
+being made on purpose - it is not an oversight.
 
 ## Usernames are permanent
 

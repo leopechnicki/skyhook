@@ -458,7 +458,15 @@
           s.user.username = username;
           setSession(s);
           Online.flushPending();
-          return { signedIn: true, needsConfirmation: false };
+          /* The database has the last word on the name. handle_new_user
+             de-duplicates it, so a player who asked for an already-taken
+             "leo" is "leo1" on the board - and showing them "leo" while the
+             leaderboard shows "leo1" is a bug report waiting to happen. Ask
+             what was actually assigned. loadUsername never rejects, and the
+             account exists either way. */
+          return loadUsername().then(function () {
+            return { signedIn: true, needsConfirmation: false };
+          });
         }
         /* No tokens means the project requires email confirmation. That is a
            legitimate outcome, not an error. */

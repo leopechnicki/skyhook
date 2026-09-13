@@ -252,6 +252,54 @@ const TOKEN_OK = {
 }
 
 /* ==========================================================================
+ * 3b. The server owns the username, not the form.
+ *
+ * handle_new_user() de-duplicates: a player who asks for an already-taken
+ * "leo" becomes "leo1" in the database. If the client keeps showing the name
+ * that was typed, the player sees one name in the game and a different one on
+ * the leaderboard - and reports it as a lost score. So sign-up must adopt
+ * whatever the profiles row actually says.
+ * ======================================================================== */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+
+  s.route(call => {
+    if (call.url.includes('/auth/v1/signup')) return { status: 200, body: TOKEN_OK };
+    /* The database handed back a DIFFERENT name than the one requested. */
+    if (call.url.includes('/rest/v1/profiles')) return { status: 200, body: [{ username: 'leo1' }] };
+    return { status: 404, body: { message: 'unexpected' } };
+  });
+
+  await s.Online.signUp('leo', 'leo@example.com', 'hunter2hunter2');
+
+  check('sign-up adopts the username the database assigned, not the one typed',
+    s.Online.state().username === 'leo1', s.Online.state().username);
+}
+
+/* ==========================================================================
+ * 3c. A profile lookup that fails must not undo the account.
+ * ======================================================================== */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+
+  s.route(call => {
+    if (call.url.includes('/auth/v1/signup')) return { status: 200, body: TOKEN_OK };
+    if (call.url.includes('/rest/v1/profiles')) return { status: 500, body: { message: 'boom' } };
+    return { status: 404, body: { message: 'unexpected' } };
+  });
+
+  let threw = false;
+  const res = await s.Online.signUp('leo', 'leo@example.com', 'hunter2hunter2')
+    .catch(() => { threw = true; return null; });
+
+  check('sign-up still resolves when the profile lookup fails', threw === false);
+  check('sign-up still reports the account as created', !!res && res.signedIn === true);
+  check('the session survives a failed profile lookup', s.Online.isSignedIn() === true);
+}
+
+/* ==========================================================================
  * 4. Auth transitions: signed out -> signed in -> signed out.
  * ======================================================================== */
 {

@@ -158,6 +158,7 @@ declare
   base     text;
   candidate text;
   n        integer := 0;
+  attempt  integer;
 begin
   raw := coalesce(
     new.raw_user_meta_data ->> 'username',
@@ -184,8 +185,30 @@ begin
     candidate := left(base, 16 - char_length(n::text)) || n::text;
   end loop;
 
+  -- The loop above is ADVISORY ONLY. Between its select and this insert a
+  -- concurrent signup can claim the same name, and profiles_username_lower_key
+  -- is the real arbiter. `on conflict (id)` does NOT cover that index, so a
+  -- race raises unique_violation inside an AFTER INSERT trigger on auth.users
+  -- - which aborts the entire signup and hands the player a 500 instead of an
+  -- account. Losing the account is a far worse outcome than an unexpected
+  -- numeric suffix, so a collision falls back instead of failing.
+  for attempt in 1 .. 5 loop
+    begin
+      insert into public.profiles (id, username)
+      values (new.id, candidate)
+      on conflict (id) do nothing;
+      return new;
+    exception
+      when unique_violation then
+        candidate := left(base, 6) || floor(random() * 1000000000)::text;
+    end;
+  end loop;
+
+  -- Five losses in a row is not chance. Derive from the user id, which is
+  -- unique by construction: 'pilot' + 11 hex characters = 16, and hex digits
+  -- satisfy profiles_username_shape.
   insert into public.profiles (id, username)
-  values (new.id, candidate)
+  values (new.id, 'pilot' || left(replace(new.id::text, '-', ''), 11))
   on conflict (id) do nothing;
 
   return new;

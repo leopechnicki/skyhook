@@ -127,7 +127,9 @@ and may never update or delete a score, not even their own; the public board is 
 view exposing username, score and run stats only, and no email address is reachable
 from the game at all. Impossible scores and submission flooding are rejected by
 CHECK constraints and a BEFORE INSERT trigger -- under every write path, not in an
-RPC that could be stepped around.
+RPC that could be stepped around. Those bounds reject what the game cannot emit;
+they do not prove a run happened, because the score is computed in the browser and
+there is no server to replay it on.
 
 If the backend is unreachable or paused, the game does not throw, does not show a
 broken login box, still records the local high score, and holds the run for upload
