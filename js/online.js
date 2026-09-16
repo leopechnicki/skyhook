@@ -449,7 +449,22 @@
       /* username rides in `data`, which GoTrue stores as raw_user_meta_data;
          the handle_new_user trigger turns it into the profiles row. Nothing
          else is collected - no display name, no avatar, no country. */
-      return request('/auth/v1/signup', {
+      /* redirect_to is where the "Confirm your email address" link sends the
+         player once they click it. Without it GoTrue falls back to the
+         project's Site URL, which is an origin-shaped setting - so on a site
+         served from a subpath (GitHub Pages: /skyhook/) the confirmation link
+         lands the player on the domain ROOT and the game is nowhere in sight.
+         Observed doing exactly that against the live project. Sending the
+         page's own origin+pathname puts them back where they started.
+         GoTrue only honours a redirect_to that is allow-listed under
+         Authentication -> URL Configuration -> Redirect URLs; if it is not,
+         it ignores it and uses the Site URL, which is today's behaviour. So
+         this can improve the outcome and cannot make it worse. */
+      var signupPath = '/auth/v1/signup';
+      var back = httpOrigin() ? redirectTarget() : '';
+      if (back) signupPath += '?redirect_to=' + encodeURIComponent(back);
+
+      return request(signupPath, {
         method: 'POST',
         body: { email: email, password: password, data: { username: username } }
       }).then(function (data) {

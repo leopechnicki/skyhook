@@ -67,6 +67,11 @@ const BOARD = [
 
 const api = [];   // every call the page made to the mock project
 
+/* Flipped on for the one signup below that must behave like a project with
+   "Confirm email" left ON - which is Supabase's default, so it is the shape
+   most real deployments have, including this game's own. */
+let confirmRequired = false;
+
 function handleApi(req, res, body) {
   const url = req.url.replace(/^\/api/, '');
   let parsed = null;
@@ -78,7 +83,15 @@ function handleApi(req, res, body) {
     res.end(payload === null ? '' : JSON.stringify(payload));
   };
 
-  if (url.startsWith('/auth/v1/signup')) return json(200, SESSION);
+  if (url.startsWith('/auth/v1/signup')) {
+    /* GoTrue answers a signup on a confirm-email project with a user object
+       and NO tokens; that absence is exactly what Online.signUp reads as
+       needsConfirmation. Returning the full SESSION here (the auto-confirm
+       case) is what let the bug below ship unnoticed. */
+    return json(200, confirmRequired
+      ? { id: 'user-uuid-2', email: (parsed && parsed.email) || '', confirmation_sent_at: '2026-09-16T18:00:00Z' }
+      : SESSION);
+  }
   if (url.startsWith('/auth/v1/token')) return json(200, SESSION);
   if (url.startsWith('/auth/v1/logout')) { res.writeHead(204).end(); return; }
   if (url.startsWith('/auth/v1/user')) return json(200, SESSION.user);
@@ -344,6 +357,33 @@ async function main() {
       stateWhileTyping === 'title', `state=${stateWhileTyping}`);
     check('SPACE typed into the password field lands in the field',
       typed === 'hunter2 hunter2', JSON.stringify(typed));
+
+    /* ---- a project with "Confirm email" ON: the player must be TOLD ----
+       The regression this guards is invisible to every other assertion here:
+       the code set the "check your email" line and THEN called showAuth(),
+       which resets the view and blanks that very element. The player was
+       flipped to an empty sign-in form with nothing on screen, tried to sign
+       in, and was rejected for an unconfirmed address they were never told
+       about. On this deployment that is the ONLY way to make an account -
+       Google is off - so a silent signup is a dead end, not a papercut. */
+    confirmRequired = true;
+    await page.locator('#ol-toggle').click();
+    await page.locator('#ol-username').fill('newpilot');
+    await page.locator('#ol-email').fill('newpilot@example.com');
+    await page.locator('#ol-password').fill('hunter2hunter2');
+    await page.locator('#ol-submit').click();
+    await page.waitForFunction(
+      'document.getElementById("ol-submit").disabled === false', null, { timeout: 8000 });
+    await wait(200);
+    const confirmMsg = ((await page.locator('#ol-auth-msg').textContent()) || '').trim();
+    check('signup needing confirmation says so, and the line survives the view switch',
+      confirmMsg.length > 0 && /email/i.test(confirmMsg), JSON.stringify(confirmMsg));
+    check('signup needing confirmation leaves the player on sign-in, still signed out',
+      (await page.locator('#ol-username').isVisible()) === false &&
+      (await page.evaluate('window.__SKYHOOK.game.online.signedIn')) === false);
+    check('signup needing confirmation does not leave a password in the DOM',
+      (await page.locator('#ol-password').inputValue()) === '');
+    confirmRequired = false;
 
     /* ---- sign in for real ---- */
     await page.locator('#ol-password').fill('hunter2hunter2');

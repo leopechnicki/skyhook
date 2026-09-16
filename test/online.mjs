@@ -228,6 +228,15 @@ const TOKEN_OK = {
     JSON.stringify(signup.body.data));
   check('sign-up collects NOTHING beyond username, email, password',
     !JSON.stringify(signup.body).match(/country|avatar|age|phone|full_name|birth/i));
+
+  /* Where the "Confirm your email address" link comes back to. Without this
+     GoTrue falls back to the project's Site URL, which is origin-shaped - so
+     on GitHub Pages, served from /skyhook/, the confirmation link dropped the
+     player on the domain root with no game in sight. Verified happening
+     against the live project before this was added. */
+  check('sign-up tells GoTrue to send the confirmation link back to THIS page',
+    signup.url.includes('redirect_to=' + encodeURIComponent('https://leopechnicki.github.io/skyhook/')),
+    signup.url);
   check('sign-up left the session signed in', s.Online.isSignedIn() === true);
   check('an auth event fired on sign-up', authEvents.length >= 1 && authEvents[0] === true);
 
