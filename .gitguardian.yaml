@@ -48,15 +48,32 @@
 # string keeps js/config.js scanned: any other secret in it still fires.
 #
 # ---------------------------------------------------------------------------
-# Scope: this file does NOT silence the GitHub check
+# Scope: what this file is known to affect, and what it may not
 # ---------------------------------------------------------------------------
-# Worth stating so nobody is surprised. This config is read by `ggshield`
-# (CLI, pre-commit hook, ggshield CI action). The GitGuardian GitHub App that
-# posts the "GitGuardian Security Checks" run on pull requests does NOT read
-# it - that check is driven by incident status in the GitGuardian dashboard,
-# so the matching incident has to be closed as a false positive once, there,
-# by the account owner. This file is the in-repo, reviewable record of that
-# decision, and it keeps local and CI ggshield runs agreeing with it.
+# `ggshield` (CLI, pre-commit hook, ggshield CI action) definitely reads this
+# config. That much is documented.
+#
+# The GitGuardian GitHub App - the thing that posts the "GitGuardian Security
+# Checks" run on pull requests - is less clear-cut, so here is the evidence
+# rather than a claim:
+#
+#   - GitGuardian's own docs describe that check as driven by INCIDENT STATUS
+#     in the dashboard, and never mention this file. Read literally, that says
+#     the check can only be silenced by closing the incident in the dashboard.
+#   - Observed on the PR that added this file: the commit introducing it was
+#     scanned and came back "No secrets detected", even though the anon key
+#     appears VERBATIM below. On the previous PR, the same key in
+#     js/config.js failed the same check.
+#
+# So the observed behaviour is consistent with this file being honoured, but a
+# second explanation fits too: GitGuardian may simply not re-raise a secret it
+# has already opened an incident for (37342244). Those two cannot be told
+# apart from here without dashboard access.
+#
+# Practical upshot - do not treat this file as the thing keeping the check
+# green. If the check goes red again on a future PR for this same key, that is
+# the second explanation winning, and the fix is one click in the dashboard:
+# close incident 37342244 as a false positive. Nothing needs rotating.
 
 version: 2
 
