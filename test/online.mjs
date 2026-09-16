@@ -596,14 +596,59 @@ const TOKEN_OK = {
 }
 
 /* ==========================================================================
- * 12. js/config.js as committed must keep the game offline.
+ * 12. js/config.js as committed must be safe and internally consistent.
+ *
+ * This used to assert the file shipped EMPTY. That assertion died the day the
+ * leaderboard was actually switched on, and keeping it would have meant the
+ * only way to ship the feature was to delete its own test - so it is replaced
+ * by the checks that were doing the real work anyway:
+ *
+ *   - all or nothing. A URL with no key (or a key with no URL) is a build that
+ *     thinks it is online and cannot be; js/online.js refuses it (section 2),
+ *     and it should never reach a commit in the first place.
+ *   - if it IS filled in, the key must be an ANON key. anon and service_role
+ *     are both JWTs issued by the same project and differ by one claim inside
+ *     base64, so a grep for the string "service_role" cannot tell them apart -
+ *     it would sail straight past the one paste that hands every browser a key
+ *     that bypasses RLS. Decoding the payload is the only check that catches
+ *     it, and it is strictly stronger than what was here before.
+ *
+ * The offline default is still gated, just not by this file's contents: by
+ * Online.configure() in section 2, and in a real browser by the explicitly
+ * config-less site in test/leaderboard_ui.mjs.
  * ======================================================================== */
 {
   const committed = fs.readFileSync(path.join(ROOT, 'js/config.js'), 'utf8');
-  check('js/config.js ships with an empty supabaseUrl',
-    /supabaseUrl:\s*''/.test(committed));
-  check('js/config.js ships with an empty supabaseAnonKey',
-    /supabaseAnonKey:\s*''/.test(committed));
+  const field = re => { const m = re.exec(committed); return m ? m[1] : null; };
+  const url = field(/supabaseUrl:\s*'([^']*)'/);
+  const key = field(/supabaseAnonKey:\s*'([^']*)'/);
+
+  check('js/config.js declares a supabaseUrl string', url !== null);
+  check('js/config.js declares a supabaseAnonKey string', key !== null);
+  check('js/config.js is all-or-nothing: both filled in, or both empty',
+    (!!url) === (!!key), `url=${!!url} key=${!!key}`);
+
+  if (url && key) {
+    check('the configured supabaseUrl is an https project URL with no trailing slash',
+      /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url), url);
+
+    /* Decode the JWT payload. Never print it whole: it is public, but a test
+       log is not the place to normalise pasting keys around. */
+    let claims = null;
+    try {
+      const seg = key.split('.')[1] || '';
+      claims = JSON.parse(Buffer.from(seg, 'base64url').toString('utf8'));
+    } catch (e) { claims = null; }
+
+    check('the committed key is a decodable JWT', claims !== null);
+    check('the committed key is the ANON key, not service_role',
+      !!claims && claims.role === 'anon', claims ? String(claims.role) : 'undecodable');
+    check('the committed key belongs to the project in supabaseUrl',
+      !!claims && url.includes(String(claims.ref)), claims ? String(claims.ref) : '?');
+    check('the committed key has not expired',
+      !!claims && typeof claims.exp === 'number' && claims.exp * 1000 > Date.now(),
+      claims && claims.exp ? new Date(claims.exp * 1000).toISOString() : '?');
+  }
   /* The service_role key bypasses RLS: in a browser it is a master key to the
      whole database. Comments are allowed to WARN about it - that is what
      js/config.js does - so comments are stripped before looking. Any surviving

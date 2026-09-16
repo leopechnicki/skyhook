@@ -6,16 +6,18 @@
  * finishing a run actually puts a row on the board.
  *
  * The mock Supabase is served by THIS test's own http server, on the same
- * origin as the page, and js/config.js is swapped for one pointing at it. So
+ * origin as the page, and js/config.js is swapped for one pointing at it - for
+ * every site below, including the config-less one, which is handed an
+ * explicitly EMPTY config rather than whatever the repo currently ships. So
  * every request below goes through the browser's real fetch, real headers and
  * real JSON parsing - no route interception, no CORS theatre, no stub that can
  * drift away from what a browser would actually do.
  *
  * Two pages are tested and the second matters as much as the first:
  *   /online/  config present  -> the whole feature
- *   /         config empty    -> the shipped default. No overlay, no button,
- *                                no request that leaves the page, and a tap
- *                                where the button WOULD be still starts a run.
+ *   /         config empty    -> the off switch. No overlay, no button, no
+ *                                request that leaves the page, and a tap where
+ *                                the button WOULD be still starts a run.
  *
  * Run:  node test/leaderboard_ui.mjs   (Playwright required, like smoke.mjs)
  */
@@ -111,9 +113,17 @@ function startServer(deadPort) {
     }
 
     /* Three sites off one server, same files, three configs:
-         /         no config      - the repo exactly as it ships
+         /         config blanked - the off switch, exercised
          /online/  live config    - the whole feature
-         /dead/    config that points at a port nothing is listening on */
+         /dead/    config that points at a port nothing is listening on
+
+       All three get a SYNTHESISED js/config.js; none of them reads the file in
+       the repo. That is deliberate. The repo's config is filled in now - the
+       leaderboard is on for the real deployment - so a test that borrowed it
+       would have quietly stopped testing the offline path the moment it went
+       live: the exact failure where a green tick means nothing. Pinning all
+       three configs here keeps every branch reachable no matter what the
+       shipped config happens to say. */
     const configured = clean.startsWith('/online');
     const dead = clean.startsWith('/dead');
     let rel = clean;
@@ -121,13 +131,17 @@ function startServer(deadPort) {
     else if (dead) rel = clean.replace(/^\/dead\/?/, '/');
     if (rel === '/' || rel === '') rel = '/index.html';
 
-    if ((configured || dead) && rel === '/js/config.js') {
+    if (rel === '/js/config.js') {
       const apiPort = dead ? deadPort : server.address().port;
+      /* The bare site gets the empty config verbatim: the off switch as a
+         player would receive it, not an absence of the file. */
+      const cfgUrl = (configured || dead) ? `http://127.0.0.1:${apiPort}/api` : '';
+      const cfgKey = (configured || dead) ? 'anon-test-key' : '';
       res.writeHead(200, { 'Content-Type': MIME['.js'] });
       res.end(
         'window.SKYHOOK_CONFIG = {\n' +
-        `  supabaseUrl: 'http://127.0.0.1:${apiPort}/api',\n` +
-        "  supabaseAnonKey: 'anon-test-key',\n" +
+        `  supabaseUrl: '${cfgUrl}',\n` +
+        `  supabaseAnonKey: '${cfgKey}',\n` +
         '  boardLimit: 50\n' +
         '};\n'
       );
@@ -201,7 +215,7 @@ async function main() {
 
   try {
     /* ==================================================================
-     * A. The shipped default: no config, therefore no account layer.
+     * A. The off switch: empty config, therefore no account layer.
      * ================================================================ */
     {
       const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -219,11 +233,11 @@ async function main() {
       await wait(300);
 
       const snap = await page.evaluate('window.__SKYHOOK.snapshot()');
-      check('default build: the game does not believe it has a backend',
+      check('blank-config build: the game does not believe it has a backend',
         snap.online && snap.online.ready === false, JSON.stringify(snap.online));
-      check('default build: the overlay is not visible',
+      check('blank-config build: the overlay is not visible',
         (await page.locator('#ol').isVisible()) === false);
-      check('default build: no account UI was drawn on the title screen',
+      check('blank-config build: no account UI was drawn on the title screen',
         snap.online.signedIn === false && snap.online.username === '');
 
       /* The button's hit rect must be genuinely dead, not merely invisible.
@@ -231,10 +245,10 @@ async function main() {
       await tapLogical(page, 240, 816);
       await wait(200);
       const after = await page.evaluate('window.__SKYHOOK.game.state');
-      check('default build: a tap where the button WOULD be still starts the game',
+      check('blank-config build: a tap where the button WOULD be still starts the game',
         after === 'playing', `state=${after}`);
 
-      check('default build: not one request left the page', external.length === 0,
+      check('blank-config build: not one request left the page', external.length === 0,
         external.slice(0, 4).join(' | '));
       await ctx.close();
     }

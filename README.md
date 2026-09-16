@@ -106,19 +106,26 @@ banner appears with zero layout shift (CLS). It is the only place an ad unit sho
 ever be inserted -- no publisher IDs, no external scripts, and nothing tracking-related
 exists anywhere else in the codebase.
 
-## Global leaderboard (optional, off by default)
+## Global leaderboard (live, and optional)
 
-The game ships with accounts **off**, and that is the supported default, not an
-unfinished state. With `js/config.js` empty, SKYHOOK makes no network request of
-any kind, draws no account UI, and keeps high scores in localStorage exactly as it
-always has -- including from a double-clicked `index.html` with no server and no
-internet. Playing never requires an account.
+`js/config.js` is filled in, so the deployed game at
+<https://leopechnicki.github.io/skyhook/> has a LEADERBOARD button, accounts, and
+globally ranked runs. Signing up asks for a username, an email and a password --
+nothing else. Sign-in is email/password; the Google button appears only if Google
+is enabled as a provider in the Supabase project, and it is not enabled on the
+deployment above.
 
-Fill in a free Supabase project URL and anon key and a LEADERBOARD button appears,
-players can sign in with Google or email/password, and finished runs are ranked
-globally. Signing up asks for a username, an email and a password -- nothing else.
+**Accounts remain optional, in both directions.** Playing never requires one: a
+run, a local high score and the whole game work signed out. And blanking the two
+strings in `js/config.js` turns the feature off entirely -- SKYHOOK then makes no
+network request of any kind, draws no account UI, and keeps high scores in
+localStorage exactly as it always has, including from a double-clicked
+`index.html` with no server and no internet. That off path is a CI gate, not a
+claim: `test/leaderboard_ui.mjs` loads the game with an empty config and fails the
+build if a single request leaves the page.
 
-Setup is five steps: **[docs/LEADERBOARD_SETUP.md](docs/LEADERBOARD_SETUP.md)**.
+Setting up your own project is five steps:
+**[docs/LEADERBOARD_SETUP.md](docs/LEADERBOARD_SETUP.md)**.
 
 All the security lives in `supabase/schema.sql`, because the anon key is public by
 design and the client is therefore entirely attacker-controlled. Row Level Security
@@ -145,15 +152,15 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 | `js/rocket.js` | 396 | Player ART only: hull sprite, heading, thruster plume. Sprite-cached, zero physics |
 | `js/game.js` | ~1910 | Core game: celestial bodies, gravity, orbiting, flying, latching, meteoroids, shards, rendering |
 | `js/main.js` | 187 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
-| `js/config.js` | 29 | Supabase URL + anon key. **Empty in the repo** -- empty means offline, and offline is the default |
+| `js/config.js` | 37 | Supabase project URL + **anon** (public) key. Committed on purpose -- GitHub Pages serves the repo, so an uncommitted config does not exist on the live site. Blank both strings to go offline |
 | `js/online.js` | 723 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
 | `js/ui_online.js` | 388 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
 | `supabase/schema.sql` | 313 | Tables, RLS policies, plausibility CHECKs, rate-limit trigger, public board view |
 | `test/smoke.mjs` | 372 | Playwright end-to-end smoke test |
 | `test/balance.mjs` | 532 | Headless difficulty/balance harness (no browser) |
 | `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |
-| `test/online.mjs` | 622 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
-| `test/leaderboard_ui.mjs` | 531 | The account layer in a real browser against a mock Supabase -- plus the config-less build and a dead backend |
+| `test/online.mjs` | 667 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
+| `test/leaderboard_ui.mjs` | 545 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
 
 Runtime dependencies: none. The only dev dependency is Playwright, and only for the smoke test.
 
