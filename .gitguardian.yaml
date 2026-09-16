@@ -1,0 +1,70 @@
+# GitGuardian configuration for SKYHOOK.
+#
+# ONE ignore rule, for ONE string: the Supabase *anon* key in js/config.js.
+# Nothing else is suppressed, and the scanner is not disabled anywhere.
+#
+# ---------------------------------------------------------------------------
+# Why that key is committed, and why it is not a leak
+# ---------------------------------------------------------------------------
+# SKYHOOK is a static site served by GitHub Pages straight from `main` (no
+# build step, no bundler, no deploy-time substitution - that is the point of
+# the project). A config file that is not committed therefore does not exist
+# on the live site. The key has to be in the repo for the game to have a
+# leaderboard at all.
+#
+# That is fine, because the anon key is PUBLIC BY DESIGN. It is the string
+# Supabase labels "anon / public", it is shipped to every browser that loads
+# the page, and it identifies the project - not a person and not a privilege.
+# Decoded, its payload is:
+#
+#     {"iss":"supabase","ref":"ievfcqnyrekdixxbsite","role":"anon",...}
+#
+# `role: anon` is the whole story. Every byte of authority it carries is
+# granted by Row Level Security in supabase/schema.sql, which is why that file
+# exists: RLS on for `scores` and `profiles`, insert restricted to
+# `user_id = auth.uid()`, no UPDATE policy, no DELETE policy, update/delete
+# revoked outright, rate limiting in a BEFORE INSERT trigger, and a
+# security_invoker public view that exposes no email column. Handing this key
+# to an attacker gives them exactly what it gives an ordinary player: the
+# ability to read the public board and to write rows as themselves.
+#
+# GitGuardian's finding is a true positive as a *detection* - it really is a
+# JWT - and a false positive as an *incident*. There is nothing to rotate and
+# nothing to revoke.
+#
+# The genuinely dangerous key is `service_role`, which bypasses RLS entirely.
+# Both keys are JWTs issued by the same project and differ only by one claim
+# buried inside base64, so they look nearly identical to a human and to a
+# grep. test/online.mjs therefore base64-decodes whatever key is committed and
+# fails the build unless its role claim is literally "anon".
+#
+# ---------------------------------------------------------------------------
+# Why this ignores a MATCH and not the PATH
+# ---------------------------------------------------------------------------
+# `ignored_paths: js/config.js` would have been shorter and is the wrong tool.
+# It would blind the scanner to *every future secret* in that file - including
+# the one mistake that would actually matter here, someone pasting the
+# service_role key into the slot right next to this one. Ignoring the specific
+# string keeps js/config.js scanned: any other secret in it still fires.
+#
+# ---------------------------------------------------------------------------
+# Scope: this file does NOT silence the GitHub check
+# ---------------------------------------------------------------------------
+# Worth stating so nobody is surprised. This config is read by `ggshield`
+# (CLI, pre-commit hook, ggshield CI action). The GitGuardian GitHub App that
+# posts the "GitGuardian Security Checks" run on pull requests does NOT read
+# it - that check is driven by incident status in the GitGuardian dashboard,
+# so the matching incident has to be closed as a false positive once, there,
+# by the account owner. This file is the in-repo, reviewable record of that
+# decision, and it keeps local and CI ggshield runs agreeing with it.
+
+version: 2
+
+secret:
+  ignored_matches:
+    # Supabase anon (public) key for project ievfcqnyrekdixxbsite - see above.
+    # Listed as the literal value rather than an ignore-sha so the rule stays
+    # readable and stays pinned to this exact key: rotate the project and this
+    # entry stops matching, which is the correct behaviour.
+    - name: 'SKYHOOK Supabase anon (public) key - constrained by RLS, see supabase/schema.sql'
+      match: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldmZjcW55cmVrZGl4eGJzaXRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1NzQ0MjYsImV4cCI6MjEwNTE1MDQyNn0.DPaeAv6WFnAQMomXQzlMWZulkM12jqicrymSInQygOM
