@@ -70,10 +70,70 @@
     try { store().set(key, ''); } catch (e) { /* ignore */ }
   }
 
+  /* GoTrue / PostgREST error codes -> the one line a player should read.
+     Keyed on the code rather than the prose for two reasons. The prose is not
+     a contract: "email rate limit exceeded" is free to be reworded in any
+     Supabase release, and a message that quietly stops matching a substring
+     degrades into the generic fallback with nothing going red. And the HTTP
+     status is not specific enough - see over_email_send_rate_limit below. */
+  var CODE_MESSAGES = {
+    /* The wall Leo hit on 2026-09-16, and the reason this table exists.
+       Confirmed by probe: POST /auth/v1/signup -> 429
+       {"error_code":"over_email_send_rate_limit","msg":"email rate limit
+       exceeded"}. This is NOT the player doing anything too often. It is the
+       PROJECT's confirmation-email quota - a handful per hour on Supabase's
+       built-in SMTP, shared by every person who tries to sign up - and the
+       old wording ("Too many attempts. Wait a minute and try again.") was
+       wrong on both counts. It blamed the player for a first attempt, and it
+       named a timescale an order of magnitude too short, so waiting the
+       advised minute and retrying hit the identical wall. Repeat that twice
+       and the only available conclusion is that the game is broken, which is
+       the report we got. Say whose limit it is, give the real scale, and
+       leave the player somewhere to go. */
+    over_email_send_rate_limit:
+      'Sign-ups are rate-limited right now - this server only sends a few confirmation emails an hour. Try again later; you can keep playing without an account.',
+
+    /* The other 429, and the one the old wording was actually right about:
+       per-IP request throttling, which does clear in about a minute. Same
+       status code, opposite advice - which is why the code is read and not
+       just the status. */
+    over_request_rate_limit:
+      'Too many attempts from this device. Wait a minute and try again.',
+
+    /* GoTrue refuses whole domains, including example.com and the disposable
+       providers. The address can be perfectly well-formed and still be
+       rejected, so "Could not create that account." leaves the player with a
+       form they cannot fix by looking at it. */
+    email_address_invalid:
+      'That email address was refused. Try a different one.',
+
+    user_already_exists: 'That email already has an account. Sign in instead.',
+    email_exists: 'That email already has an account. Sign in instead.',
+    /* PostgREST unique_violation - the username unique index in schema.sql. */
+    '23505': 'That name is already taken.',
+
+    email_not_confirmed:
+      'This account is not confirmed yet. Check your inbox and your spam folder for the link.',
+    invalid_credentials: 'That email and password do not match an account.',
+    weak_password: 'Password must be at least ' + PASSWORD_MIN + ' characters.',
+    validation_failed: 'Check the form and try again.',
+
+    signup_disabled: 'Account creation is switched off on this server.',
+    email_provider_disabled: 'Email sign-up is switched off on this server.'
+  };
+
   /* Error text that is safe to put in front of a player: one line, no stack,
      no call log, no internal identifiers. Anything unrecognised collapses to a
      generic sentence rather than leaking a backend message verbatim. */
   function friendly(err, fallback) {
+    /* The code first, when there is one. Substring matching stays below as the
+       fallback: network failures never carry a code, and an unrecognised code
+       should still get whatever the prose can be read for. */
+    var code = (err && err.code) ? String(err.code) : '';
+    if (code && Object.prototype.hasOwnProperty.call(CODE_MESSAGES, code)) {
+      return CODE_MESSAGES[code];
+    }
+
     var raw = '';
     if (!err) raw = '';
     else if (typeof err === 'string') raw = err;
@@ -82,8 +142,13 @@
 
     var low = raw.toLowerCase();
     if (!raw) return fallback || 'Something went wrong. Try again.';
+    /* An uncoded rate limit of unknown kind. Name both possibilities rather
+       than pick one and be wrong half the time. */
+    if (low.indexOf('email rate limit') >= 0 || low.indexOf('email send rate') >= 0) {
+      return CODE_MESSAGES.over_email_send_rate_limit;
+    }
     if (low.indexOf('rate limit') >= 0 || low.indexOf('too many') >= 0) {
-      return 'Too many attempts. Wait a minute and try again.';
+      return 'Too many attempts right now. Wait a few minutes and try again.';
     }
     if (low.indexOf('invalid login') >= 0 || low.indexOf('invalid credentials') >= 0) {
       return 'That email and password do not match an account.';
@@ -196,6 +261,26 @@
             ('HTTP ' + res.status)
           );
           e.status = res.status;
+          /* The machine-readable code, carried alongside the prose because the
+             prose is not a contract and the status alone is ambiguous: GoTrue
+             answers 429 for BOTH "this device is hammering us" and "the
+             project's confirmation-email quota is spent", and those two need
+             opposite advice.
+
+             It has to come out of the BODY. Supabase also puts it in an
+             `x-sb-error-code` response header, which would be the tidier
+             source, but the project sends no Access-Control-Expose-Headers -
+             verified against the live project on 2026-09-16 - so a
+             cross-origin fetch() cannot read that header at all. The body is
+             the only channel a browser has.
+
+             GoTrue: { code: 429 (number), error_code: "over_email_send_rate_limit" }
+             PostgREST: { code: "23505" (string SQLSTATE), message: ... }
+             so `code` is only trusted when it is a string, which is exactly
+             the case where it is a SQLSTATE and not a repeat of the status. */
+          var code = (data && data.error_code) || '';
+          if (!code && data && typeof data.code === 'string') code = data.code;
+          e.code = String(code);
           throw e;
         }
         return data;

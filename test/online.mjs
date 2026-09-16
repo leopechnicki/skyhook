@@ -563,6 +563,133 @@ const TOKEN_OK = {
 }
 
 /* ==========================================================================
+ * 10b. A REFUSED sign-up says something true.
+ * ========================================================================
+ * The happy paths above all had a cooperative server. Leo's did not: on
+ * 2026-09-16 he tried to put his name on the board and
+ *   POST /auth/v1/signup -> 429
+ *   {"code":429,"error_code":"over_email_send_rate_limit","msg":"email rate limit exceeded"}
+ * because this project is on Supabase's built-in SMTP, whose confirmation-mail
+ * quota is a handful an hour and had been spent. The player was answered
+ * "Too many attempts. Wait a minute and try again." - which blamed him for a
+ * first attempt, and named a timescale ten to sixty times too short, so
+ * following the advice returned him to the identical wall. That is how a
+ * working button becomes "I tried to create a login and it didn't work".
+ *
+ * Every mock in this repo auto-confirmed, so the whole class was invisible to
+ * CI. These are the assertions that make it visible, and the sharpest one is
+ * the pair: BOTH rate limits are HTTP 429 and they must not produce the same
+ * sentence, which is only possible if error_code is actually being read.
+ * ======================================================================== */
+{
+  const refuses = async (status, body, fn) => {
+    const s = makeSandbox();
+    s.Online.configure(CONFIG);
+    s.route(() => ({ status, body }));
+    let msg = '';
+    await (fn ? fn(s) : s.Online.signUp('newpilot', 'new@pilot.io', 'hunter2hunter2'))
+      .then(() => { msg = '<RESOLVED - no error raised>'; }, e => { msg = e.message; });
+    return msg;
+  };
+
+  const emailLimit = await refuses(429, {
+    code: 429, error_code: 'over_email_send_rate_limit', msg: 'email rate limit exceeded'
+  });
+  check('a rate-limited sign-up is refused, not silently swallowed',
+    emailLimit.indexOf('<RESOLVED') !== 0, emailLimit);
+  check('a rate-limited sign-up does NOT tell the player to wait "a minute"',
+    !/a minute/i.test(emailLimit), JSON.stringify(emailLimit));
+  check('a rate-limited sign-up names a timescale the player can act on',
+    /later|hour/i.test(emailLimit), JSON.stringify(emailLimit));
+  check('a rate-limited sign-up does not blame the player for "too many attempts"',
+    !/too many attempts/i.test(emailLimit), JSON.stringify(emailLimit));
+  check('a rate-limited sign-up says the game is still playable without an account',
+    /keep playing|without an account/i.test(emailLimit), JSON.stringify(emailLimit));
+  check('a rate-limited sign-up never shows the backend string verbatim',
+    !/email rate limit exceeded/i.test(emailLimit), JSON.stringify(emailLimit));
+
+  /* The other 429. Same status, different cause, opposite advice - this pair
+     is what proves error_code is read rather than the status guessed at. */
+  const reqLimit = await refuses(429, {
+    code: 429, error_code: 'over_request_rate_limit', msg: 'Request rate limit reached'
+  }, s => s.Online.signIn('leo@pilot.io', 'hunter2hunter2'));
+  check('the per-device 429 and the email-quota 429 do NOT say the same thing',
+    reqLimit !== emailLimit, JSON.stringify([reqLimit, emailLimit]));
+  check('the per-device 429 is the one that may honestly say "a minute"',
+    /minute/i.test(reqLimit), JSON.stringify(reqLimit));
+
+  /* GoTrue rejects whole domains - example.com among them, confirmed against
+     the live project. Well-formed and still refused, so the generic fallback
+     leaves the player staring at a form with nothing wrong on it. */
+  const badEmail = await refuses(400, {
+    code: 400, error_code: 'email_address_invalid',
+    msg: 'Email address "a@example.com" is invalid'
+  });
+  check('a domain the server refuses is reported as an email problem',
+    /email address was refused|different one/i.test(badEmail), JSON.stringify(badEmail));
+  check('a refused domain does not echo the address back from the server',
+    badEmail.indexOf('@') < 0, JSON.stringify(badEmail));
+
+  const dup = await refuses(422, {
+    code: 422, error_code: 'user_already_exists', msg: 'User already registered'
+  });
+  check('an address that already has an account is told to sign in instead',
+    /sign in/i.test(dup), JSON.stringify(dup));
+
+  const unconfirmed = await refuses(400, {
+    code: 400, error_code: 'email_not_confirmed', msg: 'Email not confirmed'
+  }, s => s.Online.signIn('leo@pilot.io', 'hunter2hunter2'));
+  check('an unconfirmed account is told where the link is, spam included',
+    /not confirmed/i.test(unconfirmed) && /spam/i.test(unconfirmed),
+    JSON.stringify(unconfirmed));
+
+  const off = await refuses(422, {
+    code: 422, error_code: 'signup_disabled', msg: 'Signups not allowed for this instance'
+  });
+  check('sign-ups being switched off is stated, not disguised as a failure',
+    /switched off/i.test(off), JSON.stringify(off));
+
+  /* PostgREST speaks SQLSTATE in `code` as a STRING, where GoTrue puts the
+     numeric HTTP status. Only the string form may be trusted as a code, or
+     every 429 would be looked up under the key "429". */
+  const dupRow = await refuses(409, {
+    code: '23505', message: 'duplicate key value violates unique constraint'
+  }, s => s.Online.signIn('leo@pilot.io', 'hunter2hunter2'));
+  check('a PostgREST unique violation is read as a taken name, not a raw SQL line',
+    /already taken/i.test(dupRow), JSON.stringify(dupRow));
+
+  /* An error_code nobody has seen before must still land somewhere sane. */
+  const unknown = await refuses(500, {
+    code: 500, error_code: 'some_future_code_we_do_not_know', msg: 'internal boom'
+  });
+  check('an unrecognised error code falls back to a generic line, not a leak',
+    unknown.length > 0 && !/internal boom|some_future_code/i.test(unknown),
+    JSON.stringify(unknown));
+
+  /* A dead network carries no code at all: the substring path below the table
+     still has to work. */
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  s.route(() => ({ networkError: true }));
+  let netMsg = '';
+  await s.Online.signUp('newpilot', 'new@pilot.io', 'hunter2hunter2')
+    .then(() => {}, e => { netMsg = e.message; });
+  check('an error with no code at all still gets a human line',
+    /cannot reach|saved on this device/i.test(netMsg), JSON.stringify(netMsg));
+
+  /* Every line above is rendered into a 12px centred paragraph, and
+     ui_online.js truncates at 180 characters. A message that gets cut mid-word
+     is not the message that was reviewed. */
+  const allMessages = [emailLimit, reqLimit, badEmail, dup, unconfirmed, off, dupRow, unknown, netMsg];
+  check('no player-facing line is long enough to be truncated at 180 chars',
+    allMessages.every(m => m.length <= 180),
+    JSON.stringify(allMessages.map(m => m.length)));
+  check('no player-facing line contains an internal identifier',
+    !allMessages.some(m => /_[a-z]+_[a-z]+|http|supabase|gotrue|postgrest|jwt/i.test(m)),
+    JSON.stringify(allMessages.filter(m => /_[a-z]+_[a-z]+|http|supabase|gotrue|postgrest|jwt/i.test(m))));
+}
+
+/* ==========================================================================
  * 11. The schema still says what the threat model needs it to say.
  * ========================================================================
  * These are text assertions over supabase/schema.sql. They are blunt, and
