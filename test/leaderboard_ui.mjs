@@ -72,6 +72,13 @@ const api = [];   // every call the page made to the mock project
    most real deployments have, including this game's own. */
 let confirmRequired = false;
 
+/* Set to { status, body } to make the next signup FAIL with a real GoTrue
+   error shape. Every mock in this repo auto-confirmed until 2026-09-16, which
+   is precisely why a signup that the server refuses shipped twice without
+   anybody seeing what the player is left looking at. A mock that can only
+   succeed tests only the half of the code that was never in doubt. */
+let signupFailure = null;
+
 function handleApi(req, res, body) {
   const url = req.url.replace(/^\/api/, '');
   let parsed = null;
@@ -84,6 +91,7 @@ function handleApi(req, res, body) {
   };
 
   if (url.startsWith('/auth/v1/signup')) {
+    if (signupFailure) return json(signupFailure.status, signupFailure.body);
     /* GoTrue answers a signup on a confirm-email project with a user object
        and NO tokens; that absence is exactly what Online.signUp reads as
        needsConfirmation. Returning the full SESSION here (the auto-confirm
@@ -196,6 +204,24 @@ function attachLogs(page, bucket, label, opts = {}) {
   const key = r => `${r.method()} ${r.url()}`;
   page.on('response', r => { if (r.status() === 204) noContent.add(key(r.request())); });
 
+  /* The same problem in the other direction. Chrome writes a "Failed to load
+     resource: the server responded with a status of 429" console error for
+     EVERY non-2xx fetch, including one the test asked for on purpose - and the
+     refused-signup section asks for exactly that. Forgiving it is narrow and
+     deliberate: only the signup endpoint, only a status the mock was told to
+     return, and only for a response we actually observed. A 4xx from any other
+     endpoint, or a signup 4xx nobody armed, still fails the gate. The message
+     those responses produce is asserted on screen by name in section B, so
+     nothing here is going unchecked - this only stops Chrome's narration of a
+     scripted failure from being read as a defect. */
+  const provoked = new Set();
+  page.on('response', r => {
+    if (r.status() >= 400 && signupFailure && r.status() === signupFailure.status &&
+        r.url().includes('/auth/v1/signup')) {
+      provoked.add(r.url());
+    }
+  });
+
   /* Section C deliberately points the page at a port nothing is listening on,
      so connection failures to that origin are the thing under test, not a
      defect. Nothing else may be ignored. */
@@ -207,6 +233,7 @@ function attachLogs(page, bucket, label, opts = {}) {
        not in text(), so both have to be checked to recognise the failures
        section C is deliberately causing. */
     if (expected && (m.text().includes(expected) || (m.location()?.url || '').startsWith(expected))) return;
+    if (provoked.has(m.location()?.url || '')) return;
     bucket.push(`[${label}] console: ${m.text()} @ ${m.location()?.url || '?'}`);
   });
   page.on('pageerror', e => bucket.push(`[${label}] pageerror: ${e.message}`));
@@ -384,6 +411,148 @@ async function main() {
     check('signup needing confirmation does not leave a password in the DOM',
       (await page.locator('#ol-password').inputValue()) === '');
     confirmRequired = false;
+
+    /* ---- the server REFUSES the sign-up: what is the player left with? ----
+       On 2026-09-16 Leo tried to put his name on the board and got
+         POST /auth/v1/signup -> 429
+         {"code":429,"error_code":"over_email_send_rate_limit",...}
+       because this project uses Supabase's built-in SMTP, whose confirmation
+       mail quota is a few an hour and was spent. Nothing he typed was wrong.
+       The old answer - "Too many attempts. Wait a minute and try again." -
+       blamed him for a first attempt and named a timescale far too short, so
+       doing as told returned him to the same wall. Hence "I tried to create a
+       login and it didn't work".
+
+       The viewport is deliberately SHORT here, and the exact number matters.
+       #ol-auth-msg is the LAST element in the auth view - below the button
+       that was just pressed - inside a panel that is `max-height: 100%;
+       overflow-y: auto`. On a tall window the message is visible whatever the
+       code does, so a test run at 900px proves nothing about it. Measured on
+       Chrome at 390px wide with the message this project actually sends:
+
+         height >= 460   panel does not overflow, message visible either way
+         height == 420   panel overflows, but clicking the button auto-scrolls
+                         far enough that the message lands in view anyway
+         height <= 380   message renders BELOW the panel's visible box unless
+                         something scrolls it there
+
+       360 sits inside that last band with room to spare, so this assertion
+       genuinely goes red if revealAuthMsg() is removed - verified by removing
+       it. A player on a phone with the browser chrome taking a third of the
+       screen is in that band. */
+    await page.setViewportSize({ width: 390, height: 360 });
+    signupFailure = {
+      status: 429,
+      body: { code: 429, error_code: 'over_email_send_rate_limit', msg: 'email rate limit exceeded' }
+    };
+    await page.locator('#ol-toggle').click();
+    await page.locator('#ol-username').fill('leopilot');
+    await page.locator('#ol-email').fill('leo.pilot@example.com');
+    await page.locator('#ol-password').fill('hunter2hunter2');
+    await page.locator('#ol-submit').click();
+
+    let settled = true;
+    try {
+      await page.waitForFunction(
+        'document.getElementById("ol-submit").disabled === false', null, { timeout: 8000 });
+    } catch { settled = false; }
+    await wait(300);
+
+    check('a refused sign-up gives the button back (not a dead or spinning control)', settled);
+
+    const refusedMsg = ((await page.locator('#ol-auth-msg').textContent()) || '').trim();
+    check('a refused sign-up says something at all', refusedMsg.length > 0, JSON.stringify(refusedMsg));
+    check('a refused sign-up is styled as an error, not as neutral chatter',
+      await page.locator('#ol-auth-msg').evaluate(n => n.classList.contains('is-error')));
+    check('a refused sign-up is announced to assistive tech',
+      (await page.locator('#ol-auth-msg').getAttribute('role')) === 'alert');
+    check('a rate-limited sign-up drops the "wait a minute" advice that sent Leo back into the wall',
+      !/a minute/i.test(refusedMsg), JSON.stringify(refusedMsg));
+    check('a rate-limited sign-up gives a timescale and a way out',
+      /later/i.test(refusedMsg) && /keep playing|without an account/i.test(refusedMsg),
+      JSON.stringify(refusedMsg));
+    check('a rate-limited sign-up never shows the raw backend string',
+      !/rate limit exceeded|429|error_code/i.test(refusedMsg), JSON.stringify(refusedMsg));
+
+    /* The regression that matters as much as the wording: the message has to
+       be ON SCREEN. It is the last node in a scrollable panel, so unless it is
+       scrolled to it renders below the visible box and the player sees a form
+       that simply did nothing. */
+    const msgInView = await page.evaluate(`(() => {
+      const m = document.getElementById('ol-auth-msg');
+      const p = document.querySelector('.ol-panel');
+      const mr = m.getBoundingClientRect(), pr = p.getBoundingClientRect();
+      return {
+        inPanel: mr.top >= pr.top - 1 && mr.bottom <= pr.bottom + 1,
+        inWindow: mr.top >= 0 && mr.bottom <= window.innerHeight,
+        msg: [Math.round(mr.top), Math.round(mr.bottom)],
+        panel: [Math.round(pr.top), Math.round(pr.bottom)],
+        win: window.innerHeight
+      };
+    })()`);
+    check('the refusal is scrolled into view, not painted below the fold',
+      msgInView.inPanel && msgInView.inWindow, JSON.stringify(msgInView));
+
+    check('a refused sign-up keeps the player on CREATE ACCOUNT',
+      (await page.locator('#ol-username').isVisible()) === true);
+    check('a refused sign-up does not make the player retype what they entered',
+      (await page.locator('#ol-username').inputValue()) === 'leopilot' &&
+      (await page.locator('#ol-email').inputValue()) === 'leo.pilot@example.com');
+    check('a refused sign-up leaves the player signed out',
+      (await page.evaluate('window.__SKYHOOK.game.online.signedIn')) === false);
+    check('a refused sign-up persists no session on the device',
+      !(await page.evaluate(
+        `(() => { try { return localStorage.getItem('skyhook.session') || ''; } catch (e) { return 'ERR'; } })()`
+      )).includes('access_token'));
+
+    /* A refused account must not cost the player the game. */
+    await page.keyboard.press('Escape');
+    await wait(200);
+    check('Escape still closes the panel after a refused sign-up',
+      (await page.locator('#ol').isVisible()) === false);
+    await page.evaluate('window.__SKYHOOK.skipTutorial(true); window.__SKYHOOK.tap();');
+    await wait(300);
+    check('the game still starts after a refused sign-up',
+      (await page.evaluate('window.__SKYHOOK.game.state')) === 'playing',
+      await page.evaluate('window.__SKYHOOK.game.state'));
+    await page.evaluate(`window.__SKYHOOK.game.die('fell')`);
+    await wait(400);
+
+    /* ---- a domain the server refuses: its own line, not the generic one ----
+       GoTrue turns away whole domains (example.com and the disposable
+       providers among them). The address is well formed, so "Could not create
+       that account." leaves the player with a form they cannot fix by looking
+       at it. */
+    await page.setViewportSize({ width: 1280, height: 900 });
+    signupFailure = {
+      status: 400,
+      body: { code: 400, error_code: 'email_address_invalid', msg: 'Email address "x@example.com" is invalid' }
+    };
+    await page.evaluate(`window.SK.UI.open('auth')`);
+    await wait(300);
+    await page.locator('#ol-toggle').click();
+    await page.locator('#ol-username').fill('leopilot');
+    await page.locator('#ol-email').fill('leo.pilot@example.com');
+    await page.locator('#ol-password').fill('hunter2hunter2');
+    await page.locator('#ol-submit').click();
+    try {
+      await page.waitForFunction(
+        'document.getElementById("ol-submit").disabled === false', null, { timeout: 8000 });
+    } catch { /* the assertion below reports it */ }
+    await wait(300);
+    const badEmailMsg = ((await page.locator('#ol-auth-msg').textContent()) || '').trim();
+    check('a server-refused email domain gets its own line, not the generic failure',
+      /email address was refused|different one/i.test(badEmailMsg), JSON.stringify(badEmailMsg));
+    check('a server-refused email domain does not echo the address back',
+      badEmailMsg.indexOf('@') < 0, JSON.stringify(badEmailMsg));
+
+    /* Hand the form back the way the rest of this file expects to find it:
+       auth view open, on SIGN IN, with a cooperative server. */
+    signupFailure = null;
+    await page.locator('#ol-toggle').click();
+    await wait(200);
+    check('the form returns to SIGN IN after the refusals',
+      (await page.locator('#ol-username').isVisible()) === false);
 
     /* ---- sign in for real ---- */
     await page.locator('#ol-password').fill('hunter2hunter2');

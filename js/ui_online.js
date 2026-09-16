@@ -63,6 +63,24 @@
     }
   }
 
+  /* The auth message line is the LAST element in #ol-auth - it renders below
+     the submit button, inside a panel that is `max-height: 100%;
+     overflow-y: auto`. On a short viewport (a phone in landscape, a laptop
+     with a short window) the button the player just pressed is the last thing
+     in view and the answer to it is painted off the bottom of the scroll
+     area. A truthful message nobody can see is the same bug as no message, so
+     the answer is scrolled to whenever one is written. */
+  function revealAuthMsg() {
+    var node = el['ol-auth-msg'];
+    if (!node || !node.scrollIntoView) return;
+    /* `block: 'nearest'` scrolls the panel only if the line is genuinely out
+       of view, so a message that was already visible does not make the dialog
+       jump under the player's hands. Older engines take a boolean here and
+       ignore an object; the catch covers the ones that object to it. */
+    try { node.scrollIntoView({ block: 'nearest' }); }
+    catch (e) { try { node.scrollIntoView(false); } catch (e2) { /* ignore */ } }
+  }
+
   /* Anything that reaches a player goes through here: one line, bounded
      length, never a stack trace or a backend message verbatim. */
   function safeMessage(err, fallback) {
@@ -256,13 +274,20 @@
         showAuth('signin');
         text(el['ol-auth-msg'],
           'Account created. Confirm it from the email we just sent, then sign in.');
+        revealAuthMsg();
         return;
       }
       syncGame();
       showBoard();
     }, function (err) {
       setBusy(false);
-      text(el['ol-auth-msg'], safeMessage(err, 'Could not sign in.'), true);
+      /* The fallback has to follow the mode. "Could not sign in." on a failed
+         CREATE ACCOUNT describes an action the player did not take, which is
+         a small lie in the one place they are already confused. */
+      text(el['ol-auth-msg'], safeMessage(err, mode === 'signup'
+        ? 'Could not create that account.'
+        : 'Could not sign in.'), true);
+      revealAuthMsg();
     });
   }
 
@@ -275,6 +300,7 @@
     Online.signInWithGoogle('google').catch(function (err) {
       setBusy(false);
       text(el['ol-auth-msg'], safeMessage(err, 'Could not start Google sign-in.'), true);
+      revealAuthMsg();
     });
   }
 
