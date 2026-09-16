@@ -246,9 +246,16 @@
       setBusy(false);
       el['ol-password'].value = '';
       if (res && res.needsConfirmation) {
+        /* Order matters and is the whole bug this once had: showAuth() resets
+           the view, and resetting the view clears ol-auth-msg. Setting the
+           message first meant it was wiped in the same tick, so a player who
+           had just created an account was flipped back to a blank sign-in
+           form with nothing on screen telling them an email was sent - and
+           then their sign-in failed, because the address was unconfirmed.
+           Switch the view first, then write the message into it. */
+        showAuth('signin');
         text(el['ol-auth-msg'],
           'Account created. Confirm it from the email we just sent, then sign in.');
-        showAuth('signin');
         return;
       }
       syncGame();
