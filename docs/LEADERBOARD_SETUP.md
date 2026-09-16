@@ -55,8 +55,16 @@ public board. It is safe to run again later - running it twice changes nothing.
    **Redirect URLs**. Without this, Google sends players back to the wrong page
    after they sign in.
 
-Skipping this whole step is fine. Email and password will work on their own, and
-the "Continue with Google" button will simply say it could not start.
+Skipping this whole step is fine -- email and password work on their own -- but
+if you skip it, leave `googleSignIn: false` in `js/config.js` (it is the
+default). Set it to `true` only once Google really is switched on above.
+
+The flag exists because the button cannot fail politely: `signInWithGoogle`
+navigates the tab to Supabase, and a project with Google off answers
+`400 {"msg":"Unsupported provider: provider is not enabled"}` as raw JSON --
+the player is thrown out of the game onto a machine error. With the flag false
+the button is simply not drawn, which is the same thing the game does with the
+entire account layer when there is no config at all.
 
 ## Step 4 - Copy the two values into the game
 

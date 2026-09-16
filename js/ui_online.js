@@ -225,7 +225,7 @@
   function setBusy(on) {
     busy = on;
     el['ol-submit'].disabled = on;
-    el['ol-google'].disabled = on;
+    if (!el['ol-google'].hidden) el['ol-google'].disabled = on;
   }
 
   function onSubmit(e) {
@@ -323,7 +323,8 @@
 
     /* Two gates, both hard. Either one closed means no account layer at all -
        not a disabled button, not an error toast: absent. */
-    var configured = Online.configure(global.SKYHOOK_CONFIG);
+    var config = global.SKYHOOK_CONFIG;
+    var configured = Online.configure(config);
     if (!configured || !Online.httpOrigin()) return;
 
     game = (global.__SKYHOOK && global.__SKYHOOK.game) || null;
@@ -337,7 +338,26 @@
     el['ol-back'].addEventListener('click', function () { showBoard(); });
     el['ol-signin'].addEventListener('click', function () { showAuth('signin'); });
     el['ol-signout'].addEventListener('click', onSignOut);
-    el['ol-google'].addEventListener('click', onGoogle);
+
+    /* Google is an extra opt-in in the Supabase dashboard, not something a
+       project has by default - docs/LEADERBOARD_SETUP.md step 3 is a whole
+       trip through Google Cloud, and skipping it is explicitly allowed. On a
+       project that skipped it, pressing this button does NOT fail politely in
+       the panel: Online.signInWithGoogle navigates the tab to GoTrue, which
+       answers 400 {"msg":"Unsupported provider: provider is not enabled"} and
+       renders it as raw JSON. The player is ejected out of the game onto a
+       machine error, with the browser Back button as the only way home.
+       So the button is opt-in here too: it exists only when the config states
+       the provider actually does. Absent beats disabled, for the same reason
+       the whole account layer is absent without a config rather than greyed
+       out - an affordance that cannot work should not be drawn. */
+    if (!config || config.googleSignIn !== true) {
+      el['ol-google'].hidden = true;
+      var orRule = doc.querySelector('#ol-auth .ol-or');
+      if (orRule) orRule.hidden = true;
+    } else {
+      el['ol-google'].addEventListener('click', onGoogle);
+    }
     el['ol-form'].addEventListener('submit', onSubmit);
     el['ol-toggle'].addEventListener('click', function () {
       showAuth(mode === 'signup' ? 'signin' : 'signup');

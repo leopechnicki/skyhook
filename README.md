@@ -111,9 +111,12 @@ exists anywhere else in the codebase.
 `js/config.js` is filled in, so the deployed game at
 <https://leopechnicki.github.io/skyhook/> has a LEADERBOARD button, accounts, and
 globally ranked runs. Signing up asks for a username, an email and a password --
-nothing else. Sign-in is email/password; the Google button appears only if Google
-is enabled as a provider in the Supabase project, and it is not enabled on the
-deployment above.
+nothing else. Sign-in is email/password. The "Continue with Google" button is
+drawn only when `googleSignIn: true` in `js/config.js`, which you should set
+only after actually enabling Google as a provider -- a button pointing at a
+disabled provider navigates the player out of the game onto a raw GoTrue JSON
+error rather than failing politely. Google is not enabled on the deployment
+above, so that button is not drawn there.
 
 **Accounts remain optional, in both directions.** Playing never requires one: a
 run, a local high score and the whole game work signed out. And blanking the two

@@ -628,6 +628,14 @@ const TOKEN_OK = {
   check('js/config.js is all-or-nothing: both filled in, or both empty',
     (!!url) === (!!key), `url=${!!url} key=${!!key}`);
 
+  /* googleSignIn gates whether the "Continue with Google" button is drawn at
+     all. Only the literal true draws it, so a typo ('true', True, googleSignin)
+     silently means off - which is the SAFE direction, but it should still be a
+     declared boolean rather than an accident. */
+  const googleLine = /googleSignIn:\s*(true|false)\s*[,}\n]/.exec(committed);
+  check('js/config.js declares googleSignIn as a real boolean',
+    googleLine !== null, googleLine ? googleLine[1] : 'missing or not a boolean literal');
+
   if (url && key) {
     check('the configured supabaseUrl is an https project URL with no trailing slash',
       /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url), url);

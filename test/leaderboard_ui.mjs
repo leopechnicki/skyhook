@@ -137,12 +137,18 @@ function startServer(deadPort) {
          player would receive it, not an absence of the file. */
       const cfgUrl = (configured || dead) ? `http://127.0.0.1:${apiPort}/api` : '';
       const cfgKey = (configured || dead) ? 'anon-test-key' : '';
+      /* Only /online/ opts Google in. /dead/ deliberately leaves it out, so
+         the two halves of the opt-in are both covered without a fourth site:
+         the button is drawn where the provider exists and is ABSENT where it
+         does not. */
+      const cfgGoogle = configured;
       res.writeHead(200, { 'Content-Type': MIME['.js'] });
       res.end(
         'window.SKYHOOK_CONFIG = {\n' +
         `  supabaseUrl: '${cfgUrl}',\n` +
         `  supabaseAnonKey: '${cfgKey}',\n` +
-        '  boardLimit: 50\n' +
+        '  boardLimit: 50,\n' +
+        `  googleSignIn: ${cfgGoogle}\n` +
         '};\n'
       );
       return;
@@ -301,9 +307,11 @@ async function main() {
 
     /* ---- into the auth view ---- */
     await page.locator('#ol-signin').click();
-    check('the sign-in view offers Google',
+    check('googleSignIn:true -> the sign-in view offers Google',
       (await page.locator('#ol-google').isVisible()) === true &&
       /google/i.test(await page.locator('#ol-google').textContent()));
+    check('googleSignIn:true -> the "or" rule that separates it is shown too',
+      (await page.locator('#ol-auth .ol-or').isVisible()) === true);
     check('sign-in asks for email and password only',
       (await page.locator('#ol-email').isVisible()) === true &&
       (await page.locator('#ol-password').isVisible()) === true &&
@@ -485,8 +493,22 @@ async function main() {
       check('dead backend: a sign-in attempt reports one readable line',
         authMsg.length > 0 && authMsg.length < 120 && !/\n|Error:|TypeError/.test(authMsg), authMsg);
       check('dead backend: the form is not left stuck in a busy state',
-        (await dpage.locator('#ol-submit').isDisabled()) === false &&
-        (await dpage.locator('#ol-google').isDisabled()) === false);
+        (await dpage.locator('#ol-submit').isDisabled()) === false);
+
+      /* This site's config omits googleSignIn, which is the shape every
+         project that skipped the Google step in LEADERBOARD_SETUP.md has.
+         The button must be ABSENT rather than present-and-broken: pressing it
+         on such a project navigates the tab to a raw GoTrue 400 JSON page,
+         which is not a failure the panel can catch or apologise for. The
+         email form beside it must be untouched by its removal. */
+      check('googleSignIn off -> no Google button is drawn at all',
+        (await dpage.locator('#ol-google').isVisible()) === false);
+      check('googleSignIn off -> the "or" rule goes with it (no orphan divider)',
+        (await dpage.locator('#ol-auth .ol-or').isVisible()) === false);
+      check('googleSignIn off -> email and password sign-in is still fully there',
+        (await dpage.locator('#ol-email').isVisible()) === true &&
+        (await dpage.locator('#ol-password').isVisible()) === true &&
+        (await dpage.locator('#ol-submit').isVisible()) === true);
       check('dead backend: still signed out, not half signed in',
         (await dpage.evaluate('window.__SKYHOOK.game.online.signedIn')) === false);
 

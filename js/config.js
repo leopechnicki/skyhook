@@ -33,5 +33,13 @@ window.SKYHOOK_CONFIG = {
   supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldmZjcW55cmVrZGl4eGJzaXRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1NzQ0MjYsImV4cCI6MjEwNTE1MDQyNn0.DPaeAv6WFnAQMomXQzlMWZulkM12jqicrymSInQygOM',
 
   /* Rows shown in the board panel. */
-  boardLimit: 50
+  boardLimit: 50,
+
+  /* Show "Continue with Google"? Only set this true if Google is actually
+     switched on as a provider in Authentication -> Sign In / Providers
+     (docs/LEADERBOARD_SETUP.md step 3). It is not on this project, and a
+     button pointing at a disabled provider does not fail politely - it
+     navigates the player out of the game onto a raw GoTrue JSON error. Email
+     and password work either way. */
+  googleSignIn: false
 };
