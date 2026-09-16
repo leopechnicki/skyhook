@@ -14,5 +14,9 @@
 window.SKYHOOK_CONFIG = {
   supabaseUrl: 'https://abcdefghijklmnopqrst.supabase.co',
   supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.PLACEHOLDER.PLACEHOLDER',
-  boardLimit: 50
+  boardLimit: 50,
+
+  /* true ONLY if Google is enabled as a provider in the Supabase dashboard.
+     Left false, the "Continue with Google" button is not drawn at all. */
+  googleSignIn: false
 };
