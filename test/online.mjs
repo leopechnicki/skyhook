@@ -560,6 +560,37 @@ const TOKEN_OK = {
   const res = await s2.Online.signUp('leo', 'leo@example.com', 'hunter2hunter2');
   check('a project that requires email confirmation is handled, not treated as failure',
     res.needsConfirmation === true && res.signedIn === false && s2.Online.isSignedIn() === false);
+
+  /* Email confirmation OFF is the other normal setting, and as of the public
+     launch it is THIS project's setting: GoTrue answers the signup with a
+     full session and no mail is ever sent. Every signup assertion above this
+     one exercises the confirmation-required half, so until now the path every
+     real new player takes was the one path with nothing asserting on it.
+
+     The contract the UI depends on: signedIn true, needsConfirmation FALSE -
+     not merely falsy-by-omission, because ui_online.js branches on that exact
+     field to decide between "you are in" and "go read your email", and the
+     second of those is now advice about a message that will never arrive. */
+  const s3 = makeSandbox();
+  s3.Online.configure(CONFIG);
+  s3.route(call => {
+    if (call.url.includes('/auth/v1/signup')) return { status: 200, body: TOKEN_OK };
+    return { status: 404, body: { message: 'unexpected: ' + call.url } };
+  });
+  const res3 = await s3.Online.signUp('newpilot', 'newpilot@example.com', 'hunter2hunter2');
+  check('an auto-confirm project signs the new account straight in',
+    res3.signedIn === true && res3.needsConfirmation === false &&
+    s3.Online.isSignedIn() === true, JSON.stringify(res3));
+  check('the auto-confirmed account carries the username the player just chose',
+    s3.Online.state().username === 'newpilot', JSON.stringify(s3.Online.state()));
+  check('the auto-confirmed session is persisted, so a reload stays signed in',
+    !!s3.storage.get('skyhook.session'));
+  check('the auto-confirmed session still keeps the email off the device',
+    !String(s3.storage.get('skyhook.session')).includes('@'),
+    String(s3.storage.get('skyhook.session')));
+  check('an auto-confirm signup does NOT go looking for a profile row it just named',
+    s3.calls.filter(c => c.url.includes('/rest/v1/profiles')).length === 0,
+    s3.calls.map(c => c.url).join(' | '));
 }
 
 /* ==========================================================================

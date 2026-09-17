@@ -653,6 +653,67 @@ async function main() {
     await ctx.close();
 
     /* ==================================================================
+     * B2. Sign-up on an AUTO-CONFIRM project - the public-launch path.
+     *
+     * Email confirmation is being switched OFF for launch, so GoTrue answers
+     * /auth/v1/signup with a full session and no mail is ever sent. Every
+     * sign-up assertion above covers the OTHER half - confirmation required -
+     * which left the path every real new player is about to take as the one
+     * path with nothing watching it.
+     *
+     * The failure this rules out is not a crash. It is the quiet one: the UI
+     * showing "check your inbox" for a message that does not exist, on an
+     * account that is already usable, sending the player to wait for nothing.
+     * Fresh context on purpose - the block above signs out, and "were you
+     * already signed in?" must not be why this passes.
+     * ================================================================ */
+    {
+      const actx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const apage = await actx.newPage();
+      const alogs = [];
+      attachLogs(apage, alogs, 'autoconfirm');
+
+      await apage.goto(base + 'online/', { waitUntil: 'load' });
+      await apage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(400);
+
+      await apage.evaluate(`window.SK.UI.open('auth')`);
+      await wait(300);
+      await apage.locator('#ol-toggle').click();
+      await apage.locator('#ol-username').fill('newpilot');
+      await apage.locator('#ol-email').fill('newpilot@example.com');
+      await apage.locator('#ol-password').fill('hunter2hunter2');
+      await apage.locator('#ol-submit').click();
+      await apage.waitForFunction(
+        'document.getElementById("ol-submit").disabled === false', null, { timeout: 8000 });
+      await wait(400);
+
+      check('auto-confirm sign-up signs the new player in, with no second step',
+        (await apage.evaluate('window.__SKYHOOK.game.online.signedIn')) === true);
+      check('auto-confirm sign-up keeps the name the player just chose',
+        (await apage.evaluate('window.__SKYHOOK.game.online.username')) === 'newpilot',
+        String(await apage.evaluate('window.__SKYHOOK.game.online.username')));
+
+      const acMsg = ((await apage.locator('#ol-auth-msg').textContent()) || '').trim();
+      check('auto-confirm sign-up never sends the player to an inbox for a mail that is never sent',
+        !/inbox|spam|confirm/i.test(acMsg), JSON.stringify(acMsg));
+      check('auto-confirm sign-up lands on the board, not back on a form',
+        (await apage.locator('#ol-username').isVisible()) === false &&
+        (await apage.locator('#ol-signout').isVisible()) === true);
+      check('auto-confirm sign-up says who is now signed in',
+        /newpilot/i.test(await apage.locator('#ol-account').textContent()),
+        await apage.locator('#ol-account').textContent());
+      check('auto-confirm sign-up leaves no password in the DOM',
+        (await apage.locator('#ol-password').inputValue()) === '');
+      check('auto-confirm sign-up persists the session, so a reload stays signed in',
+        !!(await apage.evaluate('localStorage.getItem("skyhook.session")')));
+      check('auto-confirm sign-up raised no page errors', alogs.length === 0,
+        alogs.join(' | '));
+
+      await actx.close();
+    }
+
+    /* ==================================================================
      * C. Configured, but the backend is DOWN.
      *
      * The highest-risk regression in this whole feature, and the one a
