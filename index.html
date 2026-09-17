@@ -92,15 +92,29 @@
         <p class="ol-or"><span>or</span></p>
 
         <form id="ol-form" novalidate autocomplete="on">
+          <!-- Two names with two different jobs, and players ran them together:
+               the USERNAME is the public name on the board, the EMAIL is the
+               login credential. A form that says only "Email" gives someone who
+               chose a username no reason to think the two are different, so the
+               labels and the hint lines say which is which - and js/ui_online.js
+               rewrites them per mode, because the sentence that helps on SIGN IN
+               is not the one that helps on CREATE ACCOUNT.
+               The markup below is the SIGN IN wording: that is the view the
+               overlay opens in, so it must read correctly before any script
+               touches it. -->
           <div class="ol-field" id="ol-username-field" hidden>
-            <label for="ol-username">Username</label>
+            <label for="ol-username" id="ol-username-label">Username</label>
             <input type="text" id="ol-username" name="username" autocomplete="username"
-                   maxlength="16" spellcheck="false" placeholder="3-16 letters, numbers or _">
+                   maxlength="16" spellcheck="false" aria-describedby="ol-username-hint"
+                   placeholder="3-16 letters, numbers or _">
+            <p class="ol-hint" id="ol-username-hint">Your public name on the leaderboard.</p>
           </div>
           <div class="ol-field">
-            <label for="ol-email">Email</label>
+            <label for="ol-email" id="ol-email-label">Email you signed up with</label>
             <input type="email" id="ol-email" name="email" autocomplete="email"
-                   spellcheck="false" placeholder="you@example.com">
+                   spellcheck="false" aria-describedby="ol-email-hint"
+                   placeholder="you@example.com">
+            <p class="ol-hint" id="ol-email-hint">Not your leaderboard name.</p>
           </div>
           <div class="ol-field">
             <label for="ol-password">Password</label>

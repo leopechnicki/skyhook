@@ -119,8 +119,11 @@ paused. Free projects pause after a week with no traffic; open the Supabase
 dashboard and click **Restore**. Either way the game keeps working and your run
 is held on your device until it can be uploaded.
 
-**"That email and password do not match an account."** If you just signed up and
-left email confirmation on, click the link in the email first.
+**"No account matches that email and password."** Two causes, in order of how
+often they happen. Either the box was given the LEADERBOARD NAME instead of the
+address - sign-in is by email, the username is only the public name on the board
+- or the account was created with email confirmation left on and the link in the
+email has not been clicked yet.
 
 **Google sign-in bounces back signed out.** Almost always the **Site URL** /
 **Redirect URLs** in step 3.5, or a redirect URI in Google Cloud that does not

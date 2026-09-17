@@ -329,6 +329,16 @@ body {
   border-radius: 9px;
 }
 .ol-field input::placeholder { color: rgba(150, 190, 220, 0.38); }
+/* The line that tells the player which of the two names this box wants. Quiet
+   on purpose - it must be readable without competing with the label above it
+   or the error line below the button. Not uppercase: unlike a label it is a
+   sentence, and letter-spaced caps are slower to read. */
+.ol-field .ol-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: rgba(150, 190, 220, 0.6);
+}
 .ol-field input:focus {
   outline: none;
   border-color: rgba(53, 230, 255, 0.75);

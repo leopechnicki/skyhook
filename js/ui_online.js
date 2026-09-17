@@ -33,13 +33,47 @@
     'ol-google', 'ol-form', 'ol-username-field', 'ol-username', 'ol-email',
     'ol-password', 'ol-submit', 'ol-auth-msg', 'ol-toggle', 'ol-back'];
 
+  /* Labels and hint lines. These are SOFT: unlike IDS above, a missing one
+     must not switch the whole account layer off. GitHub Pages can serve a
+     cached index.html against a fresh js/ui_online.js for a while after a
+     deploy, and losing the leaderboard entirely because a hint paragraph has
+     not landed yet would be a far worse bug than the wording being stale for
+     one page load. Every read of these is null-guarded. */
+  var SOFT_IDS = ['ol-email-label', 'ol-email-hint', 'ol-username-label',
+    'ol-username-hint'];
+
   function collect() {
     for (var i = 0; i < IDS.length; i++) {
       var node = doc.getElementById(IDS[i]);
       if (!node) return false;          // markup missing: stay switched off
       el[IDS[i]] = node;
     }
+    for (var j = 0; j < SOFT_IDS.length; j++) {
+      el[SOFT_IDS[j]] = doc.getElementById(SOFT_IDS[j]) || null;
+    }
     return true;
+  }
+
+  /* The whole point of this change: which field is the public name and which
+     one is the credential. Split by mode because the useful sentence differs -
+     on SIGN IN the player has already chosen both and needs to know which one
+     the box wants; on CREATE ACCOUNT they are choosing them and need to know
+     which one strangers will see. */
+  var COPY = {
+    signin: {
+      emailLabel: 'Email you signed up with',
+      emailHint: 'Not your leaderboard name.'
+    },
+    signup: {
+      emailLabel: 'Email',
+      emailHint: 'Your login, and where the confirmation link goes. Never shown on the board.',
+      usernameLabel: 'Username',
+      usernameHint: 'Your public name on the leaderboard.'
+    }
+  };
+
+  function setCopy(node, s) {
+    if (node) node.textContent = s;
   }
 
   /* ---------------------------------------------------------------- state */
@@ -184,6 +218,14 @@
     el['ol-title'].textContent = mode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN';
     el['ol-username-field'].hidden = mode !== 'signup';
     el['ol-submit'].textContent = mode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN';
+
+    var copy = mode === 'signup' ? COPY.signup : COPY.signin;
+    setCopy(el['ol-email-label'], copy.emailLabel);
+    setCopy(el['ol-email-hint'], copy.emailHint);
+    if (mode === 'signup') {
+      setCopy(el['ol-username-label'], COPY.signup.usernameLabel);
+      setCopy(el['ol-username-hint'], COPY.signup.usernameHint);
+    }
     el['ol-toggle'].textContent = mode === 'signup'
       ? 'I already have an account'
       : 'Create an account';
