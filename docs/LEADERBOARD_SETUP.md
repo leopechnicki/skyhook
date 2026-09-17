@@ -42,9 +42,16 @@ public board. It is safe to run again later - running it twice changes nothing.
 ## Step 3 - Turn on Google sign-in
 
 1. Left sidebar: **Authentication** -> **Sign In / Providers**.
-2. **Email** is already on. Leave it on. If you would rather people could play
-   immediately without checking their inbox, turn **Confirm email** off here -
-   your call; leaving it on is the safer default and the game handles both.
+2. **Email** is already on. Leave it on. Turn **Confirm email** off here.
+   That is not a shortcut, it is the setting the live project runs with
+   (switched off 2026-09-17), and the reason is mechanical: without your own
+   SMTP provider, Supabase's built-in mailer sends only a few messages an
+   hour, so with confirmation on the SECOND player of the hour gets
+   "email rate limit exceeded" instead of an account. With it off, sign-up
+   answers with a session immediately and no email is ever sent. The game
+   handles both settings, so flipping it back on later (say, after wiring a
+   real SMTP provider under **Project Settings -> Authentication**) needs no
+   code change.
 3. Click **Google**, switch it **on**, and follow the "Set up Google OAuth"
    link Supabase shows you. It walks you through Google Cloud and gives you a
    **Client ID** and a **Client Secret** to paste back into that same panel.
