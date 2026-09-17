@@ -66,7 +66,14 @@
     },
     signup: {
       emailLabel: 'Email',
-      emailHint: 'Your login, and where the confirmation link goes. Never shown on the board.',
+      /* No promise about a confirmation link here: the live project has
+         Confirm email switched OFF (2026-09-17) precisely because the
+         built-in SMTP only sends a few mails an hour and every sign-up
+         was burning one. The client cannot know the server's setting
+         until it answers, so this line says only what is true in BOTH
+         configurations - the auth message after submit already tells
+         the confirmation story on projects that require it. */
+      emailHint: 'Your login. Never shown on the board.',
       usernameLabel: 'Username',
       usernameHint: 'Your public name on the leaderboard.'
     }
