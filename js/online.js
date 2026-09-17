@@ -114,7 +114,13 @@
 
     email_not_confirmed:
       'This account is not confirmed yet. Check your inbox and your spam folder for the link.',
-    invalid_credentials: 'That email and password do not match an account.',
+    /* The commonest way to land here is not a typo in the password: it is
+       having typed the LEADERBOARD NAME into a box that authenticates by
+       email. Restating "that email and password are wrong" to someone who
+       believes they typed their username correctly is true and useless, so
+       the line names the mistake instead of describing the symptom. */
+    invalid_credentials:
+      'No account matches that email and password. Sign in with your email address, not your leaderboard name.',
     weak_password: 'Password must be at least ' + PASSWORD_MIN + ' characters.',
     validation_failed: 'Check the form and try again.',
 
@@ -151,7 +157,10 @@
       return 'Too many attempts right now. Wait a few minutes and try again.';
     }
     if (low.indexOf('invalid login') >= 0 || low.indexOf('invalid credentials') >= 0) {
-      return 'That email and password do not match an account.';
+      /* Read from the table rather than repeated, so the coded path and this
+         substring fallback cannot drift into telling a player two different
+         stories about the same refusal. */
+      return CODE_MESSAGES.invalid_credentials;
     }
     if (low.indexOf('already registered') >= 0 || low.indexOf('already exists') >= 0 ||
         low.indexOf('duplicate key') >= 0) {

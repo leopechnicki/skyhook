@@ -79,6 +79,12 @@ let confirmRequired = false;
    succeed tests only the half of the code that was never in doubt. */
 let signupFailure = null;
 
+/* The same lever for SIGN IN. Every mock here answered /auth/v1/token with a
+   valid session, so the refusal a real player hits most often - wrong
+   credentials, usually because the leaderboard name went into the email box -
+   had never once been rendered in a browser under test. */
+let signinFailure = null;
+
 function handleApi(req, res, body) {
   const url = req.url.replace(/^\/api/, '');
   let parsed = null;
@@ -100,7 +106,10 @@ function handleApi(req, res, body) {
       ? { id: 'user-uuid-2', email: (parsed && parsed.email) || '', confirmation_sent_at: '2026-09-16T18:00:00Z' }
       : SESSION);
   }
-  if (url.startsWith('/auth/v1/token')) return json(200, SESSION);
+  if (url.startsWith('/auth/v1/token')) {
+    if (signinFailure) return json(signinFailure.status, signinFailure.body);
+    return json(200, SESSION);
+  }
   if (url.startsWith('/auth/v1/logout')) { res.writeHead(204).end(); return; }
   if (url.startsWith('/auth/v1/user')) return json(200, SESSION.user);
   if (url.startsWith('/rest/v1/profiles')) return json(200, [{ username: 'leo' }]);
@@ -218,6 +227,10 @@ function attachLogs(page, bucket, label, opts = {}) {
   page.on('response', r => {
     if (r.status() >= 400 && signupFailure && r.status() === signupFailure.status &&
         r.url().includes('/auth/v1/signup')) {
+      provoked.add(r.url());
+    }
+    if (r.status() >= 400 && signinFailure && r.status() === signinFailure.status &&
+        r.url().includes('/auth/v1/token')) {
       provoked.add(r.url());
     }
   });
@@ -357,6 +370,27 @@ async function main() {
       (await page.locator('#ol-password').isVisible()) === true &&
       (await page.locator('#ol-username').isVisible()) === false);
 
+    /* ---- which of the two names does this box want? ----
+       Leo signed up choosing a USERNAME, came back, and was asked for an
+       EMAIL. Nothing on the form said those were different things, and every
+       public player walks into the same wall. Supabase authenticates by email
+       and must keep doing so - a username -> email lookup open to the public
+       would turn the leaderboard into an address list - so the form has to be
+       the thing that is unambiguous. These assertions are what stops the
+       wording quietly reverting to a bare "Email". */
+    const signinEmailLabel = (await page.locator('#ol-email-label').textContent()).trim();
+    check('the sign-in email label ties the box to the signup, not the board',
+      /signed up/i.test(signinEmailLabel), JSON.stringify(signinEmailLabel));
+    check('the sign-in email field says it is NOT the leaderboard name',
+      /not your leaderboard name/i.test(
+        (await page.locator('#ol-email-hint').textContent()).trim()),
+      JSON.stringify((await page.locator('#ol-email-hint').textContent()).trim()));
+    check('the sign-in email hint is wired to the input for screen readers',
+      (await page.locator('#ol-email').getAttribute('aria-describedby')) === 'ol-email-hint');
+    check('the email box still expects an address (type=email keeps the @ keyboard)',
+      (await page.locator('#ol-email').getAttribute('type')) === 'email' &&
+      (await page.locator('#ol-email').getAttribute('placeholder')).includes('@'));
+
     await page.locator('#ol-toggle').click();
     check('the create-account view asks for exactly username, email, password',
       (await page.locator('#ol-username').isVisible()) === true &&
@@ -367,10 +401,32 @@ async function main() {
     check('create-account tells the browser it is a NEW password (password managers)',
       (await page.locator('#ol-password').getAttribute('autocomplete')) === 'new-password');
 
+    /* On CREATE ACCOUNT the player is CHOOSING both, so the useful split is
+       which one strangers will see and which one logs them in. */
+    check('create-account says the username is the public name on the board',
+      /public/i.test(await page.locator('#ol-username-hint').textContent()) &&
+      /leaderboard/i.test(await page.locator('#ol-username-hint').textContent()),
+      JSON.stringify((await page.locator('#ol-username-hint').textContent()).trim()));
+    check('create-account says the email is the login and is never shown publicly',
+      /login/i.test(await page.locator('#ol-email-hint').textContent()) &&
+      /never shown/i.test(await page.locator('#ol-email-hint').textContent()),
+      JSON.stringify((await page.locator('#ol-email-hint').textContent()).trim()));
+    check('the username hint is wired to its input for screen readers',
+      (await page.locator('#ol-username').getAttribute('aria-describedby')) === 'ol-username-hint');
+    check('the two hints on CREATE ACCOUNT do not say the same thing',
+      (await page.locator('#ol-username-hint').textContent()) !==
+      (await page.locator('#ol-email-hint').textContent()));
+
     await page.locator('#ol-toggle').click();
     check('toggling back returns to sign-in',
       (await page.locator('#ol-username').isVisible()) === false &&
       (await page.locator('#ol-password').getAttribute('autocomplete')) === 'current-password');
+    /* The copy is rewritten per mode, so it has to survive going BACK too - a
+       sign-in form still carrying the create-account wording would be the same
+       bug again, pointing the other way. */
+    check('toggling back also restores the sign-in wording on the email field',
+      (await page.locator('#ol-email-label').textContent()).trim() === signinEmailLabel &&
+      /not your leaderboard name/i.test(await page.locator('#ol-email-hint').textContent()));
 
     /* ---- SPACE is a character here, not a thruster ----
        Before accounts there was no field to type into and SPACE could safely
@@ -384,6 +440,37 @@ async function main() {
       stateWhileTyping === 'title', `state=${stateWhileTyping}`);
     check('SPACE typed into the password field lands in the field',
       typed === 'hunter2 hunter2', JSON.stringify(typed));
+
+    /* ---- Leo's actual path, end to end ----
+       Sign up choosing the name "leo", come back, meet a box labelled Email,
+       type "leo" into it. The server answers invalid_credentials and whatever
+       is painted next is the entire experience. It used to be "That email and
+       password do not match an account.", which to someone certain they typed
+       their name correctly reads as "the computer is broken". The rendered
+       line must name the mix-up, not restate the refusal. */
+    signinFailure = {
+      status: 400,
+      body: { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' }
+    };
+    await page.locator('#ol-email').fill('leo');
+    await page.locator('#ol-password').fill('hunter2hunter2');
+    await page.locator('#ol-submit').click();
+    await page.waitForFunction(
+      'document.getElementById("ol-submit").disabled === false', null, { timeout: 8000 });
+    await wait(150);
+    const credMsg = ((await page.locator('#ol-auth-msg').textContent()) || '').trim();
+    check('a username typed into the email box gets an answer that names the mix-up',
+      /leaderboard name/i.test(credMsg), JSON.stringify(credMsg));
+    check('the failed sign-in line is rendered as an error, not as neutral status',
+      (await page.locator('#ol-auth-msg').getAttribute('class') || '').includes('is-error'));
+    check('a failed sign-in leaves the player signed out and still on sign-in',
+      (await page.evaluate('window.__SKYHOOK.game.online.signedIn')) === false &&
+      (await page.locator('#ol-username').isVisible()) === false);
+    check('a failed sign-in keeps the typed address so it can be corrected',
+      (await page.locator('#ol-email').inputValue()) === 'leo');
+    check('a failed sign-in never shows the backend string verbatim',
+      !/invalid login credentials|invalid_credentials/i.test(credMsg), JSON.stringify(credMsg));
+    signinFailure = null;
 
     /* ---- a project with "Confirm email" ON: the player must be TOLD ----
        The regression this guards is invisible to every other assertion here:

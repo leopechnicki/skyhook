@@ -689,6 +689,35 @@ const TOKEN_OK = {
   check('a PostgREST unique violation is read as a taken name, not a raw SQL line',
     /already taken/i.test(dupRow), JSON.stringify(dupRow));
 
+  /* The sign-in refusal a player actually hits, and the reason it needed
+     rewording: they signed up choosing a USERNAME and the form then asks for
+     an EMAIL. The old line - "That email and password do not match an
+     account." - is a true restatement that leaves someone who is certain they
+     typed their name right with nothing to do but type it again. GoTrue
+     authenticates by email only and deliberately cannot be asked to resolve a
+     username (a public username -> email lookup is an email-enumeration hole
+     against every name on the board), so the fix has to be the sentence. */
+  const badCreds = await refuses(400, {
+    code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials'
+  }, s => s.Online.signIn('leo', 'hunter2hunter2'));
+  check('a failed sign-in points at the email/leaderboard-name mix-up',
+    /leaderboard name/i.test(badCreds), JSON.stringify(badCreds));
+  check('a failed sign-in says which of the two the box wants',
+    /email/i.test(badCreds), JSON.stringify(badCreds));
+  check('a failed sign-in stays short enough to read in the panel',
+    badCreds.length <= 130, `${badCreds.length} chars`);
+  check('a failed sign-in never hints WHICH half was wrong (no account oracle)',
+    !/password (is|was) (wrong|incorrect)|no such (user|account|email)/i.test(badCreds),
+    JSON.stringify(badCreds));
+
+  /* Same refusal reaching the substring fallback instead of the code table -
+     an older GoTrue, or a proxy that drops error_code. One wording, or the
+     line a player sees depends on which server answered them. */
+  const badCredsUncoded = await refuses(400, { msg: 'Invalid login credentials' },
+    s => s.Online.signIn('leo', 'hunter2hunter2'));
+  check('the coded and uncoded sign-in refusals are the SAME sentence',
+    badCredsUncoded === badCreds, JSON.stringify([badCreds, badCredsUncoded]));
+
   /* An error_code nobody has seen before must still land somewhere sane. */
   const unknown = await refuses(500, {
     code: 500, error_code: 'some_future_code_we_do_not_know', msg: 'internal boom'
@@ -711,7 +740,8 @@ const TOKEN_OK = {
   /* Every line above is rendered into a 12px centred paragraph, and
      ui_online.js truncates at 180 characters. A message that gets cut mid-word
      is not the message that was reviewed. */
-  const allMessages = [emailLimit, reqLimit, badEmail, dup, unconfirmed, off, dupRow, unknown, netMsg];
+  const allMessages = [emailLimit, reqLimit, badEmail, dup, unconfirmed, off, dupRow,
+    badCreds, badCredsUncoded, unknown, netMsg];
   check('no player-facing line is long enough to be truncated at 180 chars',
     allMessages.every(m => m.length <= 180),
     JSON.stringify(allMessages.map(m => m.length)));
