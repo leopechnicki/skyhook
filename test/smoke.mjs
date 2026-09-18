@@ -231,20 +231,36 @@ async function main() {
 
     /* ---------- 4. restart ---------- */
     /* What "cleanly" has to mean: the RUN COUNTERS were reset, not that the
-       new run has literally scored nothing yet. The old assertion demanded
-       score === 0 after a 200 ms settle and was therefore flaky by
-       construction - a shard can sit within pickup range of the opening orbit,
-       so a perfectly clean restart legitimately reads score 25 with hooks 0
-       (score only moves on a hook, game.js:759, or a shard, game.js:949).
-       Assert the reset instead: a carried-over run would show the previous
-       hooks (26) and altitude (560 m), which these bounds exclude outright. */
+       new run has literally scored nothing yet. An assertion of score === 0
+       after a 200 ms settle is flaky by construction - a shard can sit within
+       pickup range of the opening orbit, so a perfectly clean restart
+       legitimately reads score 25 with hooks 0 (score only moves on a hook,
+       game.js:759, or a shard, game.js:949).
+
+       `s.score < scoreBeforeDeath` was the guard against a CARRIED-OVER run,
+       and it was the flake, not the fix. The bot above restarts itself
+       whenever it dies inside the sustained-run window, so when it dies in
+       that window's last moments the run we then kill is a second old and
+       scores nothing: scoreBeforeDeath reads 0, and `0 < 0` is false for a
+       restart that was in fact perfectly clean. That is exactly how run
+       35363051817 went red - `scoreAtDeath=0`, every other bound satisfied.
+
+       So assert the reset with signals that do not depend on how well the
+       previous run happened to do. `simTime` is the decisive one and is new
+       here: game.js:629 zeroes the sim clock in start(), so a run that was
+       never restarted would report the ~26 s it had been alive. `combo`
+       likewise returns to 1 in _resetWorld (game.js:417). A carried-over run
+       would show the previous hooks (26), altitude (560 m), sim clock and
+       combo - four independent bounds it cannot satisfy at once. */
+    const scoreAtDeath = s.score;
     await tapCenter(page);
     await wait(200);
     s = await page.evaluate('window.__SKYHOOK.snapshot()');
     const restarted = s.state === 'playing' && s.hooks === 0 && s.altitude < 20
-      && s.score < 100 && s.score < scoreBeforeDeath;
+      && s.combo === 1 && s.simTime < 2 && s.score < 100;
     check('tap on game over restarts cleanly', restarted,
-      `state=${s.state} score=${s.score} hooks=${s.hooks} altitude=${s.altitude}`);
+      `state=${s.state} score=${s.score} hooks=${s.hooks} altitude=${s.altitude} `
+      + `combo=${s.combo} simTime=${s.simTime.toFixed(2)} prevRunScore=${scoreAtDeath}`);
 
     /* ---------- 5. persistence across a reload ---------- */
     await page.reload({ waitUntil: 'load' });
