@@ -21,6 +21,25 @@
 
 name: deploy
 
+# WHY THE SUITE APPEARS TO RUN TWICE ON A PR, AND WHY THAT MUST NOT BE
+# "OPTIMISED" AWAY
+# ------------------------------------------------------------------------
+# test.yml has its own `on: pull_request`, and this workflow ALSO runs on
+# pull_request and calls test.yml. So a PR executes the logic+browser jobs
+# twice. That looks like pure waste and it is not:
+#
+# Branch protection on `main` requires two status checks by EXACT name -
+# `logic (world + balance)` and `browser (smoke + frame time)` - with
+# enforce_admins on. A job run through `workflow_call` reports its context
+# PREFIXED with the calling job's id (`tests / logic (world + balance)`), so
+# only the standalone test.yml run can ever satisfy the required contexts.
+# Delete `pull_request` from test.yml and every future PR, including the one
+# that reverts the mistake, becomes permanently unmergeable.
+#
+# The duplication is therefore load-bearing until the protection rule is
+# renamed, which is a repo-settings change and not a code change. If you want
+# it gone: update the required contexts FIRST, confirm a PR still merges, then
+# come back here.
 on:
   push:
     branches: [main]

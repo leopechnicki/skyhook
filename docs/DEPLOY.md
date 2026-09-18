@@ -1,8 +1,16 @@
 # Deploying SKYHOOK
 
-SKYHOOK is a folder of static files. It is served today from GitHub Pages and
-is being moved to **Fly.io**, app `skyhook`, region `ams` - the same pattern
-already running for `leopechnicki/safirdj`.
+SKYHOOK is a folder of static files. It is served from **Fly.io**, app
+`skyhook-game`, region `ams` - the same pattern already running for
+`leopechnicki/safirdj`. The app name is `skyhook-game` and not `skyhook`
+because Fly app names are one global namespace and `skyhook` was taken; that
+is stated here, in the first sentence, because this is the paragraph somebody
+copies a command out of.
+
+GitHub Pages still serves the same commit at
+<https://leopechnicki.github.io/skyhook/>. That is deliberate for now - it is
+a free fallback while Fly is new - but it is not free of consequence: see
+"Two live origins" below.
 
 Netlify is not used and must never be reintroduced.
 
@@ -69,6 +77,13 @@ at <https://skyhook-game.fly.dev>, not merely that `flyctl` exited zero.
 
 ### Custom domain, when it exists
 
+**`skyhook.com` is not available and is not worth chasing.** Checked
+2026-09-18: registered since 2003, held by Skyhook Wireless through
+MarkMonitor - a corporate brand-protection registrar. That is not a domain
+that lapses or sells to a hobby project, so no plan in this repo assumes it.
+Any other name works identically; the point of `SITE_ORIGIN` is that the game
+does not care which one it turns out to be.
+
 ```sh
 fly certs add skyhook.example.com          # Fly prints the DNS records to add
 fly certs show skyhook.example.com         # poll until it says Ready
@@ -87,6 +102,39 @@ deployment. `conf/site.conf.template` uses it to rewrite `<link rel=canonical>`,
 avoids hardcoding a hostname without acquiring a build step. Its default is the
 GitHub Pages origin already written into `index.html`, so with no override the
 rewrite is a no-op and the page is byte-identical to the repo.
+
+---
+
+## Two live origins
+
+Both of these serve SKYHOOK from the same commit right now:
+
+| Origin | Served by | `<link rel=canonical>` it reports |
+|---|---|---|
+| <https://skyhook-game.fly.dev/> | Fly (this Dockerfile) | `https://skyhook-game.fly.dev/` - rewritten by `sub_filter` |
+| <https://leopechnicki.github.io/skyhook/> | GitHub Pages, source `main:/` | `https://leopechnicki.github.io/skyhook/` - the literal in the repo |
+
+Two origins each claiming to be canonical is not a crash, and while Fly is new
+the Pages copy is a genuinely useful fallback. It is also not a stable resting
+place: it splits any inbound links, and the day the two commits differ, a
+player following an old link plays a different build than the one being
+tested.
+
+The decision is Leo's, and it is a one-liner either way:
+
+```sh
+# Option A - Fly is the site. Turn Pages off; the fly.dev URL stands alone.
+gh api -X DELETE repos/leopechnicki/skyhook/pages
+
+# Option B - Pages stays as the advertised home. Then SITE_ORIGIN should be
+# set to the Pages URL so Fly stops claiming canonical, and Fly becomes a
+# mirror rather than a second front door.
+```
+
+Until that is decided, `README.md` and `package.json:homepage` continue to
+point at Pages, because that is still where the published link goes. They move
+in the same change that resolves this, not before - a README that advertises a
+URL nobody has agreed on is the worse of the two errors.
 
 ---
 
