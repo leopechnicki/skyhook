@@ -1,0 +1,22 @@
+# Line endings.
+#
+# This repo is developed on Windows (core.autocrlf=true) and deployed into a
+# Linux container. Most files do not care. These do: a CRLF in a Dockerfile
+# RUN line, an nginx config or a shell script is a syntax error or a silently
+# wrong string on the other side, and it is invisible in every editor.
+#
+# `text eol=lf` pins the working-copy form too, so the bug cannot be
+# introduced by a checkout rather than by a commit.
+* text=auto
+
+Dockerfile      text eol=lf
+*.sh            text eol=lf
+*.conf          text eol=lf
+*.template      text eol=lf
+*.yml           text eol=lf
+*.toml          text eol=lf
+.dockerignore   text eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,136 @@
+# SKYHOOK - nginx server block.
+#
+# Rendered by the stock nginx entrypoint: every ${NAME} below is replaced with
+# the environment variable of that name before nginx ever parses this file.
+# That is the whole reason the config lives in templates/ - it is how
+# SITE_ORIGIN gets in without adding a build step to a project whose entire
+# pitch is that it has no build step.
+#
+# nginx's own runtime variables ($uri, $host, ...) are NOT touched: the
+# entrypoint substitutes only names that actually exist in the environment.
+
+server {
+  # Fly routes the public 443 to this port. It must match internal_port in
+  # fly.toml; nothing else in the image knows the number.
+  listen 8080;
+  listen [::]:8080;
+  server_name _;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # The server version is not information a player needs and not information
+  # an attacker should be given for free.
+  server_tokens off;
+
+  # ---------------------------------------------------------------- health
+  # Fly's http_service check hits this. Deliberately the cheapest possible
+  # answer: it proves nginx is alive and accepting, which is the only claim a
+  # static site's health check can honestly make. It must never touch the
+  # filesystem, so a health check can never fail for a reason a player would
+  # not also have hit.
+  location = /health {
+    access_log off;
+    add_header Content-Type text/plain always;
+    return 200 "ok\n";
+  }
+
+  # ------------------------------------------------------------ compression
+  # gzip_static serves the .gz baked at image-build time (see Dockerfile).
+  # gzip on covers what has no .gz beside it - notably index.html, which is
+  # excluded from pre-compression because sub_filter has to be able to read
+  # it.
+  gzip_static on;
+  gzip on;
+  gzip_vary on;
+  gzip_comp_level 6;
+  gzip_min_length 512;
+  gzip_types text/plain text/css text/javascript application/javascript
+             application/json image/svg+xml;
+
+  # --------------------------------------------------------------- security
+  # No frames, no MIME sniffing, no referrer leakage. The game loads zero
+  # third-party script today; when a rewarded-ad SDK is added it will need an
+  # explicit allowance here, and the absence of a CSP is called out in
+  # docs/DEPLOY.md rather than left as a silence.
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "SAMEORIGIN" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+  # ----------------------------------------------------------------- caching
+  # There is no content hashing in the asset names, because content hashing
+  # needs a build step. That single fact decides every number below: nothing
+  # may be cached `immutable`, or a deploy would leave players running last
+  # week's game.js against this week's index.html with no way to recover but
+  # a hard refresh.
+  #
+  # ETag + a short max-age is the honest trade. A revalidation that returns
+  # 304 costs one small round trip and no bytes, which on a 80 KB game is a
+  # price worth paying for "a deploy is actually live".
+  etag on;
+
+  location = /index.html {
+    # Always revalidate the document. It is the file that names every other
+    # file, so a stale copy of it is the one stale copy that matters.
+    add_header Cache-Control "no-cache" always;
+
+    # An add_header ANYWHERE in a location replaces the whole inherited set,
+    # so the server-level headers above have to be restated here rather than
+    # inherited. Getting this wrong costs the page - and only the page, which
+    # is the one response where X-Frame-Options actually means something - its
+    # clickjacking protection, silently.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # The repo hardcodes the GitHub Pages origin in <link rel=canonical>, in
+    # og:url and in og:image, because that is where the game lives today and a
+    # file checked into git cannot know where it will be served from. This
+    # rewrites those three to wherever this container actually is.
+    #
+    # SITE_ORIGIN defaults to the same string it replaces, so with no override
+    # this is an identity rewrite and the page is byte-identical to the repo.
+    # fly.toml sets the real value. When a custom domain is finally bought,
+    # exactly one line in fly.toml changes - no code, no rebuild of anything
+    # but the image.
+    sub_filter_once off;
+    sub_filter_types text/html;
+    sub_filter 'https://leopechnicki.github.io/skyhook' '${SITE_ORIGIN}';
+  }
+
+  location ~* \.(?:js|css)$ {
+    add_header Cache-Control "public, max-age=600, must-revalidate" always;
+    add_header X-Content-Type-Options "nosniff" always;
+  }
+
+  location ~* \.(?:png|jpg|jpeg|gif|webp|ico|svg)$ {
+    add_header Cache-Control "public, max-age=86400" always;
+    add_header X-Content-Type-Options "nosniff" always;
+  }
+
+  # -------------------------------------------------------------- routing
+  # SKYHOOK is ONE page. It is not a router-driven SPA, so a request for a
+  # path that does not exist is a genuine 404 and is answered as one. Falling
+  # back to index.html for every unknown path - the reflexive "SPA-safe"
+  # setting - would serve a 200 and a playable game at /totally-made-up,
+  # which is worse than useless: it tells crawlers the site has infinite
+  # duplicate pages.
+  #
+  # The one exception is the bare directory, which must serve the game.
+  location / {
+    try_files $uri $uri/ =404;
+  }
+
+  error_page 404 /404.html;
+  location = /404.html {
+    internal;
+    add_header Cache-Control "no-cache" always;
+  }
+
+  # Nothing here is a dotfile the public needs.
+  location ~ /\. {
+    deny all;
+    access_log off;
+    log_not_found off;
+  }
+}

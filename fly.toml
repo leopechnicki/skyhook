@@ -1,0 +1,54 @@
+# SKYHOOK on Fly.io.
+#
+# Mirrors the pattern already proven on leopechnicki/safirdj (same region, same
+# auto-stop machine economics, same GitHub Actions `flyctl deploy --remote-only`
+# on push to main). The difference is what is behind the port: safirdj runs a
+# Node server, SKYHOOK is a folder of static files behind nginx, so there is no
+# application process to keep warm and no state to lose when a machine stops.
+#
+# The app does NOT exist yet. `fly apps create skyhook` and the FLY_API_TOKEN
+# repo secret are the two things standing between this file and a live deploy -
+# both need Leo. See docs/DEPLOY.md for the exact commands.
+
+app = 'skyhook'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  # The public origin, as the meta tags should report it. conf/site.conf.template
+  # rewrites <link rel=canonical>, og:url and og:image to this at serve time.
+  #
+  # <app>.fly.dev is assigned by Fly the moment the app is created, so this is a
+  # real hostname and not a guess. NO CUSTOM DOMAIN IS SET HERE because none has
+  # been bought yet; when one is, this is the single line that changes, followed
+  # by `fly certs add <domain>`.
+  SITE_ORIGIN = 'https://skyhook.fly.dev'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # A static site has no warm state, so stopping an idle machine costs the next
+  # player a cold start of a few hundred ms and costs Leo nothing per hour.
+  # min_machines_running = 0 is the right setting for a game nobody is playing
+  # at 04:00; it would be the wrong setting for something holding a session.
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = '5s'
+    interval = '30s'
+    method = 'GET'
+    path = '/health'
+    timeout = '5s'
+
+[[vm]]
+  # nginx serving ~1 MB of static files out of the page cache. 256 MB is
+  # already generous; the smallest shared CPU is the correct size and anything
+  # larger is paying for idle.
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
