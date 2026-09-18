@@ -6,11 +6,11 @@
 # Node server, SKYHOOK is a folder of static files behind nginx, so there is no
 # application process to keep warm and no state to lose when a machine stops.
 #
-# The app does NOT exist yet. `fly apps create skyhook` and the FLY_API_TOKEN
-# repo secret are the two things standing between this file and a live deploy -
-# both need Leo. See docs/DEPLOY.md for the exact commands.
+# The app is live: `skyhook-game` in org personal, region ams, with a
+# deploy-scoped FLY_API_TOKEN already set as a repo secret. The plain name
+# `skyhook` was taken - Fly app names are one global namespace. docs/DEPLOY.md.
 
-app = 'skyhook'
+app = 'skyhook-game'
 primary_region = 'ams'
 
 [build]
@@ -24,7 +24,7 @@ primary_region = 'ams'
   # real hostname and not a guess. NO CUSTOM DOMAIN IS SET HERE because none has
   # been bought yet; when one is, this is the single line that changes, followed
   # by `fly certs add <domain>`.
-  SITE_ORIGIN = 'https://skyhook.fly.dev'
+  SITE_ORIGIN = 'https://skyhook-game.fly.dev'
 
 [http_service]
   internal_port = 8080

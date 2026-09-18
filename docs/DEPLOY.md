@@ -26,26 +26,31 @@ exists the workflow still runs the tests and still builds and curls the
 container - it just skips the deploy and prints the commands below into the
 run summary. Nothing is broken and nothing needs editing.
 
-## What is NOT done, and needs Leo
+## Provisioning status
 
-Three things, none of which an agent can or should do on its own:
+Done, 2026-09-18:
 
-1. **The Fly app does not exist.** `fly apps create` bills to an account.
-2. **There is no `FLY_API_TOKEN` secret** on `leopechnicki/skyhook`, and no
-   Fly access token on this machine, so `flyctl` here is unauthenticated.
-3. **No custom domain has been bought.** Nothing in this repo hardcodes one -
-   see "Custom domain" below for the one line that changes when it exists.
+1. **The Fly app exists.** `skyhook-game`, org `personal`, region `ams`. The
+   name is `skyhook-game` and not `skyhook` because `skyhook` was already
+   taken - Fly app names are a single global namespace, not per-account.
+2. **`FLY_API_TOKEN` is set** on `leopechnicki/skyhook`. It is a
+   *deploy-scoped* token bound to this one app with a 1-year expiry, not a
+   personal access token: if it leaked, the worst it can do is redeploy this
+   game.
+3. **No custom domain.** Deliberate - Leo has not picked a name. Nothing in
+   this repo hardcodes one; see "Custom domain" below for the single line that
+   changes when it exists.
 
-### The exact commands
+### Reproducing it from scratch
 
-Run these once, from anywhere with `flyctl` and `gh` logged in:
+If the app is ever destroyed, or a second environment is wanted:
 
 ```sh
 # 1. Create the app. The name must match `app` in fly.toml.
-fly apps create skyhook --org personal
+fly apps create skyhook-game --org personal
 
 # 2. Mint a deploy-scoped token (NOT a personal access token) and copy it.
-fly tokens create deploy -x 8760h
+fly tokens create deploy -a skyhook-game -x 8760h
 
 # 3. Hand it to GitHub Actions. Paste the token when prompted.
 gh secret set FLY_API_TOKEN --repo leopechnicki/skyhook
@@ -60,7 +65,7 @@ gh workflow run deploy.yml --repo leopechnicki/skyhook
 The first deploy takes a few minutes (Fly's remote builder has a cold cache).
 When it finishes the workflow asserts the live site itself - `/health`, the
 page, and every asset - so a green tick means the game is genuinely playable
-at <https://skyhook.fly.dev>, not merely that `flyctl` exited zero.
+at <https://skyhook-game.fly.dev>, not merely that `flyctl` exited zero.
 
 ### Custom domain, when it exists
 
