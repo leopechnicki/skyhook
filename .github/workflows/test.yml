@@ -14,6 +14,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  # deploy.yml calls this workflow instead of restating its steps. A deploy
+  # gate that is a COPY of the test gate is a gate that silently stops
+  # matching it; this way there is exactly one definition of "the suite
+  # passed", and adding a test here automatically strengthens the deploy.
+  workflow_call:
 
 # A newer push to the same branch makes the older run irrelevant - cancel it.
 # Never cancel main: those runs are the record of what actually landed.

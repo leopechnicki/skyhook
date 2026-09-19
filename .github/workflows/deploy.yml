@@ -1,0 +1,231 @@
+# SKYHOOK - deploy to Fly.io.
+#
+# Order of operations, and why it is this order:
+#
+#   1. tests    the WHOLE existing suite, called - not copied - from
+#               test.yml. A deploy that ships a regression the repo already
+#               knows how to catch is the one failure mode worth designing
+#               against, and a second hand-maintained copy of those steps
+#               would drift from the real gate within a month.
+#   2. image    build the container and drive it with curl. test.yml proves
+#               the GAME works; nothing in it has ever proved that the thing
+#               nginx serves is that game. Wrong root, a missing COPY, a
+#               sub_filter typo and a broken health path are all invisible to
+#               the browser suite and all fatal in production.
+#   3. deploy   only on push to main, and only if FLY_API_TOKEN exists.
+#
+# App `skyhook-game` exists and FLY_API_TOKEN was set on 2026-09-18, so step 3
+# runs for real on every push to main. This paragraph used to say the opposite
+# and was left behind when that stopped being true - a comment asserting the
+# reverse of reality is worse than no comment, because it is trusted.
+#
+# The `preflight` token check stays anyway. It is what makes a rotated-away or
+# expired secret read as "deploy skipped, here is how to fix it" instead of a
+# red X somewhere in the middle of a flyctl invocation. See docs/DEPLOY.md.
+
+name: deploy
+
+# WHY THE SUITE APPEARS TO RUN TWICE ON A PR, AND WHY THAT MUST NOT BE
+# "OPTIMISED" AWAY
+# ------------------------------------------------------------------------
+# test.yml has its own `on: pull_request`, and this workflow ALSO runs on
+# pull_request and calls test.yml. So a PR executes the logic+browser jobs
+# twice. That looks like pure waste and it is not:
+#
+# Branch protection on `main` requires two status checks by EXACT name -
+# `logic (world + balance)` and `browser (smoke + frame time)` - with
+# enforce_admins on. A job run through `workflow_call` reports its context
+# PREFIXED with the calling job's id (`tests / logic (world + balance)`), so
+# only the standalone test.yml run can ever satisfy the required contexts.
+# Delete `pull_request` from test.yml and every future PR, including the one
+# that reverts the mistake, becomes permanently unmergeable.
+#
+# The duplication is therefore load-bearing until the protection rule is
+# renamed, which is a repo-settings change and not a code change. If you want
+# it gone: update the required contexts FIRST, confirm a PR still merges, then
+# come back here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets Leo re-deploy the current main without an empty commit - the thing
+  # everybody wants about ten minutes after the first deploy.
+  workflow_dispatch:
+
+concurrency:
+  # Never cancel a deploy in flight: a half-applied release is worse than a
+  # queued one. PR runs are cancellable because they ship nothing.
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------- 1. tests
+  tests:
+    name: test suite
+    uses: ./.github/workflows/test.yml
+
+  # ---------------------------------------------------------------- 2. image
+  image:
+    name: container (build + serve)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Built with the same SITE_ORIGIN fly.toml sets, so the rewrite asserted
+      # below is the rewrite production will actually perform.
+      - name: Build image
+        run: docker build -t skyhook:ci .
+
+      - name: Run it
+        run: |
+          docker run -d --name skyhook-ci -p 8080:8080 \
+            -e SITE_ORIGIN='https://skyhook-game.fly.dev' skyhook:ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health > /dev/null; then
+              echo "up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "FAIL: container never answered /health"
+          docker logs skyhook-ci
+          exit 1
+
+      # Every assertion below is something that has no other gate anywhere in
+      # this repo. If one of them is deleted, the failure it used to catch
+      # becomes a silent production bug.
+      - name: Serve checks
+        run: |
+          set -e
+          fail() { echo "FAIL: $1"; docker logs skyhook-ci; exit 1; }
+
+          # The page itself, and every file it names.
+          curl -sf http://localhost:8080/ > /tmp/index.html || fail "/ did not serve"
+          grep -q '<canvas id="game"' /tmp/index.html || fail "/ served something that is not the game"
+          for f in css/style.css js/config.js js/utils.js js/audio.js js/celestial.js \
+                   js/rocket.js js/game.js js/online.js js/main.js js/ui_online.js; do
+            curl -sf -o /dev/null "http://localhost:8080/$f" || fail "missing asset: $f"
+          done
+          curl -sf -o /dev/null http://localhost:8080/screenshot.png || fail "og:image missing"
+
+          # SITE_ORIGIN actually reached the served HTML. This is the check
+          # that makes the hostname genuinely configurable rather than
+          # configurable-looking.
+          grep -q 'https://skyhook-game.fly.dev/' /tmp/index.html \
+            || fail "sub_filter did not rewrite the canonical/og origin"
+          # `grep -q ... && fail` would abort the step under `set -e` on the
+          # HEALTHY path, because a grep that finds nothing exits 1. The
+          # assertion has to be spelled out.
+          if grep -q 'leopechnicki.github.io' /tmp/index.html; then
+            fail "the old origin survived the rewrite"
+          fi
+
+          # Headers on the page. add_header does not merge across nginx
+          # contexts, so a location block added later silently drops the
+          # inherited set - a regression with no visible symptom.
+          curl -sf -o /dev/null -D /tmp/ih http://localhost:8080/
+          grep -qi '^x-frame-options: SAMEORIGIN' /tmp/ih || fail "index lost X-Frame-Options"
+          grep -qi '^x-content-type-options: nosniff' /tmp/ih || fail "index lost nosniff"
+          grep -qi '^cache-control: no-cache' /tmp/ih || fail "index is cacheable - a deploy would not go live"
+
+          # Compression, on the biggest file in the game.
+          curl -sf -H 'Accept-Encoding: gzip' -o /dev/null -D /tmp/h \
+            http://localhost:8080/js/game.js
+          grep -qi '^content-encoding: gzip' /tmp/h || fail "js/game.js served uncompressed"
+
+          # A 404 is a 404, not a 200 with the game in it.
+          code=$(curl -s -o /tmp/404 -w '%{http_code}' http://localhost:8080/no-such-path)
+          [ "$code" = "404" ] || fail "unknown path returned $code, expected 404"
+          grep -q 'SIGNAL LOST' /tmp/404 || fail "404 page is nginx's, not ours"
+
+          # Nothing private escaped into the image.
+          for p in test/smoke.mjs package.json supabase/schema.sql docs/DEPLOY.md; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/$p")
+            [ "$code" = "404" ] || fail "$p is publicly reachable ($code)"
+          done
+
+          echo "OK: container serves the game, and only the game"
+
+      - name: Container logs
+        if: always()
+        run: docker logs skyhook-ci || true
+
+  # ------------------------------------------------------------- 3. preflight
+  # `secrets` cannot be read in a job-level `if`, so the presence of the token
+  # is turned into a job output here and gated on below. This also gives the
+  # not-configured-yet case somewhere to print instructions instead of a red X
+  # that means nothing is wrong.
+  preflight:
+    name: fly credentials
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -n "$FLY_API_TOKEN" ]; then
+            echo "configured=yes" >> "$GITHUB_OUTPUT"
+            echo "FLY_API_TOKEN is set - deploy will run on push to main."
+          else
+            echo "configured=no" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Fly deploy skipped - no FLY_API_TOKEN"
+              echo ""
+              echo "Everything needed to deploy is in the repo. Two commands away:"
+              echo ""
+              echo '```sh'
+              echo "fly apps create skyhook-game --org personal"
+              echo "fly tokens create deploy -x 8760h   # copy the output"
+              echo "gh secret set FLY_API_TOKEN --repo leopechnicki/skyhook"
+              echo '```'
+              echo ""
+              echo "Then re-run this workflow, or push anything to main."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ---------------------------------------------------------------- 4. deploy
+  deploy:
+    name: fly deploy
+    needs: [tests, image, preflight]
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
+      needs.preflight.outputs.configured == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --remote-only: the image is built on Fly's builder, so the runner
+      # never needs a registry credential and the layer cache lives next to
+      # the thing being deployed.
+      - name: Deploy
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # A deploy that reports success and serves a blank page has happened to
+      # this team before. Assert the live site, not the deploy command's exit
+      # code - and assert the ASSETS, because a missing js/game.js is a black
+      # screen that a /health check is perfectly happy with.
+      - name: Verify the live site
+        run: |
+          set -e
+          base="https://skyhook-game.fly.dev"
+          for i in $(seq 1 20); do
+            curl -sf "$base/health" > /dev/null && break
+            echo "waiting for $base ..."; sleep 5
+          done
+          curl -sf "$base/health" > /dev/null || { echo "FAIL: /health"; exit 1; }
+          curl -sf "$base/" | grep -q '<canvas id="game"' || { echo "FAIL: / is not the game"; exit 1; }
+          for f in js/game.js js/main.js js/rocket.js js/celestial.js css/style.css screenshot.png; do
+            curl -sfI "$base/$f" > /dev/null || { echo "FAIL: $f is not 200"; exit 1; }
+          done
+          echo "OK: $base is live and complete"

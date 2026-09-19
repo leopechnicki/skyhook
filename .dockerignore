@@ -1,0 +1,23 @@
+# The Dockerfile names every file it copies, so this list is belt to that
+# braces - but it also decides how much has to be uploaded to Fly's remote
+# builder on every deploy, and test/screenshots plus node_modules is most of
+# the repo by weight.
+.git
+.github
+node_modules
+test
+docs
+android-app
+
+package.json
+package-lock.json
+README.md
+LICENSE
+.gitignore
+.nojekyll
+.gitguardian.yaml
+
+# supabase/schema.sql is run by hand in the Supabase dashboard. It is
+# documentation and DDL, never something the web server should be able to
+# hand to a browser.
+supabase
