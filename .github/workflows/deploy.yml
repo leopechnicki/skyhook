@@ -14,14 +14,18 @@
 #               the browser suite and all fatal in production.
 #   3. deploy   only on push to main, and only if FLY_API_TOKEN exists.
 #
-# App `skyhook-game` exists and FLY_API_TOKEN was set on 2026-09-18, so step 3
-# runs for real on every push to main. This paragraph used to say the opposite
-# and was left behind when that stopped being true - a comment asserting the
-# reverse of reality is worse than no comment, because it is trusted.
+# App `skyhook-game` exists and FLY_API_TOKEN is set (2026-09-18 15:18Z), so
+# step 3 runs for real on every push to main. The token check in `preflight`
+# stays anyway: it is what makes a rotated-away or expired secret read as
+# "deploy skipped, here is how to fix it" instead of a red X halfway through a
+# flyctl invocation. See docs/DEPLOY.md.
 #
-# The `preflight` token check stays anyway. It is what makes a rotated-away or
-# expired secret read as "deploy skipped, here is how to fix it" instead of a
-# red X somewhere in the middle of a flyctl invocation. See docs/DEPLOY.md.
+# NO HOSTNAME IS WRITTEN DOWN IN THIS FILE. Both the origin the image is
+# expected to rewrite to and the URL the deploy is verified against are read
+# out of fly.toml at run time - see the `origin` and `app` steps. fly.toml is
+# the one place either fact lives, which is the only arrangement under which
+# "changing the domain is one line" stays true. A copy here would keep passing
+# while asserting a hostname production had stopped using.
 
 name: deploy
 
@@ -75,15 +79,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Built with the same SITE_ORIGIN fly.toml sets, so the rewrite asserted
-      # below is the rewrite production will actually perform.
+      # The origin is READ FROM fly.toml, never restated here. That is what
+      # makes the assertion below meaningful: it proves the container performs
+      # the rewrite PRODUCTION is configured for, not the one CI happens to
+      # remember. Hardcoding it would keep this job green through the exact
+      # change it exists to catch - the day fly.toml points at a real domain.
+      - name: Read the public origin from fly.toml
+        id: origin
+        run: |
+          set -e
+          value=$(sed -n "s/^[[:space:]]*SITE_ORIGIN[[:space:]]*=[[:space:]]*['"]\([^'"]*['"]\).*/\1/p" fly.toml | head -1)
+          [ -n "$value" ] || { echo "FATAL: fly.toml declares no SITE_ORIGIN"; exit 1; }
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+          echo "SITE_ORIGIN from fly.toml: $value"
+
       - name: Build image
         run: docker build -t skyhook:ci .
 
       - name: Run it
+        env:
+          SITE_ORIGIN: ${{ steps.origin.outputs.value }}
         run: |
           docker run -d --name skyhook-ci -p 8080:8080 \
-            -e SITE_ORIGIN='https://skyhook-game.fly.dev' skyhook:ci
+            -e SITE_ORIGIN="$SITE_ORIGIN" skyhook:ci
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8080/health > /dev/null; then
               echo "up after ${i}s"; exit 0
@@ -98,6 +116,13 @@ jobs:
       # this repo. If one of them is deleted, the failure it used to catch
       # becomes a silent production bug.
       - name: Serve checks
+        env:
+          SITE_ORIGIN: ${{ steps.origin.outputs.value }}
+          # The origin baked into the repo's <link rel=canonical> and og:* tags,
+          # and the Dockerfile's default for SITE_ORIGIN. Named once here so the
+          # rewrite assertions below read as "from X to Y" rather than as two
+          # unrelated greps for two magic strings.
+          REPO_ORIGIN: https://leopechnicki.github.io/skyhook
         run: |
           set -e
           fail() { echo "FAIL: $1"; docker logs skyhook-ci; exit 1; }
@@ -113,14 +138,26 @@ jobs:
 
           # SITE_ORIGIN actually reached the served HTML. This is the check
           # that makes the hostname genuinely configurable rather than
-          # configurable-looking.
-          grep -q 'https://skyhook-game.fly.dev/' /tmp/index.html \
-            || fail "sub_filter did not rewrite the canonical/og origin"
+          # configurable-looking - and it now asserts the value fly.toml
+          # carries, so it cannot drift away from what production serves.
+          grep -qF "$SITE_ORIGIN" /tmp/index.html \
+            || fail "sub_filter did not rewrite the canonical/og origin to $SITE_ORIGIN"
+
+          # The old origin must be GONE - but only when there is a new one to
+          # replace it with. If fly.toml ever names the repo origin itself, the
+          # rewrite is an identity no-op BY DESIGN (that is the Dockerfile's
+          # default), and demanding the string's absence would fail a container
+          # that is behaving exactly as configured.
+          #
           # `grep -q ... && fail` would abort the step under `set -e` on the
           # HEALTHY path, because a grep that finds nothing exits 1. The
           # assertion has to be spelled out.
-          if grep -q 'leopechnicki.github.io' /tmp/index.html; then
-            fail "the old origin survived the rewrite"
+          if [ "$SITE_ORIGIN" != "$REPO_ORIGIN" ]; then
+            if grep -qF "$REPO_ORIGIN" /tmp/index.html; then
+              fail "the old origin survived the rewrite"
+            fi
+          else
+            echo "NOTE: fly.toml names the repo origin - the rewrite is an identity no-op"
           fi
 
           # Headers on the page. add_header does not merge across nginx
@@ -179,8 +216,11 @@ jobs:
               echo "Everything needed to deploy is in the repo. Two commands away:"
               echo ""
               echo '```sh'
-              echo "fly apps create skyhook-game --org personal"
-              echo "fly tokens create deploy -x 8760h   # copy the output"
+              echo "fly apps create skyhook-game --org personal   # already done"
+              echo "# -a is NOT optional: without it the token is scoped to whatever"
+              echo "# app the working directory happens to resolve to, and the mistake"
+              echo "# surfaces much later as an unexplained permission error."
+              echo "fly tokens create deploy -a skyhook-game -x 8760h   # copy the output"
               echo "gh secret set FLY_API_TOKEN --repo leopechnicki/skyhook"
               echo '```'
               echo ""
@@ -211,14 +251,32 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
+      # The URL to verify is DERIVED from the app name in fly.toml, not copied
+      # from it. <app>.fly.dev is assigned by Fly at creation and answers for
+      # the life of the app, which makes it the only origin a deploy can
+      # honestly be verified against: SITE_ORIGIN may name a custom domain
+      # whose certificate or DNS is still propagating, and failing a deploy
+      # that actually succeeded because a registrar is slow would be a red X
+      # that teaches the team to ignore red Xs.
+      - name: Read the app name from fly.toml
+        id: app
+        run: |
+          set -e
+          name=$(sed -n "s/^[[:space:]]*app[[:space:]]*=[[:space:]]*['"]\([^'"]*['"]\).*/\1/p" fly.toml | head -1)
+          [ -n "$name" ] || { echo "FATAL: fly.toml declares no app"; exit 1; }
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "app from fly.toml: $name"
+
       # A deploy that reports success and serves a blank page has happened to
       # this team before. Assert the live site, not the deploy command's exit
       # code - and assert the ASSETS, because a missing js/game.js is a black
       # screen that a /health check is perfectly happy with.
       - name: Verify the live site
+        env:
+          APP: ${{ steps.app.outputs.name }}
         run: |
           set -e
-          base="https://skyhook-game.fly.dev"
+          base="https://${APP}.fly.dev"
           for i in $(seq 1 20); do
             curl -sf "$base/health" > /dev/null && break
             echo "waiting for $base ..."; sleep 5
