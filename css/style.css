@@ -350,6 +350,13 @@ body {
   justify-content: space-between;
   gap: 10px;
   margin-top: 8px;
+  /* Three links now ("Create an account", "Forgot password?", "Back to
+     leaderboard") where there were two. On a 390px phone they do not fit on
+     one line, and without this a flex row does not wrap - it squeezes, and the
+     way a <button> squeezes is by clipping its own label. "Forgot password?"
+     is the one route back into a locked-out account, so it is the last label
+     in the game that may render as "Forgot passw...". Let the row wrap. */
+  flex-wrap: wrap;
 }
 .ol-link {
   padding: 8px 2px;

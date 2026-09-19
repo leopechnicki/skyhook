@@ -85,6 +85,11 @@ let signupFailure = null;
    had never once been rendered in a browser under test. */
 let signinFailure = null;
 
+/* And the same lever for the reset request. A reset that the server refuses is
+   not an edge case for the person it happens to: they are locked out, and the
+   button they pressed is the only door left. */
+let recoverFailure = null;
+
 function handleApi(req, res, body) {
   const url = req.url.replace(/^\/api/, '');
   let parsed = null;
@@ -109,6 +114,14 @@ function handleApi(req, res, body) {
   if (url.startsWith('/auth/v1/token')) {
     if (signinFailure) return json(signinFailure.status, signinFailure.body);
     return json(200, SESSION);
+  }
+  /* GoTrue answers a recovery request with 200 and an empty object, for an
+     address that has an account and for one that does not. That sameness is
+     the anti-enumeration property, so the mock has to have it too - a mock
+     that answered 404 for unknown addresses would let a leak ship green. */
+  if (url.startsWith('/auth/v1/recover')) {
+    if (recoverFailure) return json(recoverFailure.status, recoverFailure.body);
+    return json(200, {});
   }
   if (url.startsWith('/auth/v1/logout')) { res.writeHead(204).end(); return; }
   if (url.startsWith('/auth/v1/user')) return json(200, SESSION.user);
@@ -233,6 +246,10 @@ function attachLogs(page, bucket, label, opts = {}) {
         r.url().includes('/auth/v1/token')) {
       provoked.add(r.url());
     }
+    if (r.status() >= 400 && recoverFailure && r.status() === recoverFailure.status &&
+        r.url().includes('/auth/v1/recover')) {
+      provoked.add(r.url());
+    }
   });
 
   /* Section C deliberately points the page at a port nothing is listening on,
@@ -309,6 +326,49 @@ async function main() {
 
       check('blank-config build: not one request left the page', external.length === 0,
         external.slice(0, 4).join(' | '));
+      await ctx.close();
+    }
+
+    /* ==================================================================
+     * A2. The off switch, arrived at through a RECOVERY LINK.
+     *
+     * The new code path reads the URL fragment at boot, which is the one
+     * place an off switch can be defeated by something that is not a button:
+     * nobody has to click anything for a `#access_token=...&type=recovery`
+     * to be processed. On a build with no backend it must be ignored
+     * completely - no request, no overlay, no session - and the game behind
+     * it must still start.
+     * ================================================================ */
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const page = await ctx.newPage();
+      attachLogs(page, errors, 'default-recovery');
+
+      const external = [];
+      page.on('request', r => {
+        const u = r.url();
+        if (!u.startsWith(base) && !u.startsWith('data:')) external.push(u);
+      });
+
+      await page.goto(base + '#access_token=jwt-access-1&refresh_token=refresh-1' +
+        '&expires_in=3600&token_type=bearer&type=recovery', { waitUntil: 'load' });
+      await page.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(400);
+
+      check('blank-config build: a recovery link opens no account UI',
+        (await page.locator('#ol').isVisible()) === false);
+      check('blank-config build: a recovery link signs nobody in',
+        (await page.evaluate('window.__SKYHOOK.game.online.signedIn')) === false);
+      check('blank-config build: a recovery link causes no request', external.length === 0,
+        external.slice(0, 4).join(' | '));
+      check('blank-config build: a recovery link stores no session',
+        !(await page.evaluate('localStorage.getItem("skyhook.session")')));
+
+      await page.evaluate('window.__SKYHOOK.skipTutorial(true)');
+      await tapLogical(page, 240, 400);
+      await wait(300);
+      check('blank-config build: the game still starts after a recovery link',
+        (await page.evaluate('window.__SKYHOOK.game.state')) === 'playing');
       await ctx.close();
     }
 
@@ -801,6 +861,280 @@ async function main() {
     }
 
     /* ==================================================================
+     * D. FORGOTTEN PASSWORD - the door back into an account.
+     *
+     * Reported 2026-09-19: "I forgot my password on skyhook". Nothing was
+     * broken; there was simply no way back. The form could say "no account
+     * matches that email and password" and it could say "that email already
+     * has an account", and both of those are the end of the conversation.
+     *
+     * test/online.mjs section 13 proves the wire. This proves the part a
+     * locked-out player touches: that the link is there and reachable, that
+     * the confirmation does not quietly reveal who has an account, that a
+     * recovery link opens the right form instead of dropping them on the
+     * board still locked out, and that the token does not stay in the address
+     * bar afterwards.
+     * ================================================================ */
+    {
+      const rctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const rpage = await rctx.newPage();
+      attachLogs(rpage, errors, 'recovery');
+
+      await rpage.goto(base + 'online/', { waitUntil: 'load' });
+      await rpage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(400);
+
+      /* ---- the link exists, where a locked-out player is standing ---- */
+      await rpage.evaluate(`window.SK.UI.open('auth')`);
+      await wait(300);
+      check('SIGN IN offers a way out for somebody who forgot their password',
+        (await rpage.locator('#ol-forgot').isVisible()) === true &&
+        /forgot/i.test(await rpage.locator('#ol-forgot').textContent()),
+        JSON.stringify((await rpage.locator('#ol-forgot').textContent() || '').trim()));
+      check('the way out is a real focusable control, not decoration',
+        await rpage.evaluate(`(() => {
+          const b = document.getElementById('ol-forgot');
+          b.focus();
+          return b.tagName === 'BUTTON' && document.activeElement === b;
+        })()`));
+
+      await rpage.locator('#ol-toggle').click();
+      check('CREATE ACCOUNT does not offer to reset a password that does not exist yet',
+        (await rpage.locator('#ol-forgot').isVisible()) === false);
+      await rpage.locator('#ol-toggle').click();
+      check('and it comes back with the sign-in view',
+        (await rpage.locator('#ol-forgot').isVisible()) === true);
+
+      /* Three links now share a row that used to hold two. A flex row does
+         not wrap by default; it squeezes, and a <button> squeezes by clipping
+         its own label. "Forgot password?" reading as "Forgot passw..." on a
+         phone is the one label in this game that must stay legible. */
+      await rpage.setViewportSize({ width: 390, height: 780 });
+      await wait(200);
+      const linkBox = await rpage.evaluate(`(() => {
+        const b = document.getElementById('ol-forgot');
+        const row = b.parentElement, panel = document.querySelector('.ol-panel');
+        const br = b.getBoundingClientRect(), pr = panel.getBoundingClientRect();
+        return {
+          clipped: b.scrollWidth > b.clientWidth + 1,
+          insidePanel: br.left >= pr.left - 1 && br.right <= pr.right + 1,
+          width: Math.round(br.width)
+        };
+      })()`);
+      check('on a 390px phone the reset link is not clipped and stays inside the panel',
+        !linkBox.clipped && linkBox.insidePanel, JSON.stringify(linkBox));
+      await rpage.setViewportSize({ width: 1280, height: 900 });
+      await wait(200);
+
+      /* ---- asking for the link ---- */
+      await rpage.locator('#ol-email').fill('klaudia@example.com');
+      await rpage.locator('#ol-forgot').click();
+      await wait(200);
+
+      check('the reset view says what it is',
+        /reset/i.test(await rpage.locator('#ol-title').textContent()),
+        await rpage.locator('#ol-title').textContent());
+      check('the reset view does not ask for the password the player has forgotten',
+        (await rpage.locator('#ol-password').isVisible()) === false &&
+        (await rpage.locator('#ol-username').isVisible()) === false);
+      check('the reset view carries across the address already typed',
+        (await rpage.locator('#ol-email').inputValue()) === 'klaudia@example.com');
+
+      const beforeRecover = api.length;
+      await rpage.locator('#ol-submit').click();
+      await rpage.waitForFunction(
+        'document.getElementById("ol-submit").disabled === false', null, { timeout: 8000 });
+      await wait(200);
+
+      const recover = api.slice(beforeRecover).find(c => c.url.startsWith('/auth/v1/recover'));
+      check('asking for a reset link posts to /auth/v1/recover',
+        !!recover && recover.method === 'POST', recover ? recover.url : 'no call');
+      check('the reset request sends the address and nothing else',
+        !!recover && JSON.stringify(Object.keys(recover.body || {})) === '["email"]',
+        JSON.stringify(recover && recover.body));
+
+      /* The subpath test, in a real browser. This page is served from
+         /online/, so a redirect_to of "/" would be the GitHub Pages bug
+         reproduced: a valid link that lands the player on a site root with no
+         game on it. */
+      const backTo = /[?&]redirect_to=([^&]+)/.exec(recover ? recover.url : '');
+      check('the reset link is told to come back to THIS page, subpath included',
+        !!backTo && decodeURIComponent(backTo[1]) === base + 'online/',
+        backTo ? decodeURIComponent(backTo[1]) : 'no redirect_to');
+
+      const sentMsg = ((await rpage.locator('#ol-auth-msg').textContent()) || '').trim();
+      check('the player is told to go and look in their inbox',
+        /inbox/i.test(sentMsg) && /spam/i.test(sentMsg), JSON.stringify(sentMsg));
+      /* The confirmation is answered identically for an address with an
+         account and one without, so it must not be phrased as a statement
+         that one exists - otherwise the box becomes a way of asking the
+         server who plays this game, one address at a time. */
+      check('the confirmation does not confirm that the account exists',
+        /if there is an account|if that address/i.test(sentMsg), JSON.stringify(sentMsg));
+      check('the confirmation is not styled as an error',
+        !((await rpage.locator('#ol-auth-msg').getAttribute('class')) || '').includes('is-error'));
+      check('the reset button is given back afterwards',
+        (await rpage.locator('#ol-submit').isDisabled()) === false);
+
+      /* ---- pressing it twice: the server names a wait, so repeat the wait ---- */
+      recoverFailure = {
+        status: 429,
+        body: {
+          code: 429, error_code: 'over_email_send_rate_limit',
+          msg: 'For security purposes, you can only request this after 55 seconds.'
+        }
+      };
+      await rpage.locator('#ol-submit').click();
+      await rpage.waitForFunction(
+        'document.getElementById("ol-submit").disabled === false', null, { timeout: 8000 });
+      await wait(200);
+      const tooSoon = ((await rpage.locator('#ol-auth-msg').textContent()) || '').trim();
+      check('a second reset inside the cooldown repeats the wait the server named',
+        /55 seconds/.test(tooSoon), JSON.stringify(tooSoon));
+      check('the cooldown does not borrow the sign-up "a few emails an hour" line',
+        !/an hour|sign-up/i.test(tooSoon), JSON.stringify(tooSoon));
+      check('a refused reset is rendered as an error and the button comes back',
+        ((await rpage.locator('#ol-auth-msg').getAttribute('class')) || '').includes('is-error') &&
+        (await rpage.locator('#ol-submit').isDisabled()) === false);
+      recoverFailure = null;
+      await rctx.close();
+    }
+
+    /* ==================================================================
+     * D2. Back from the link: setting a new password.
+     *
+     * GoTrue returns the player with the session in the URL FRAGMENT. Before
+     * this existed, that shape was read as an ordinary implicit sign-in: the
+     * player was silently signed in and dropped on the leaderboard with the
+     * password they could not remember still in force, and nothing on screen
+     * saying there was a step left. They would close the tab and be locked
+     * out again - a reset flow that appears to work and changes nothing.
+     * ================================================================ */
+    {
+      const pctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const ppage = await pctx.newPage();
+      attachLogs(ppage, errors, 'set-password');
+
+      await ppage.goto(base + 'online/#access_token=jwt-access-1&refresh_token=refresh-1' +
+        '&expires_in=3600&token_type=bearer&type=recovery', { waitUntil: 'load' });
+      await ppage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(600);
+
+      check('a recovery link opens the panel by itself - the player asked for this',
+        (await ppage.locator('#ol').isVisible()) === true);
+      check('and it opens on "set a new password", not on the board',
+        /new password/i.test(await ppage.locator('#ol-title').textContent()),
+        await ppage.locator('#ol-title').textContent());
+      check('the new-password view asks for a password and nothing else',
+        (await ppage.locator('#ol-password').isVisible()) === true &&
+        (await ppage.locator('#ol-email').isVisible()) === false &&
+        (await ppage.locator('#ol-username').isVisible()) === false);
+      check('the browser is told this is a NEW password, so it offers to save it',
+        (await ppage.locator('#ol-password').getAttribute('autocomplete')) === 'new-password');
+
+      /* An access token in the address bar is in history, in the next
+         screenshot, and in whatever the player pastes when they ask for help. */
+      check('the recovery token is scrubbed out of the URL',
+        (await ppage.evaluate('location.hash')) === '' &&
+        !(await ppage.evaluate('location.href')).includes('access_token'),
+        await ppage.evaluate('location.href'));
+
+      /* ---- too short: refused here, never sent ---- */
+      const beforeShort = api.filter(c => c.url.startsWith('/auth/v1/user') && c.method === 'PUT').length;
+      await ppage.locator('#ol-password').fill('short');
+      await ppage.locator('#ol-submit').click();
+      await wait(400);
+      const shortMsg = ((await ppage.locator('#ol-auth-msg').textContent()) || '').trim();
+      check('a too-short new password is refused with the rule, not a generic failure',
+        /8 characters/i.test(shortMsg), JSON.stringify(shortMsg));
+      check('a too-short new password is never sent to the server',
+        api.filter(c => c.url.startsWith('/auth/v1/user') && c.method === 'PUT').length === beforeShort);
+      check('a too-short new password leaves the player on the form, still able to fix it',
+        /new password/i.test(await ppage.locator('#ol-title').textContent()) &&
+        (await ppage.locator('#ol-submit').isDisabled()) === false);
+
+      /* ---- a real one ---- */
+      await ppage.locator('#ol-password').fill('a-brand-new-one');
+      await ppage.locator('#ol-submit').click();
+      await ppage.waitForFunction(
+        'document.getElementById("ol-submit").disabled === false', null, { timeout: 8000 });
+      await wait(400);
+
+      const put = api.filter(c => c.url.startsWith('/auth/v1/user') && c.method === 'PUT').pop();
+      check('setting the password is a PUT /auth/v1/user carrying only the password',
+        !!put && JSON.stringify(Object.keys(put.body || {})) === '["password"]',
+        JSON.stringify(put && put.body));
+      check('it is authenticated with the session the link established',
+        !!put && put.headers.authorization === 'Bearer jwt-access-1',
+        put ? String(put.headers.authorization) : '?');
+      check('the player ends up signed in, not sent back to a login form',
+        (await ppage.evaluate('window.__SKYHOOK.game.online.signedIn')) === true &&
+        (await ppage.locator('#ol-signout').isVisible()) === true);
+      check('and the panel says who they are',
+        /signed in as/i.test(await ppage.locator('#ol-account').textContent()),
+        await ppage.locator('#ol-account').textContent());
+      check('no password is left in the DOM afterwards',
+        (await ppage.locator('#ol-password').inputValue()) === '');
+      check('the session is persisted, so the next visit is not another reset',
+        !!(await ppage.evaluate('localStorage.getItem("skyhook.session")')));
+
+      /* The confirmation has to SURVIVE. showBoard() kicks off an
+         asynchronous board load that writes into the very element the
+         confirmation sits in, so a line painted before it resolves is wiped a
+         few hundred milliseconds later - verified by making showBoard() drop
+         the notice, which turns this check red. A player who does not see it
+         has no way to know whether the thing they came back to do happened. */
+      await wait(900);
+      const doneMsg = ((await ppage.locator('#ol-board-msg').textContent()) || '').trim();
+      check('the player is told the password was changed, and the board load does not wipe it',
+        /password updated/i.test(doneMsg), JSON.stringify(doneMsg));
+      check('the board rendered underneath the confirmation',
+        (await ppage.locator('#ol-list .ol-row').count()) === 3);
+
+      /* And it is a one-shot: reopening the board later must not resurrect a
+         confirmation for something that happened minutes ago. */
+      await ppage.evaluate('window.SK.UI.reload()');
+      await wait(600);
+      check('the confirmation does not come back on the next board load',
+        !/password updated/i.test((await ppage.locator('#ol-board-msg').textContent()) || ''),
+        await ppage.locator('#ol-board-msg').textContent());
+      await pctx.close();
+    }
+
+    /* ==================================================================
+     * D3. Walking away from a recovery.
+     *
+     * The session a recovery link establishes is a real one. Abandoning the
+     * form must not leave somebody silently signed in to an account whose
+     * password they still do not know - that is the original trap, moved.
+     * ================================================================ */
+    {
+      const cctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const cpage = await cctx.newPage();
+      attachLogs(cpage, errors, 'cancel-recovery');
+
+      await cpage.goto(base + 'online/#access_token=jwt-access-1&refresh_token=refresh-1' +
+        '&expires_in=3600&token_type=bearer&type=recovery', { waitUntil: 'load' });
+      await cpage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(600);
+
+      check('the cancel affordance says cancel, not "create an account"',
+        /cancel/i.test(await cpage.locator('#ol-toggle').textContent()),
+        await cpage.locator('#ol-toggle').textContent());
+      await cpage.locator('#ol-toggle').click();
+      await cpage.waitForFunction(
+        'window.__SKYHOOK.game.online.signedIn === false', null, { timeout: 8000 });
+      await wait(300);
+      check('abandoning a recovery signs the player out rather than leaving them half in',
+        (await cpage.evaluate('window.__SKYHOOK.game.online.signedIn')) === false);
+      check('abandoning a recovery leaves no session on the device',
+        !((await cpage.evaluate('localStorage.getItem("skyhook.session")')) || '').includes('access_token'));
+      check('abandoning a recovery still leaves a usable game',
+        (await cpage.locator('#ol-signin').isVisible()) === true);
+      await cctx.close();
+    }
+
+    /* ==================================================================
      * C. Configured, but the backend is DOWN.
      *
      * The highest-risk regression in this whole feature, and the one a
@@ -866,6 +1200,25 @@ async function main() {
         (await dpage.locator('#ol-email').isVisible()) === true &&
         (await dpage.locator('#ol-password').isVisible()) === true &&
         (await dpage.locator('#ol-submit').isVisible()) === true);
+      /* The reset request has the same duty as the sign-in above it: fail
+         like a sentence and give the button back. A locked-out player pressing
+         a control that never comes back has no way to tell the difference
+         between "the server is down" and "this game is broken". */
+      await dpage.locator('#ol-forgot').click();
+      await dpage.locator('#ol-email').fill('klaudia@example.com');
+      await dpage.locator('#ol-submit').click();
+      await dpage.waitForFunction(
+        'document.getElementById("ol-submit").disabled === false', null, { timeout: 15000 });
+      const resetMsg = await dpage.locator('#ol-auth-msg').textContent();
+      check('dead backend: a reset request reports one readable line',
+        resetMsg.length > 0 && resetMsg.length < 120 && !/\n|Error:|TypeError/.test(resetMsg),
+        resetMsg);
+      check('dead backend: the reset line does not promise a link that was never sent',
+        !/inbox|on its way/i.test(resetMsg), resetMsg);
+      check('dead backend: the reset form is not left stuck in a busy state',
+        (await dpage.locator('#ol-submit').isDisabled()) === false);
+      await dpage.locator('#ol-toggle').click();
+
       check('dead backend: still signed out, not half signed in',
         (await dpage.evaluate('window.__SKYHOOK.game.online.signedIn')) === false);
 

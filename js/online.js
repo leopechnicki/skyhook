@@ -125,17 +125,125 @@
     validation_failed: 'Check the form and try again.',
 
     signup_disabled: 'Account creation is switched off on this server.',
-    email_provider_disabled: 'Email sign-up is switched off on this server.'
+    email_provider_disabled: 'Email sign-up is switched off on this server.',
+
+    /* The recovery link is a one-time token with a lifetime. Clicking an old
+       one, or the same one twice, lands back here with this. It is not an
+       error the player caused and it has an obvious next step, so say it. */
+    otp_expired: 'That reset link has expired or was already used. Ask for a new one.',
+    /* A password GoTrue refuses because it is the one already on the account.
+       Silently accepting it would be worse: the player would think they had
+       changed something. */
+    same_password: 'That is already your password. Choose a different one.'
+  };
+
+  /* Some codes mean different things depending on what the player just asked
+     for, and the generic sentence is wrong - sometimes badly wrong - in the
+     other context. over_email_send_rate_limit is the example that forced this
+     table to exist: on sign-up it is the project's confirmation-email quota
+     and the honest advice is "come back later"; on a password reset it is the
+     55-second per-address cooldown that a probe measured against the live
+     project on 2026-09-18, and telling someone locked out of their account to
+     wait an hour when the real wait is under a minute sends them away for
+     nothing. Same code, same status, opposite advice.
+
+     Keyed context -> code -> line. A context that does not override a code
+     falls through to CODE_MESSAGES, so this table only ever holds the
+     differences. */
+  var CONTEXT_MESSAGES = {
+    reset: {
+      over_email_send_rate_limit:
+        'A reset link was just sent to that address. Wait a minute before asking for another one.',
+      over_request_rate_limit:
+        'Too many attempts from this device. Wait a minute and try again.',
+      /* On sign-up this means "pick another address". On a reset it means the
+         address cannot receive our mail at all, which is a dead end worth
+         naming rather than dressing up as a retry. */
+      email_address_invalid:
+        'That email address was refused by the server, so no link can be sent to it.',
+      validation_failed: 'Check the address and try again.',
+      /* `network` is the one key here that is not a GoTrue error code - a
+         connection that never landed carries no code at all. It is in this
+         table anyway because it is the same kind of fact: the right sentence
+         depends on what the player was trying to do. The default line is
+         "Cannot reach the leaderboard. Your score is saved on this device.",
+         which is exactly right after a run and is nonsense here - nobody
+         asking for a reset link has a score in play, and telling them one is
+         safe answers a question they did not ask instead of the one they
+         did. */
+      network: 'Cannot reach the server. Check your connection and try again.'
+    },
+    newPassword: {
+      /* There is no email in this step at all - only the PUT that sets the
+         password - so an email-quota message here would be nonsense. */
+      over_email_send_rate_limit:
+        'The server is rate-limiting this right now. Wait a minute and try again.',
+      invalid_credentials:
+        'That reset link has expired or was already used. Ask for a new one.',
+      /* Worse here than on the reset request: the player has a live recovery
+         session that expires, so "try again" has to mean NOW, not later. */
+      network: 'Cannot reach the server. Check your connection and try again.'
+    }
   };
 
   /* Error text that is safe to put in front of a player: one line, no stack,
      no call log, no internal identifiers. Anything unrecognised collapses to a
      generic sentence rather than leaking a backend message verbatim. */
-  function friendly(err, fallback) {
+  /* Re-wrap a backend error as a player-facing one WITHOUT losing the machine
+     -readable code. The UI needs both: the sentence to show, and something
+     stable to branch on. Matching the sentence instead would mean any future
+     reword silently changes behaviour - the exact failure mode CODE_MESSAGES
+     exists to avoid, reintroduced one layer up. */
+  function playerError(err, fallback, context) {
+    var e = new Error(friendly(err, fallback, context));
+    var code = (err && err.code) ? String(err.code) : '';
+    if (code) e.code = code;
+    if (err && err.status) e.status = err.status;
+    return e;
+  }
+
+  /* GoTrue sometimes states the wait itself, and when it does, the number it
+     gives beats every fixed sentence in the tables above. Verified against the
+     live project on 2026-09-18:
+
+       POST /auth/v1/recover twice in a row -> 429
+       {"error_code":"over_email_send_rate_limit",
+        "msg":"For security purposes, you can only request this after 55 seconds."}
+
+     That is a PER-ADDRESS cooldown measured in SECONDS, and it shares its
+     error_code with the project's hourly SMTP quota, whose message carries no
+     number at all. Telling somebody who is locked out of their account to come
+     back "later" when the true wait is under a minute is the same species of
+     bug as the one the table above was written to fix, pointing the other way:
+     an honest-sounding line that sends them away for an hour they did not owe.
+     So: when the server names a wait, repeat the wait. */
+  function waitSeconds(raw) {
+    var m = /after (\d+) seconds?/i.exec(String(raw || ''));
+    if (!m) return 0;
+    var n = parseInt(m[1], 10);
+    /* An hour is the ceiling a plausible cooldown can have. Anything larger is
+       a number that means something else, and echoing it would be worse than
+       the generic sentence. */
+    return (isFinite(n) && n > 0 && n <= 3600) ? n : 0;
+  }
+
+  function friendly(err, fallback, context) {
     /* The code first, when there is one. Substring matching stays below as the
        fallback: network failures never carry a code, and an unrecognised code
        should still get whatever the prose can be read for. */
     var code = (err && err.code) ? String(err.code) : '';
+    var over = (context && CONTEXT_MESSAGES[context]) || null;
+
+    /* A stated cooldown outranks both tables - it is the most specific true
+       thing available, and it is the only one that answers "how long?". */
+    if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit') {
+      var secs = waitSeconds(err && (err.message || err.msg));
+      if (secs) return 'Too soon - wait ' + secs + ' seconds and try again.';
+    }
+
+    if (code && over && Object.prototype.hasOwnProperty.call(over, code)) {
+      return over[code];
+    }
     if (code && Object.prototype.hasOwnProperty.call(CODE_MESSAGES, code)) {
       return CODE_MESSAGES[code];
     }
@@ -151,6 +259,7 @@
     /* An uncoded rate limit of unknown kind. Name both possibilities rather
        than pick one and be wrong half the time. */
     if (low.indexOf('email rate limit') >= 0 || low.indexOf('email send rate') >= 0) {
+      if (over && over.over_email_send_rate_limit) return over.over_email_send_rate_limit;
       return CODE_MESSAGES.over_email_send_rate_limit;
     }
     if (low.indexOf('rate limit') >= 0 || low.indexOf('too many') >= 0) {
@@ -174,6 +283,7 @@
     }
     if (low.indexOf('failed to fetch') >= 0 || low.indexOf('networkerror') >= 0 ||
         low.indexOf('aborted') >= 0 || low.indexOf('timeout') >= 0) {
+      if (over && over.network) return over.network;
       return 'Cannot reach the leaderboard. Your score is saved on this device.';
     }
     return fallback || 'Something went wrong. Try again.';
@@ -185,8 +295,16 @@
 
   var cfg = null;              // normalised config, or null when disabled
   var session = null;          // { access_token, refresh_token, expires_at, user }
-  var listeners = { auth: [], error: [], pending: [] };
+  var listeners = { auth: [], error: [], pending: [], recovery: [] };
   var refreshing = null;       // in-flight refresh promise, shared
+  /* True between "the player came back through a recovery link" and "they set
+     a new password". The session is real and usable in that window - GoTrue
+     hands one over, and proving you can read the mailbox IS the proof of
+     ownership - but the player still does not know a password, so the UI has
+     to insist on the one step that fixes that. Deliberately in memory only:
+     it must not survive a reload, or a stale flag would trap somebody in a
+     password form they have already been through. */
+  var recovering = false;
 
   function emit(evt, payload) {
     var list = listeners[evt] || [];
@@ -471,7 +589,8 @@
       signedIn: !!session,
       username: (session && session.user.username) || '',
       email: (session && session.user.email) || '',
-      hasPending: !!readJSON(K_PENDING)
+      hasPending: !!readJSON(K_PENDING),
+      recovering: recovering
     };
   }
 
@@ -482,6 +601,7 @@
       cfg = normalise(raw);
       session = null;
       refreshing = null;
+      recovering = false;
       if (!cfg) return false;
       var saved = readJSON(K_SESSION);
       if (saved && saved.access_token && saved.refresh_token) {
@@ -573,7 +693,7 @@
            legitimate outcome, not an error. */
         return { signedIn: false, needsConfirmation: true };
       }, function (err) {
-        throw new Error(friendly(err, 'Could not create that account.'));
+        throw playerError(err, 'Could not create that account.');
       });
     },
 
@@ -596,9 +716,94 @@
           return publicState();
         });
       }, function (err) {
-        throw new Error(friendly(err, 'Could not sign in.'));
+        throw playerError(err, 'Could not sign in.');
       });
     },
+
+    /* -------------------------------------------------- forgotten password */
+
+    /* Ask GoTrue to mail a one-time recovery link.
+     *
+     * PROVEN, not assumed. Before this existed the honest question was whether
+     * the project can send mail at all - Confirm email was switched OFF on
+     * 2026-09-17 precisely because the built-in SMTP could not keep up with
+     * sign-ups, and a reset button on a server that cannot send is a decoration
+     * that strands people more thoroughly than no button at all. So it was
+     * measured against the live project on 2026-09-18, end to end, into a real
+     * throwaway inbox: POST /auth/v1/recover -> 200, and "Reset your password"
+     * from noreply@mail.app.supabase.io arrived in 3.2 seconds carrying a
+     * working ?type=recovery link. Volume is the difference: sign-up burned a
+     * mail per new player, a reset burns one per person who forgets, and the
+     * only limit in the way is a 55-second per-address cooldown.
+     *
+     * ALWAYS RESOLVES THE SAME WAY for a deliverable request, whether or not
+     * the address has an account. That is not politeness, it is the reason the
+     * endpoint is safe to put on a public page: a form that answers "no such
+     * account" is a free tool for testing whether somebody plays this game.
+     * GoTrue already behaves this way - 200 with an empty body for both,
+     * verified in the same probe - and this must not add a check in front of
+     * it that puts the leak back.
+     */
+    requestPasswordReset: function (email) {
+      if (!cfg) return Promise.reject(new Error('offline'));
+      email = String(email || '').trim();
+      if (!EMAIL_RE.test(email)) {
+        return Promise.reject(new Error('That email does not look right.'));
+      }
+
+      /* Same reasoning as sign-up: without redirect_to the link lands on the
+         project's Site URL, which on GitHub Pages is the domain ROOT and not
+         /skyhook/. The player would click a valid link and arrive nowhere
+         near the game. GoTrue only honours an allow-listed value, so this can
+         improve the outcome and cannot make it worse. */
+      var path = '/auth/v1/recover';
+      var back = httpOrigin() ? redirectTarget() : '';
+      if (back) path += '?redirect_to=' + encodeURIComponent(back);
+
+      return request(path, { method: 'POST', body: { email: email } })
+        .then(function () {
+          return { sent: true };
+        }, function (err) {
+          throw playerError(err, 'Could not send a reset link.', 'reset');
+        });
+    },
+
+    /* Set a new password on the session the recovery link established.
+     *
+     * PUT /auth/v1/user is the same endpoint a signed-in player would use to
+     * change their password; the recovery token is simply how they got a
+     * session without knowing the old one. Which is also why this is allowed
+     * outside recovery: someone already signed in changing their password is
+     * the same operation, and refusing it here would be an arbitrary rule. */
+    setNewPassword: function (password) {
+      if (!cfg) return Promise.reject(new Error('offline'));
+      password = String(password || '');
+      if (password.length < PASSWORD_MIN) {
+        return Promise.reject(new Error('Password must be at least ' + PASSWORD_MIN + ' characters.'));
+      }
+      if (!session) {
+        return Promise.reject(new Error('That reset link has expired or was already used. Ask for a new one.'));
+      }
+      return withToken(function (token) {
+        return request('/auth/v1/user', {
+          method: 'PUT', token: token, body: { password: password }
+        });
+      }).then(function () {
+        /* Out of recovery the moment it succeeds, so the UI stops insisting
+           and the player is simply signed in - with a password they chose and
+           therefore know. */
+        recovering = false;
+        emit('auth', publicState());
+        return loadUsername().then(function () {
+          Online.flushPending();
+          return publicState();
+        });
+      }, function (err) {
+        throw playerError(err, 'Could not set that password.', 'newPassword');
+      });
+    },
+
+    isRecovering: function () { return recovering; },
 
     /* ------------------------------------------------- sign in with Google */
     /* Returns the URL it is sending the browser to (handy for the harness),
@@ -639,6 +844,17 @@
       var tokenMatch = /[#&]access_token=([^&]+)/.exec(hash);
       var errMatch = /[?&#]error_description=([^&]+)/.exec(search + hash) ||
                      /[?&#]error=([^&]+)/.exec(search + hash);
+      /* GoTrue labels the return leg. `type=recovery` is the whole difference
+         between "this person signed in" and "this person is holding a link
+         that proves they own the mailbox and still does not know a password",
+         and the two need opposite handling. Read from search AND hash: the
+         PKCE leg puts it in the query string, the implicit leg in the
+         fragment, and which one a project uses is a dashboard setting. */
+      var isRecovery = /[?&#]type=recovery(&|$)/.test(search + hash);
+      /* The failure shape of a recovery link specifically: GoTrue sends
+         #error=access_denied&error_code=otp_expired for a link that has
+         expired OR has already been spent. */
+      var errCode = /[?&#]error_code=([^&]+)/.exec(search + hash);
 
       function scrub() {
         try {
@@ -651,7 +867,16 @@
       if (errMatch) {
         scrub();
         clearKey(K_VERIFIER);
-        emit('error', 'Sign-in was cancelled or refused.');
+        var code = errCode ? decodeURIComponent(errCode[1]) : '';
+        /* A dead recovery link is the one failure here with an obvious next
+           step, and "Sign-in was cancelled or refused" describes an action the
+           player did not take - they clicked a link we sent them. Name what
+           happened and where to go. */
+        if (code === 'otp_expired' || isRecovery) {
+          emit('error', CODE_MESSAGES.otp_expired);
+        } else {
+          emit('error', 'Sign-in was cancelled or refused.');
+        }
         return Promise.resolve(null);
       }
 
@@ -668,7 +893,12 @@
           body: { auth_code: decodeURIComponent(codeMatch[1]), code_verifier: verifier }
         }).then(function (data) {
           var s = sessionFrom(data);
+          /* The same guard as the implicit leg below. Which of the two shapes
+             a recovery link comes back in is a project setting, not something
+             this client chooses, so both have to be able to recognise one. */
+          if (s && isRecovery) recovering = true;
           if (s) setSession(s);
+          if (s && isRecovery) emit('recovery', publicState());
           return s;
         }, function (err) {
           emit('error', friendly(err, 'Sign-in could not be completed. Try again.'));
@@ -690,7 +920,19 @@
           user: null
         });
         if (!implicit) return Promise.resolve(null);
+        /* THE RECOVERY CASE, and the reason this branch is not just a
+           sign-in. A recovery link comes back in exactly this implicit shape,
+           so before this existed clicking one signed the player in silently
+           and dropped them on the board - session restored, password still
+           unknown, and nothing on screen suggesting there was a step they had
+           not done. They would close the tab and be locked out again the next
+           time. Set the flag BEFORE setSession, so the 'auth' listeners the
+           UI has already attached see a state that says recovering:true on
+           the very first notification rather than a frame of "signed in,
+           nothing to do". */
+        if (isRecovery) recovering = true;
         setSession(implicit);
+        if (isRecovery) emit('recovery', publicState());
         /* The implicit response carries no user object, so ask who this is. */
         return request('/auth/v1/user', { token: implicit.access_token })
           .then(function (user) {
@@ -707,6 +949,11 @@
     },
 
     signOut: function () {
+      /* Leaving mid-recovery is allowed and is a real choice - the player may
+         simply have changed their mind. What must not happen is the flag
+         outliving the session and trapping the next view in a password form
+         for an account nobody is signed into. */
+      recovering = false;
       if (!session) { setSession(null); return Promise.resolve(publicState()); }
       var token = session.access_token;
       /* The local session is dropped first and unconditionally. If the network
@@ -821,6 +1068,26 @@
       durationMs: Math.floor(run.durationMs)
     });
   }
+
+  /* "This address already has an account" arrives under more than one code
+     depending on GoTrue version, and the UI has to react to ALL of them - that
+     is the exact state a player is in when they need the reset flow. Exported
+     so there is one list, here, next to the table it mirrors. */
+  Online.EMAIL_TAKEN_CODES = ['user_already_exists', 'email_exists'];
+  Online.isEmailTaken = function (err) {
+    var code = (err && err.code) ? String(err.code) : '';
+    if (code) {
+      for (var i = 0; i < Online.EMAIL_TAKEN_CODES.length; i++) {
+        if (Online.EMAIL_TAKEN_CODES[i] === code) return true;
+      }
+      return false;
+    }
+    /* No code: fall back to the sentence, which is ours and therefore stable
+       enough for this one purpose. */
+    var m = String((err && err.message) || '').toLowerCase();
+    return m.indexOf('already has an account') >= 0 ||
+           m.indexOf('already taken') >= 0;
+  };
 
   Online.USERNAME_RE = USERNAME_RE;
   Online.PASSWORD_MIN = PASSWORD_MIN;
