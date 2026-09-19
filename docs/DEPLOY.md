@@ -45,9 +45,10 @@ Done, 2026-09-18:
    *deploy-scoped* token bound to this one app with a 1-year expiry, not a
    personal access token: if it leaked, the worst it can do is redeploy this
    game.
-3. **No custom domain.** Deliberate - Leo has not picked a name. Nothing in
-   this repo hardcodes one; see "Custom domain" below for the single line that
-   changes when it exists.
+3. **The custom domain exists.** `skyhookplay.com`, bought on GoDaddy
+   2026-09-19. Fly certs are requested for it and for `www.`; both read
+   *Not verified* until the DNS records below are added. See "Custom domain"
+   for the records and for the one line in `fly.toml` that depends on them.
 
 ### Reproducing it from scratch
 
@@ -75,58 +76,73 @@ When it finishes the workflow asserts the live site itself - `/health`, the
 page, and every asset - so a green tick means the game is genuinely playable
 at <https://skyhook-game.fly.dev>, not merely that `flyctl` exited zero.
 
-### Custom domain, when it exists
+### Custom domain
 
-**`skyhook.com` is not available and is not worth chasing.** Checked
-2026-09-18: registered since 2003, held by Skyhook Wireless through
-MarkMonitor - a corporate brand-protection registrar. That is not a domain
-that lapses or sells to a hobby project, so no plan in this repo assumes it.
-Any other name works identically; the point of `SITE_ORIGIN` is that the game
-does not care which one it turns out to be.
+The domain is **`skyhookplay.com`**, registered on **GoDaddy** on 2026-09-19.
+Nameservers are `ns65.domaincontrol.com` / `ns66.domaincontrol.com`, i.e. the
+zone is edited in the GoDaddy DNS panel and nowhere else.
 
-```sh
-fly certs add skyhook.example.com          # Fly prints the DNS records to add
-fly certs show skyhook.example.com         # poll until it says Ready
+(`skyhook.com` was never an option: registered since 2003, held by Skyhook
+Wireless through MarkMonitor. `skyhookplay.com` is the name that was actually
+bought, and it is the only one this repo refers to.)
+
+#### DNS records to add at GoDaddy
+
+GoDaddy ships a new zone with a parked `A @` and a `CNAME www -> @`. The parked
+A records are **replaced**, not appended to - as of 2026-09-19 the apex still
+answers `76.223.105.230` / `13.248.243.5`, which is GoDaddy's parking page.
+
+| Type | Name | Value | Note |
+|---|---|---|---|
+| `A` | `@` | `66.241.124.247` | Fly shared IPv4 ingress. Delete both parked A records first. |
+| `AAAA` | `@` | `2a09:8280:1::192:edd5:0` | Fly **dedicated** IPv6 for `skyhook-game`. Not optional - see below. |
+| `CNAME` | `www` | `@` | Already present by default. Leave it: once the apex points at Fly, `www` follows. |
+
+The `AAAA` record is what makes the cert verify without extra steps. The IPv4
+address is *shared* across many Fly apps, so an A record alone does not prove
+which app owns the name; the IPv6 address is dedicated to `skyhook-game`, so
+pointing at it is the proof. Skip the AAAA and Fly instead demands
+`TXT _fly-ownership.skyhookplay.com -> app-lzwjdg3`.
+
+If a cert is wanted *before* traffic is cut over, the ACME challenge route
+works too and needs no A/AAAA at all:
+
+```
+CNAME _acme-challenge.skyhookplay.com     -> skyhookplay.com.lzwjdg3.flydns.net.
+CNAME _acme-challenge.www.skyhookplay.com -> www.skyhookplay.com.lzwjdg3.flydns.net.
 ```
 
-#### What is attached today - and why none of it resolves
+`www` can also be pointed straight at the app with
+`CNAME www -> lzwjdg3.skyhook-game.fly.dev` instead of at `@`. Either is
+correct; `@` is one fewer record to maintain if the IPs ever change.
 
-`fly certs list -a skyhook-game` is **not empty**, which is misleading unless
-the rest is written down. Verified 2026-09-19:
+#### Cert status, and how to check it
 
-| Hostname on the app | Cert status | Does the domain exist? |
+```sh
+fly certs list -a skyhook-game                   # both hostnames, one line each
+fly certs check skyhookplay.com -a skyhook-game  # force a re-check after a DNS edit
+fly certs show  skyhookplay.com -a skyhook-game  # what Fly is still waiting for
+fly certs setup skyhookplay.com -a skyhook-game  # re-print the records above
+```
+
+As of 2026-09-19:
+
+| Hostname | Cert status | Blocked on |
 |---|---|---|
-| `skyhook.run` | Not verified | **No.** Registry RDAP returns `404 Object not found` and the name has no NS records. |
-| `www.skyhook.run` | Not verified | **No** - same unregistered name. |
-| `skyhook.pechnicki.com` | Not verified | Parent yes, this host no. `pechnicki.com` is Leo's (GoDaddy, `*.domaincontrol.com` NS); no record for this subdomain exists yet. |
+| `skyhookplay.com` | Not verified | The `A`/`AAAA` records above. Apex still resolves to GoDaddy parking. |
+| `www.skyhookplay.com` | Not verified | Follows the apex, via the default `CNAME www -> @`. |
 
-So three certs were added with `fly certs add` **before anything was bought**.
-Fly will hold a cert request for a domain that does not exist; it simply never
-verifies. They cost nothing and serve nothing, and they are the reason
-`certs list` can look like a custom domain is half-configured when in fact
-**no domain has been purchased.**
+The three certs that used to sit on this app - `skyhook.run`, `www.skyhook.run`
+and `skyhook.pechnicki.com` - were added before any domain was bought, never
+verified, and were **removed on 2026-09-19**. `fly certs list` now shows the two
+`skyhookplay.com` entries and nothing else. If a fourth ever reappears,
+somebody added a cert for a name that does not exist; remove it.
 
-`skyhook.run` and `skyhook.game` are both unregistered and therefore buyable.
-`skyhook.gg` is taken - it answers with Route 53 nameservers and serves no
-site, i.e. somebody else is parking it.
-
-The cheapest real option needs no purchase at all: **`skyhook.pechnicki.com`**,
-on a domain Leo already owns. One CNAME at GoDaddy plus the ownership record
-`fly certs setup` prints, and the cert that is already requested verifies by
-itself.
-
-To drop the dead ones:
-
-```sh
-fly certs remove skyhook.run     -a skyhook-game
-fly certs remove www.skyhook.run -a skyhook-game
-```
-
-Then change **one line** in `fly.toml`:
+#### The one line that depends on all of this
 
 ```toml
 [env]
-  SITE_ORIGIN = 'https://skyhook.example.com'
+  SITE_ORIGIN = 'https://skyhookplay.com'
 ```
 
 That variable is the only place the public hostname appears in the whole
@@ -136,6 +152,13 @@ avoids hardcoding a hostname without acquiring a build step. Its default is the
 GitHub Pages origin already written into `index.html`, so with no override the
 rewrite is a no-op and the page is byte-identical to the repo.
 
+**Deploying that value before the cert is Ready is the failure mode to avoid.**
+The game would still be served perfectly well on `skyhook-game.fly.dev`, but
+every copy of the page would declare itself canonical at a hostname that does
+not resolve - which is worse than claiming the wrong origin, because a crawler
+that cannot reach the canonical target may drop the page entirely. Confirm
+`fly certs check skyhookplay.com -a skyhook-game` reports **Ready** first.
+
 ---
 
 ## Two live origins
@@ -144,30 +167,35 @@ Both of these serve SKYHOOK from the same commit right now:
 
 | Origin | Served by | `<link rel=canonical>` it reports |
 |---|---|---|
-| <https://skyhook-game.fly.dev/> | Fly (this Dockerfile) | `https://skyhook-game.fly.dev/` - rewritten by `sub_filter` |
+| <https://skyhookplay.com/> | Fly, once DNS is live | `https://skyhookplay.com/` - `SITE_ORIGIN`, rewritten by `sub_filter` |
+| <https://skyhook-game.fly.dev/> | Fly (this Dockerfile) | `https://skyhookplay.com/` - the same rewrite; the app answers on both names |
 | <https://leopechnicki.github.io/skyhook/> | GitHub Pages, source `main:/` | `https://leopechnicki.github.io/skyhook/` - the literal in the repo |
 
-Two origins each claiming to be canonical is not a crash, and while Fly is new
-the Pages copy is a genuinely useful fallback. It is also not a stable resting
-place: it splits any inbound links, and the day the two commits differ, a
-player following an old link plays a different build than the one being
-tested.
+Buying `skyhookplay.com` settles which name *should* win but does not on its own
+close this down to one origin. Fly serves the game under both the custom domain
+and `skyhook-game.fly.dev`, which is harmless - one canonical is declared and it
+names the custom domain. GitHub Pages is the one that genuinely competes: it
+serves a second copy that declares *itself* canonical. That splits inbound links,
+and the day the two commits differ a player following an old link plays a
+different build than the one being tested.
 
-The decision is Leo's, and it is a one-liner either way:
+The decision is Leo's:
 
 ```sh
-# Option A - Fly is the site. Turn Pages off; the fly.dev URL stands alone.
+# Option A - skyhookplay.com is the site. Turn Pages off once the cert is Ready.
 gh api -X DELETE repos/leopechnicki/skyhook/pages
 
-# Option B - Pages stays as the advertised home. Then SITE_ORIGIN should be
-# set to the Pages URL so Fly stops claiming canonical, and Fly becomes a
-# mirror rather than a second front door.
+# Option B - Pages stays as a mirror. Then it should carry a canonical pointing
+# at skyhookplay.com rather than at itself, which means editing index.html - and
+# index.html's github.io literal is exactly what conf/site.conf.template rewrites
+# against, so that edit is not free. Option A is the cheaper end state.
 ```
 
 Until that is decided, `README.md` and `package.json:homepage` continue to
-point at Pages, because that is still where the published link goes. They move
+point at Pages, because that is still where the published link goes and
+`skyhookplay.com` does not resolve yet. They move to `https://skyhookplay.com/`
 in the same change that resolves this, not before - a README that advertises a
-URL nobody has agreed on is the worse of the two errors.
+URL that 404s is the worse of the two errors.
 
 ---
 

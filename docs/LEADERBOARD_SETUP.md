@@ -57,10 +57,28 @@ public board. It is safe to run again later - running it twice changes nothing.
    **Client ID** and a **Client Secret** to paste back into that same panel.
 4. Still in that Google panel, copy the **Callback URL** Supabase displays and
    paste it into Google's "Authorised redirect URIs". Save on both sides.
-5. Left sidebar: **Authentication** -> **URL Configuration**. Set **Site URL**
-   to `https://leopechnicki.github.io/skyhook/` and add the same address under
-   **Redirect URLs**. Without this, Google sends players back to the wrong page
-   after they sign in.
+5. Left sidebar: **Authentication** -> **URL Configuration**. **Redirect URLs**
+   must list *every* origin the game is served from - today that is:
+
+   ```
+   https://skyhookplay.com/
+   https://www.skyhookplay.com/
+   https://skyhook-game.fly.dev/
+   https://leopechnicki.github.io/skyhook/
+   ```
+
+   **Site URL** is the fallback used when a request arrives with no valid
+   `redirect_to`; point it at whichever of those is the advertised home
+   (`https://leopechnicki.github.io/skyhook/` until skyhookplay.com resolves,
+   `https://skyhookplay.com/` from then on).
+
+   The game does not hardcode a return address - `redirectTarget()` in
+   `js/online.js` builds it from `location.origin + location.pathname`. But
+   GoTrue only honours a `redirect_to` that is on the allow-list and quietly
+   substitutes **Site URL** for anything else, so an origin missing from that
+   list is a player who signs in and lands on a different site. Adding
+   `https://skyhookplay.com/` is a dashboard change, not a code change, and it
+   has to happen before the domain starts serving players.
 
 Skipping this whole step is fine -- email and password work on their own -- but
 if you skip it, leave `googleSignIn: false` in `js/config.js` (it is the

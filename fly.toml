@@ -20,11 +20,19 @@ primary_region = 'ams'
   # The public origin, as the meta tags should report it. conf/site.conf.template
   # rewrites <link rel=canonical>, og:url and og:image to this at serve time.
   #
-  # <app>.fly.dev is assigned by Fly the moment the app is created, so this is a
-  # real hostname and not a guess. NO CUSTOM DOMAIN IS SET HERE because none has
-  # been bought yet; when one is, this is the single line that changes, followed
-  # by `fly certs add <domain>`.
-  SITE_ORIGIN = 'https://skyhook-game.fly.dev'
+  # The custom domain now exists: skyhookplay.com, registered on GoDaddy
+  # 2026-09-19. Fly certs are already requested for both skyhookplay.com and
+  # www.skyhookplay.com and go Ready once the GoDaddy records listed in
+  # docs/DEPLOY.md are in place.
+  #
+  # THIS LINE IS ONLY TRUE ONCE THAT CERT IS READY. Until the DNS is live,
+  # deploying this value makes <link rel=canonical> advertise a hostname that
+  # does not resolve, so the change that sets it must not merge before
+  # `fly certs check skyhookplay.com -a skyhook-game` says Ready.
+  #
+  # skyhook-game.fly.dev keeps working either way - Fly assigns it at app
+  # creation and it is what .github/workflows/deploy.yml verifies against.
+  SITE_ORIGIN = 'https://skyhookplay.com'
 
 [http_service]
   internal_port = 8080
