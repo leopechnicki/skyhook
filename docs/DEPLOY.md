@@ -89,6 +89,39 @@ fly certs add skyhook.example.com          # Fly prints the DNS records to add
 fly certs show skyhook.example.com         # poll until it says Ready
 ```
 
+#### What is attached today - and why none of it resolves
+
+`fly certs list -a skyhook-game` is **not empty**, which is misleading unless
+the rest is written down. Verified 2026-09-19:
+
+| Hostname on the app | Cert status | Does the domain exist? |
+|---|---|---|
+| `skyhook.run` | Not verified | **No.** Registry RDAP returns `404 Object not found` and the name has no NS records. |
+| `www.skyhook.run` | Not verified | **No** - same unregistered name. |
+| `skyhook.pechnicki.com` | Not verified | Parent yes, this host no. `pechnicki.com` is Leo's (GoDaddy, `*.domaincontrol.com` NS); no record for this subdomain exists yet. |
+
+So three certs were added with `fly certs add` **before anything was bought**.
+Fly will hold a cert request for a domain that does not exist; it simply never
+verifies. They cost nothing and serve nothing, and they are the reason
+`certs list` can look like a custom domain is half-configured when in fact
+**no domain has been purchased.**
+
+`skyhook.run` and `skyhook.game` are both unregistered and therefore buyable.
+`skyhook.gg` is taken - it answers with Route 53 nameservers and serves no
+site, i.e. somebody else is parking it.
+
+The cheapest real option needs no purchase at all: **`skyhook.pechnicki.com`**,
+on a domain Leo already owns. One CNAME at GoDaddy plus the ownership record
+`fly certs setup` prints, and the cert that is already requested verifies by
+itself.
+
+To drop the dead ones:
+
+```sh
+fly certs remove skyhook.run     -a skyhook-game
+fly certs remove www.skyhook.run -a skyhook-game
+```
+
 Then change **one line** in `fly.toml`:
 
 ```toml

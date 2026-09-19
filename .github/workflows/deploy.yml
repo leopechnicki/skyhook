@@ -14,10 +14,14 @@
 #               the browser suite and all fatal in production.
 #   3. deploy   only on push to main, and only if FLY_API_TOKEN exists.
 #
-# The token does not exist yet and neither does the Fly app, so today this
-# workflow runs steps 1 and 2 and then says, in plain words, exactly which
-# commands Leo has to run. The moment the secret lands, the next push to main
-# deploys with no further edit to any file. See docs/DEPLOY.md.
+# App `skyhook-game` exists and FLY_API_TOKEN was set on 2026-09-18, so step 3
+# runs for real on every push to main. This paragraph used to say the opposite
+# and was left behind when that stopped being true - a comment asserting the
+# reverse of reality is worse than no comment, because it is trusted.
+#
+# The `preflight` token check stays anyway. It is what makes a rotated-away or
+# expired secret read as "deploy skipped, here is how to fix it" instead of a
+# red X somewhere in the middle of a flyctl invocation. See docs/DEPLOY.md.
 
 name: deploy
 
