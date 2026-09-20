@@ -1154,6 +1154,49 @@ async function main() {
       check('abandoning a recovery still leaves a usable game',
         (await cpage.locator('#ol-signin').isVisible()) === true);
       await cctx.close();
+
+      /* Cancel was never the only way out of that form. The X, the Escape
+         key, a click on the backdrop and "Back to leaderboard" are four more
+         doors out of the same room, and until abandonRecovery() existed every
+         one of them closed the view while leaving the session behind - a
+         player signed in to an account whose password they still do not know.
+         Worse than the original bug, because `recovering` is in memory only:
+         one reload and the half-finished recovery is indistinguishable from
+         an ordinary session, with nothing on screen saying a step was
+         skipped. Each door is asserted separately - they are wired
+         independently, so a regression can take out one and leave three
+         passing. */
+      for (const door of [
+        { name: 'the X button', act: (p) => p.locator('#ol-close').click() },
+        { name: 'the Escape key', act: (p) => p.keyboard.press('Escape') },
+        { name: 'a click on the backdrop', act: (p) => p.locator('#ol').click({ position: { x: 5, y: 5 } }) },
+        { name: '"Back to leaderboard"', act: (p) => p.locator('#ol-back').click() },
+      ]) {
+        const xctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+        const xpage = await xctx.newPage();
+        attachLogs(xpage, errors, 'abandon-' + door.name);
+
+        await xpage.goto(base + 'online/' + RECOVERY_LEG, { waitUntil: 'load' });
+        await xpage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+        await wait(600);
+
+        check('recovery view is open before leaving by ' + door.name,
+          /SET A NEW PASSWORD/i.test(await xpage.locator('#ol-title').textContent()),
+          await xpage.locator('#ol-title').textContent());
+
+        await door.act(xpage);
+        await xpage.waitForFunction(
+          'window.__SKYHOOK.game.online.signedIn === false', null, { timeout: 8000 })
+          .catch(() => { /* let the checks below report it */ });
+        await wait(300);
+
+        check('leaving a recovery by ' + door.name + ' signs the player out',
+          (await xpage.evaluate('window.__SKYHOOK.game.online.signedIn')) === false);
+        check('leaving a recovery by ' + door.name + ' leaves no session on the device',
+          !((await xpage.evaluate('localStorage.getItem("skyhook.session")')) || '')
+            .includes('access_token'));
+        await xctx.close();
+      }
     }
 
     /* ==================================================================

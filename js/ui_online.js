@@ -361,6 +361,29 @@
     if (view !== 'auth') { try { el['ol-close'].focus(); } catch (e) {} }
   }
 
+  /* EVERY way out of SET A NEW PASSWORD that is not "I set one".
+   *
+   * A recovery link hands over a real, persisted session before the player
+   * has chosen a password - that is how they get to the form at all. So any
+   * exit that just closes the view leaves them signed in to an account whose
+   * password they still do not know, which is precisely the state Klaudia was
+   * in when she gave up and made a second account. The Cancel link used to be
+   * the only door that cleaned up; the X, the Escape key, a click on the
+   * backdrop and "Back to leaderboard" were three more doors out of the same
+   * room, all of them leaving the trap armed - and worse than the original,
+   * because `recovering` lives in memory only, so one reload turns the
+   * half-finished recovery into an ordinary-looking signed-in session with no
+   * evidence anything was skipped.
+   *
+   * Hence one funnel rather than a guard bolted onto each exit: a fifth door
+   * added later gets the behaviour for free, which a fourth copy of the same
+   * three lines would not. */
+  function abandonRecovery(after) {
+    var done = after || function () { /* nothing to do afterwards */ };
+    if (!Online.isRecovering || !Online.isRecovering()) { done(); return; }
+    Online.signOut().then(function () { syncGame(); done(); }, function () { done(); });
+  }
+
   function closeOverlay() {
     if (!wired || !open) return;
     open = false;
@@ -369,6 +392,11 @@
     el['ol-password'].value = '';
     try { if (lastFocus && lastFocus.focus) lastFocus.focus(); } catch (e) { /* ignore */ }
     lastFocus = null;
+    /* After the panel is visually gone: closing must feel instant, and the
+       sign-out is a network round trip. Online.signOut() drops the local
+       session first and unconditionally, so the trap is disarmed even if the
+       request never lands. */
+    abandonRecovery();
   }
 
   /* aria-modal only describes intent; without this it is a false promise and
@@ -575,7 +603,12 @@
     wired = true;
 
     el['ol-close'].addEventListener('click', closeOverlay);
-    el['ol-back'].addEventListener('click', function () { showBoard(); });
+    /* "Back to leaderboard" is shown on the recovery view too, so it is one of
+       the doors out of it - and going back to the board is exactly the move
+       that hides the unfinished step from the player. */
+    el['ol-back'].addEventListener('click', function () {
+      abandonRecovery(function () { showBoard(); });
+    });
     el['ol-signin'].addEventListener('click', function () { showAuth('signin'); });
     el['ol-signout'].addEventListener('click', onSignOut);
 
@@ -605,13 +638,7 @@
          form". */
       if (mode === 'signup') { showAuth('signin'); return; }
       if (mode === 'reset') { showAuth('signin'); return; }
-      if (mode === 'recover') {
-        /* Abandoning a recovery has to drop the session it established, or
-           the player is left silently signed in to an account whose password
-           they still do not know - the same trap in a new place. */
-        Online.signOut().then(function () { syncGame(); showBoard(); });
-        return;
-      }
+      if (mode === 'recover') { abandonRecovery(function () { showBoard(); }); return; }
       showAuth('signup');
     });
 

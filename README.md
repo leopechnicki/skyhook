@@ -151,23 +151,23 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 
 | File | Lines | Purpose |
 |---|---|---|
-| `index.html` | 138 | Shell: canvas, ad slot, script loading |
-| `css/style.css` | 366 | Layout only (all game visuals are canvas-drawn) |
+| `index.html` | 162 | Shell: canvas, ad slot, script loading |
+| `css/style.css` | 415 | Layout only (all game visuals are canvas-drawn) |
 | `js/utils.js` | 145 | Math helpers, PRNG, localStorage wrapper, particle system, glow sprites |
 | `js/audio.js` | 159 | Fully synthesized audio via Web Audio API (no sample files) |
-| `js/celestial.js` | 879 | Body ART only: planet formation classes, spectral star colours, meteoroid rocks. Sprite-cached, zero physics |
-| `js/rocket.js` | 396 | Player ART only: hull sprite, heading, thruster plume. Sprite-cached, zero physics |
+| `js/celestial.js` | 955 | Body ART only: planet formation classes, spectral star colours, meteoroid rocks. Sprite-cached, zero physics |
+| `js/rocket.js` | 398 | Player ART only: hull sprite, heading, thruster plume. Sprite-cached, zero physics |
 | `js/game.js` | ~1910 | Core game: celestial bodies, gravity, orbiting, flying, latching, meteoroids, shards, rendering |
 | `js/main.js` | 187 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
-| `js/config.js` | 37 | Supabase project URL + **anon** (public) key. Committed on purpose -- GitHub Pages serves the repo, so an uncommitted config does not exist on the live site. Blank both strings to go offline |
-| `js/online.js` | 723 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
-| `js/ui_online.js` | 388 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
+| `js/config.js` | 45 | Supabase project URL + **anon** (public) key. Committed on purpose -- GitHub Pages serves the repo, so an uncommitted config does not exist on the live site. Blank both strings to go offline |
+| `js/online.js` | 1099 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
+| `js/ui_online.js` | 731 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
 | `supabase/schema.sql` | 313 | Tables, RLS policies, plausibility CHECKs, rate-limit trigger, public board view |
-| `test/smoke.mjs` | 372 | Playwright end-to-end smoke test |
-| `test/balance.mjs` | 532 | Headless difficulty/balance harness (no browser) |
+| `test/smoke.mjs` | 388 | Playwright end-to-end smoke test |
+| `test/balance.mjs` | 572 | Headless difficulty/balance harness (no browser) |
 | `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |
-| `test/online.mjs` | 667 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
-| `test/leaderboard_ui.mjs` | 545 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
+| `test/online.mjs` | 1175 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
+| `test/leaderboard_ui.mjs` | 1342 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
 
 Runtime dependencies: none. The only dev dependency is Playwright, and only for the smoke test.
 
