@@ -239,12 +239,22 @@ body {
   color: #fff;
 }
 
+/* The line every answer in this panel is delivered on: "a reset link is on its
+   way", "Link confirmed. Choose a new password", "that link has expired". It
+   used to be 12px at 85% opacity, which is fine for "earlier run uploaded" and
+   not fine for the only instruction on screen - the player who reads this one
+   is, by definition, already confused and often on a phone. Bigger, brighter,
+   and left with room for two lines, because the reset confirmation IS two
+   lines and a fixed 17px box made the second one shift the layout as it
+   arrived. Contrast against the panel gradient is 12.6:1 - WCAG AAA with room,
+   and measured in the browser, not estimated. */
 .ol-msg {
   margin: 6px 0;
-  min-height: 17px;
-  font-size: 12px;
+  min-height: 19px;
+  font-size: 13px;
+  line-height: 1.45;
   text-align: center;
-  color: rgba(150, 190, 220, 0.85);
+  color: rgba(198, 224, 240, 0.95);
 }
 .ol-msg.is-error { color: #ff8ca3; }
 
@@ -335,9 +345,14 @@ body {
    sentence, and letter-spaced caps are slower to read. */
 .ol-field .ol-hint {
   margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.35;
-  color: rgba(150, 190, 220, 0.6);
+  /* 11px at 60% opacity is decoration, and on RESET PASSWORD this line is not
+     decoration: it is the sentence that tells somebody who has muddled their
+     login with their leaderboard name which of the two the single box wants.
+     12px at 78% is still visibly subordinate to the label above it and is
+     actually readable on a phone. */
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(163, 199, 226, 0.78);
 }
 .ol-field input:focus {
   outline: none;
@@ -350,18 +365,42 @@ body {
   justify-content: space-between;
   gap: 10px;
   margin-top: 8px;
+  /* Three links now ("Create an account", "Forgot password?", "Back to
+     leaderboard") where there were two. On a 390px phone they do not fit on
+     one line, and without this a flex row does not wrap - it squeezes, and the
+     way a <button> squeezes is by clipping its own label. "Forgot password?"
+     is the one route back into a locked-out account, so it is the last label
+     in the game that may render as "Forgot passw...". Let the row wrap. */
+  flex-wrap: wrap;
 }
 .ol-link {
-  padding: 8px 2px;
+  /* 44px of height is the tap target every platform's own guidance asks for,
+     and the row these sit in is the one place in the game where a mis-tap
+     costs a player their way back into their account. The padding does it
+     without a fixed height, so the label still wraps rather than clips. */
+  padding: 11px 2px;
+  min-height: 44px;
   font: inherit;
-  font-size: 12px;
-  color: rgba(53, 230, 255, 0.85);
+  font-size: 13px;
+  color: rgba(53, 230, 255, 0.92);
   background: none;
   border: 0;
   cursor: pointer;
   text-decoration: underline;
 }
 .ol-link:hover { color: #8af4ff; }
+
+/* "Forgot password?" is not a peer of the other two links in importance: one
+   of them offers a second account (which is exactly the wrong answer, and the
+   answer a real player reached for on 2026-09-19 when she could not sign in)
+   and the other closes the form. This is the route back into the account she
+   already has, so it is the most legible thing in the row - full-strength
+   colour and a heavier weight, without a button's worth of visual noise. */
+#ol-forgot {
+  color: #6fe9ff;
+  font-weight: 700;
+}
+#ol-forgot:hover { color: #b6f6ff; }
 
 /* Keyboard users must be able to see where they are. */
 .ol :focus-visible {

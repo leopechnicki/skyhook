@@ -40,7 +40,8 @@
      not landed yet would be a far worse bug than the wording being stale for
      one page load. Every read of these is null-guarded. */
   var SOFT_IDS = ['ol-email-label', 'ol-email-hint', 'ol-username-label',
-    'ol-username-hint'];
+    'ol-username-hint', 'ol-forgot', 'ol-email-field', 'ol-password-field',
+    'ol-password-label'];
 
   function collect() {
     for (var i = 0; i < IDS.length; i++) {
@@ -76,6 +77,57 @@
       emailHint: 'Your login. Never shown on the board.',
       usernameLabel: 'Username',
       usernameHint: 'Your public name on the leaderboard.'
+    },
+    /* Asking for the link. The email is the ONLY field, so the hint has to do
+       the work the missing password box used to: say which of the two names
+       this is, because the player who needs this screen is by definition the
+       one who has already got them confused. */
+    reset: {
+      emailLabel: 'Email you signed up with',
+      emailHint: 'Not your leaderboard name. We will send a link to it.'
+    },
+    /* Back from the link, choosing a new password. No email field: the link
+       already proved which account this is, and showing an editable address
+       would invite someone to think they can retarget it. */
+    recover: {
+      emailLabel: 'Email you signed up with',
+      emailHint: 'Not your leaderboard name.'
+    }
+  };
+
+  /* Everything that differs per mode, in one table instead of scattered
+     ternaries. Four modes made the old `mode === 'signup' ? a : b` pattern
+     wrong by construction - a two-way ternary cannot answer a four-way
+     question, and the failure mode is silent: RESET PASSWORD would have
+     quietly rendered the sign-in wording. */
+  var MODES = {
+    signin: {
+      title: 'SIGN IN', submit: 'SIGN IN', busy: 'Signing in...',
+      fields: { username: false, email: true, password: true },
+      passwordAutocomplete: 'current-password',
+      toggle: 'Create an account', showForgot: true,
+      fallback: 'Could not sign in.'
+    },
+    signup: {
+      title: 'CREATE ACCOUNT', submit: 'CREATE ACCOUNT', busy: 'Creating account...',
+      fields: { username: true, email: true, password: true },
+      passwordAutocomplete: 'new-password',
+      toggle: 'I already have an account', showForgot: false,
+      fallback: 'Could not create that account.'
+    },
+    reset: {
+      title: 'RESET PASSWORD', submit: 'SEND RESET LINK', busy: 'Sending...',
+      fields: { username: false, email: true, password: false },
+      passwordAutocomplete: 'current-password',
+      toggle: 'Back to sign in', showForgot: false,
+      fallback: 'Could not send a reset link.'
+    },
+    recover: {
+      title: 'SET A NEW PASSWORD', submit: 'SET PASSWORD', busy: 'Saving...',
+      fields: { username: false, email: false, password: true },
+      passwordAutocomplete: 'new-password',
+      toggle: 'Cancel', showForgot: false,
+      fallback: 'Could not set that password.'
     }
   };
 
@@ -86,10 +138,20 @@
   /* ---------------------------------------------------------------- state */
   var game = null;
   var open = false;
-  var mode = 'signin';        // 'signin' | 'signup'
+  var mode = 'signin';        // a key of MODES
   var busy = false;
   var lastFocus = null;
   var loadedOnce = false;
+  /* A one-shot line to leave on the board view once it has finished loading.
+     It exists because showBoard() -> loadBoard() is ASYNCHRONOUS: anything
+     written into #ol-board-msg by the caller is overwritten a few hundred
+     milliseconds later when the fetch resolves. That is the same shape as the
+     "Account created" bug in onSubmit below - a true sentence painted into an
+     element that is about to be cleared - and the one message that must not
+     vanish that way is "your password was changed", because a player who does
+     not see it has no way to tell whether the thing they came back to do
+     actually happened. */
+  var boardNotice = '';
   /* False until boot() has found the markup AND a configured backend. Every
      entry point below checks it, so on the shipped (config-less) build the
      SK.UI handles exist but are inert - calling one is a no-op, never a throw
@@ -182,11 +244,15 @@
   }
 
   function loadBoard() {
-    text(el['ol-board-msg'], 'Loading...');
+    /* Taken and cleared up front, so a later reload() cannot resurrect a
+       confirmation for something that happened minutes ago. */
+    var notice = boardNotice;
+    boardNotice = '';
+    text(el['ol-board-msg'], notice || 'Loading...');
     return Online.topScores().then(function (rows) {
       loadedOnce = true;
       renderRows(rows);
-      text(el['ol-board-msg'], rows.length ? '' : 'No scores yet. Be the first.');
+      text(el['ol-board-msg'], notice || (rows.length ? '' : 'No scores yet. Be the first.'));
       return Online.myRank();
     }).then(function (mine) {
       el['ol-myrank'].textContent = mine
@@ -194,6 +260,9 @@
         : '';
     }).catch(function (err) {
       renderRows([]);
+      /* The load failure wins this line: it is the actionable one, and the
+         notice it displaces is not the only evidence - a password change
+         leaves the player signed in, which #ol-account states by name. */
       text(el['ol-board-msg'], safeMessage(err, 'Could not load the leaderboard.'), true);
       el['ol-myrank'].textContent = '';
     });
@@ -210,7 +279,8 @@
 
   /* ------------------------------------------------------------ the views */
 
-  function showBoard() {
+  function showBoard(notice) {
+    boardNotice = notice || '';
     el['ol-board'].hidden = false;
     el['ol-auth'].hidden = true;
     el['ol-title'].textContent = 'GLOBAL LEADERBOARD';
@@ -218,34 +288,64 @@
     loadBoard();
   }
 
+  /* Hiding a field means hiding its whole .ol-field wrapper - label, input and
+     hint together. Hiding the input alone would leave an orphan label
+     captioning nothing, which reads as a rendering bug. The wrapper ids are
+     SOFT, so an index.html that predates them degrades to showing a field
+     rather than to no account layer at all. */
+  function setField(wrapperId, inputId, show) {
+    var wrap = el[wrapperId];
+    if (wrap) wrap.hidden = !show;
+    var input = el[inputId];
+    /* A hidden required-looking input must also leave the tab order, or the
+       focus trap will park the keyboard on a box nobody can see. */
+    if (input) input.disabled = !show;
+  }
+
   function showAuth(next) {
-    mode = next || 'signin';
+    var spec = MODES[next] || MODES.signin;
+    mode = MODES[next] ? next : 'signin';
+
     el['ol-board'].hidden = true;
     el['ol-auth'].hidden = false;
-    el['ol-title'].textContent = mode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN';
-    el['ol-username-field'].hidden = mode !== 'signup';
-    el['ol-submit'].textContent = mode === 'signup' ? 'CREATE ACCOUNT' : 'SIGN IN';
+    el['ol-title'].textContent = spec.title;
+    el['ol-submit'].textContent = spec.submit;
 
-    var copy = mode === 'signup' ? COPY.signup : COPY.signin;
+    el['ol-username-field'].hidden = !spec.fields.username;
+    el['ol-username'].disabled = !spec.fields.username;
+    setField('ol-email-field', 'ol-email', spec.fields.email);
+    setField('ol-password-field', 'ol-password', spec.fields.password);
+
+    var copy = COPY[mode] || COPY.signin;
     setCopy(el['ol-email-label'], copy.emailLabel);
     setCopy(el['ol-email-hint'], copy.emailHint);
-    if (mode === 'signup') {
+    if (spec.fields.username) {
       setCopy(el['ol-username-label'], COPY.signup.usernameLabel);
       setCopy(el['ol-username-hint'], COPY.signup.usernameHint);
     }
-    el['ol-toggle'].textContent = mode === 'signup'
-      ? 'I already have an account'
-      : 'Create an account';
+    setCopy(el['ol-password-label'], mode === 'recover' ? 'New password' : 'Password');
+
+    el['ol-toggle'].textContent = spec.toggle;
+    /* Only on SIGN IN. On CREATE ACCOUNT there is no password to have
+       forgotten; on the two reset views the player is already inside the
+       flow the link would start. */
+    if (el['ol-forgot']) el['ol-forgot'].hidden = !spec.showForgot;
+
     /* The browser must be told which password this is, or it will offer to
-       overwrite a saved password with a new one and vice versa. */
-    el['ol-password'].setAttribute('autocomplete',
-      mode === 'signup' ? 'new-password' : 'current-password');
+       overwrite a saved password with a new one and vice versa. On the
+       recovery view getting this wrong is the difference between the browser
+       offering to save the password the player just chose and it quietly
+       filling in the old one they cannot remember. */
+    el['ol-password'].setAttribute('autocomplete', spec.passwordAutocomplete);
+
     text(el['ol-auth-msg'], '');
     focusFirst();
   }
 
   function focusFirst() {
-    var first = mode === 'signup' ? el['ol-username'] : el['ol-email'];
+    var spec = MODES[mode] || MODES.signin;
+    var first = spec.fields.username ? el['ol-username']
+      : (spec.fields.email ? el['ol-email'] : el['ol-password']);
     try { first.focus(); } catch (e) { /* ignore */ }
   }
 
@@ -261,6 +361,29 @@
     if (view !== 'auth') { try { el['ol-close'].focus(); } catch (e) {} }
   }
 
+  /* EVERY way out of SET A NEW PASSWORD that is not "I set one".
+   *
+   * A recovery link hands over a real, persisted session before the player
+   * has chosen a password - that is how they get to the form at all. So any
+   * exit that just closes the view leaves them signed in to an account whose
+   * password they still do not know, which is precisely the state Klaudia was
+   * in when she gave up and made a second account. The Cancel link used to be
+   * the only door that cleaned up; the X, the Escape key, a click on the
+   * backdrop and "Back to leaderboard" were three more doors out of the same
+   * room, all of them leaving the trap armed - and worse than the original,
+   * because `recovering` lives in memory only, so one reload turns the
+   * half-finished recovery into an ordinary-looking signed-in session with no
+   * evidence anything was skipped.
+   *
+   * Hence one funnel rather than a guard bolted onto each exit: a fifth door
+   * added later gets the behaviour for free, which a fourth copy of the same
+   * three lines would not. */
+  function abandonRecovery(after) {
+    var done = after || function () { /* nothing to do afterwards */ };
+    if (!Online.isRecovering || !Online.isRecovering()) { done(); return; }
+    Online.signOut().then(function () { syncGame(); done(); }, function () { done(); });
+  }
+
   function closeOverlay() {
     if (!wired || !open) return;
     open = false;
@@ -269,6 +392,11 @@
     el['ol-password'].value = '';
     try { if (lastFocus && lastFocus.focus) lastFocus.focus(); } catch (e) { /* ignore */ }
     lastFocus = null;
+    /* After the panel is visually gone: closing must feel instant, and the
+       sign-out is a network round trip. Online.signOut() drops the local
+       session first and unconditionally, so the trap is disarmed even if the
+       request never lands. */
+    abandonRecovery();
   }
 
   /* aria-modal only describes intent; without this it is a false promise and
@@ -301,9 +429,46 @@
     var email = el['ol-email'].value;
     var password = el['ol-password'].value;
     var username = el['ol-username'].value;
+    var spec = MODES[mode] || MODES.signin;
 
     setBusy(true);
-    text(el['ol-auth-msg'], mode === 'signup' ? 'Creating account...' : 'Signing in...');
+    text(el['ol-auth-msg'], spec.busy);
+
+    /* ---- ask for a reset link ----
+       Answers the SAME way whether or not that address has an account, and
+       the wording is chosen to be true in both cases: "if there is an account"
+       is not a hedge, it is the only honest thing that can be said from the
+       client, which is never told which it was. Anything more definite would
+       turn this box into a way to ask the server who plays this game. */
+    if (mode === 'reset') {
+      Online.requestPasswordReset(email).then(function () {
+        setBusy(false);
+        text(el['ol-auth-msg'],
+          'If there is an account for that address, a reset link is on its way. ' +
+          'Check your inbox and your spam folder, then open the link in this browser.');
+        revealAuthMsg();
+      }, function (err) {
+        setBusy(false);
+        text(el['ol-auth-msg'], safeMessage(err, spec.fallback), true);
+        revealAuthMsg();
+      });
+      return;
+    }
+
+    /* ---- set the new password, back from the link ---- */
+    if (mode === 'recover') {
+      Online.setNewPassword(password).then(function () {
+        setBusy(false);
+        el['ol-password'].value = '';
+        syncGame();
+        showBoard('Password updated. You are signed in.');
+      }, function (err) {
+        setBusy(false);
+        text(el['ol-auth-msg'], safeMessage(err, spec.fallback), true);
+        revealAuthMsg();
+      });
+      return;
+    }
 
     var p = mode === 'signup'
       ? Online.signUp(username, email, password)
@@ -330,12 +495,33 @@
       showBoard();
     }, function (err) {
       setBusy(false);
+
+      /* THE DEAD END, and the reported bug.
+         "That email already has an account. Sign in instead." is true and it
+         is where the conversation used to stop. The player it is shown to has
+         just demonstrated they think they do not have an account, so the odds
+         that they remember its password are poor - and "sign in instead" sends
+         them to a form they cannot complete, with nothing on it that leads
+         anywhere else. Leo walked exactly this path: "it says my account is
+         created but i don't have password".
+         So carry them to SIGN IN with the address they typed already in the
+         box, and name the door out in the same breath. */
+      if (mode === 'signup' && Online.isEmailTaken && Online.isEmailTaken(err)) {
+        var typed = el['ol-email'].value;
+        showAuth('signin');            // resets the view, and clears the message
+        el['ol-email'].value = typed;  // ...so re-fill and re-write after it
+        el['ol-password'].value = '';
+        text(el['ol-auth-msg'],
+          'That email already has an account. Sign in below - or if you do not ' +
+          'know the password, use "Forgot password?" to set a new one.', true);
+        revealAuthMsg();
+        return;
+      }
+
       /* The fallback has to follow the mode. "Could not sign in." on a failed
          CREATE ACCOUNT describes an action the player did not take, which is
          a small lie in the one place they are already confused. */
-      text(el['ol-auth-msg'], safeMessage(err, mode === 'signup'
-        ? 'Could not create that account.'
-        : 'Could not sign in.'), true);
+      text(el['ol-auth-msg'], safeMessage(err, (MODES[mode] || MODES.signin).fallback), true);
       revealAuthMsg();
     });
   }
@@ -417,7 +603,12 @@
     wired = true;
 
     el['ol-close'].addEventListener('click', closeOverlay);
-    el['ol-back'].addEventListener('click', function () { showBoard(); });
+    /* "Back to leaderboard" is shown on the recovery view too, so it is one of
+       the doors out of it - and going back to the board is exactly the move
+       that hides the unfinished step from the player. */
+    el['ol-back'].addEventListener('click', function () {
+      abandonRecovery(function () { showBoard(); });
+    });
     el['ol-signin'].addEventListener('click', function () { showAuth('signin'); });
     el['ol-signout'].addEventListener('click', onSignOut);
 
@@ -442,8 +633,26 @@
     }
     el['ol-form'].addEventListener('submit', onSubmit);
     el['ol-toggle'].addEventListener('click', function () {
-      showAuth(mode === 'signup' ? 'signin' : 'signup');
+      /* Four modes, so the toggle is a small map rather than a flip. From the
+         two reset views it means "take me back", not "show me the other
+         form". */
+      if (mode === 'signup') { showAuth('signin'); return; }
+      if (mode === 'reset') { showAuth('signin'); return; }
+      if (mode === 'recover') { abandonRecovery(function () { showBoard(); }); return; }
+      showAuth('signup');
     });
+
+    if (el['ol-forgot']) {
+      el['ol-forgot'].addEventListener('click', function () {
+        var typed = el['ol-email'].value;
+        showAuth('reset');
+        /* Carry the address across. Somebody who just failed to sign in has
+           already typed it, and making them type it again is the kind of
+           small friction that ends the attempt. */
+        el['ol-email'].value = typed;
+        try { el['ol-email'].focus(); } catch (e) { /* ignore */ }
+      });
+    }
 
     /* Clicking the darkened area outside the panel closes, the way every
        other dialog on the web does. */
@@ -466,11 +675,43 @@
       if (res && res.submitted) setStatus('earlier run uploaded');
     });
 
+    /* The player has just arrived back from a recovery link. This is the one
+       case where the game opens the overlay by itself: they clicked a link
+       expecting to fix their password, and dropping them on the title screen
+       with a silent session would leave the thing they came to do undone and
+       invisible. */
+    Online.on('recovery', function () {
+      openOverlay('auth');
+      showAuth('recover');
+      text(el['ol-auth-msg'],
+        'Link confirmed. Choose a new password to finish.');
+      revealAuthMsg();
+    });
+
+    /* A dead link reports through the error channel instead, and has to say
+       so somewhere the player is looking. */
+    Online.on('error', function (msg) {
+      if (!msg) return;
+      openOverlay('auth');
+      showAuth('signin');
+      text(el['ol-auth-msg'], safeMessage(msg, 'Something went wrong. Try again.'), true);
+      revealAuthMsg();
+    });
+
     /* Consumes an OAuth return if the page was just redirected back here,
        restores a saved session, and uploads anything left queued. */
     Online.init().then(function () {
       syncGame();
-      if (open) showBoard();
+      /* `!Online.isRecovering()` is not defensive tidiness - without it the
+         recovery flow is silently undone. The 'recovery' listener above fires
+         from INSIDE init(), opens the panel and shows the new-password form;
+         this line then runs when init() resolves a moment later and would
+         switch the very same panel to the leaderboard. The player would watch
+         the form they came back for appear and vanish, and be left signed in
+         with the password they could not remember - the original bug, rebuilt
+         out of two correct-looking pieces. Caught by section D2 of
+         test/leaderboard_ui.mjs, which is why that test asserts on the title. */
+      if (open && !Online.isRecovering()) showBoard();
     });
   }
 
