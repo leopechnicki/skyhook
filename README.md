@@ -111,7 +111,11 @@ exists anywhere else in the codebase.
 `js/config.js` is filled in, so the deployed game at
 <https://leopechnicki.github.io/skyhook/> has a LEADERBOARD button, accounts, and
 globally ranked runs. Signing up asks for a username, an email and a password --
-nothing else. Sign-in is email/password. The "Continue with Google" button is
+nothing else. Sign-in is email/password, and a forgotten password is not a dead
+end: **Forgot password?** on the sign-in form mails a one-time link that brings
+the player back into the game on a SET A NEW PASSWORD form. That flow needs the
+origin allow-listed in Supabase (**Authentication -> URL Configuration**), which
+is step 3.5 of the setup doc below. The "Continue with Google" button is
 drawn only when `googleSignIn: true` in `js/config.js`, which you should set
 only after actually enabling Google as a provider -- a button pointing at a
 disabled provider navigates the player out of the game onto a raw GoTrue JSON

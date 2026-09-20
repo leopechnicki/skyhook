@@ -39,7 +39,7 @@ until a player opens the leaderboard panel.
 This one file creates both tables, the security rules, the rate limit, and the
 public board. It is safe to run again later - running it twice changes nothing.
 
-## Step 3 - Turn on Google sign-in
+## Step 3 - Sign-in: providers, and where links come back to
 
 1. Left sidebar: **Authentication** -> **Sign In / Providers**.
 2. **Email** is already on. Leave it on. Turn **Confirm email** off here.
@@ -57,14 +57,11 @@ public board. It is safe to run again later - running it twice changes nothing.
    **Client ID** and a **Client Secret** to paste back into that same panel.
 4. Still in that Google panel, copy the **Callback URL** Supabase displays and
    paste it into Google's "Authorised redirect URIs". Save on both sides.
-5. Left sidebar: **Authentication** -> **URL Configuration**. Set **Site URL**
-   to `https://leopechnicki.github.io/skyhook/` and add the same address under
-   **Redirect URLs**. Without this, Google sends players back to the wrong page
-   after they sign in.
 
-Skipping this whole step is fine -- email and password work on their own -- but
-if you skip it, leave `googleSignIn: false` in `js/config.js` (it is the
-default). Set it to `true` only once Google really is switched on above.
+Steps 3 and 4 are Google's, and Google is optional: skipping them is fine --
+email and password work on their own. If you do skip them, leave
+`googleSignIn: false` in `js/config.js` (it is the default). Set it to `true`
+only once Google really is switched on above.
 
 The flag exists because the button cannot fail politely: `signInWithGoogle`
 navigates the tab to Supabase, and a project with Google off answers
@@ -72,6 +69,32 @@ navigates the tab to Supabase, and a project with Google off answers
 the player is thrown out of the game onto a machine error. With the flag false
 the button is simply not drawn, which is the same thing the game does with the
 entire account layer when there is no config at all.
+
+### Step 3.5 - URL Configuration (required, even if you skipped Google)
+
+Left sidebar: **Authentication** -> **URL Configuration**. Set **Site URL** to
+the address players actually open the game on, and add every address it is
+served from under **Redirect URLs**.
+
+**This one is not optional, and it is not only about Google.** It is also what
+makes the "Forgot password?" link work: GoTrue sends a recovery link back only
+to an allow-listed address, and for anything else it silently substitutes
+**Site URL** rather than refusing. So the failure mode is not an error message
+-- it is a player clicking a perfectly valid reset link and landing somewhere
+that is not the game, which looks to them like the link is broken. On GitHub
+Pages this bites hardest, because the site root is not `/skyhook/`.
+
+The live project is set to:
+
+| field | value |
+|---|---|
+| Site URL | `https://skyhookplay.com/` |
+| Redirect URLs | `https://skyhookplay.com/**`, `https://www.skyhookplay.com/**`, `https://skyhook-game.fly.dev/**`, `https://leopechnicki.github.io/skyhook/**` |
+
+Four entries because the same `main` is served from four origins (see
+`docs/DEPLOY.md`) and a player may have bookmarked any of them. The `/**`
+suffix is GoTrue's wildcard: without it only the exact address matches, and a
+link that arrives with its token in a query string can fail to match.
 
 ## Step 4 - Copy the two values into the game
 
@@ -130,7 +153,25 @@ is held on your device until it can be uploaded.
 often they happen. Either the box was given the LEADERBOARD NAME instead of the
 address - sign-in is by email, the username is only the public name on the board
 - or the account was created with email confirmation left on and the link in the
-email has not been clicked yet.
+email has not been clicked yet. If neither is it, the password is simply
+forgotten: **Forgot password?** on the sign-in form mails a one-time link.
+
+**A player forgot their password.** They do not need a second account, and
+nobody needs to touch the dashboard. **Forgot password?** on the sign-in form
+asks GoTrue for a recovery link (`POST /auth/v1/recover`); opening that link
+returns them to the game with a SET A NEW PASSWORD form. Notes on it:
+
+- The confirmation deliberately says *"if there is an account for that
+  address"*. The form answers identically for an address with an account and
+  one without, on purpose -- otherwise it is a way for anyone to ask the server
+  who plays this game.
+- There is a **55-second cooldown per address** (measured against the live
+  project, 2026-09-18) plus the built-in mailer's hourly quota. Asking twice in
+  a row is answered with the wait, not with a second mail.
+- The link is one-time and expires. A spent or stale one comes back as
+  "That reset link has expired or was already used. Ask for a new one."
+- If the link lands anywhere other than the game, it is step 3.5 above -- not
+  the mail.
 
 **Google sign-in bounces back signed out.** Almost always the **Site URL** /
 **Redirect URLs** in step 3.5, or a redirect URI in Google Cloud that does not
