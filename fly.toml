@@ -20,11 +20,15 @@ primary_region = 'ams'
   # The public origin, as the meta tags should report it. conf/site.conf.template
   # rewrites <link rel=canonical>, og:url and og:image to this at serve time.
   #
-  # <app>.fly.dev is assigned by Fly the moment the app is created, so this is a
-  # real hostname and not a guess. NO CUSTOM DOMAIN IS SET HERE because none has
-  # been bought yet; when one is, this is the single line that changes, followed
-  # by `fly certs add <domain>`.
-  SITE_ORIGIN = 'https://skyhook-game.fly.dev'
+  # The custom domain is live: skyhookplay.com, registered on GoDaddy
+  # 2026-09-19, cut over to Fly 2026-09-21. The GoDaddy apex now answers with
+  # Fly's ingress (A 66.241.124.247, AAAA 2a09:8280:1::192:edd5:0) and both
+  # skyhookplay.com and www.skyhookplay.com serve a valid certificate, so the
+  # merge gate this line used to carry is satisfied and has been removed.
+  #
+  # skyhook-game.fly.dev keeps working either way - Fly assigns it at app
+  # creation and it is what .github/workflows/deploy.yml verifies against.
+  SITE_ORIGIN = 'https://skyhookplay.com'
 
 [http_service]
   internal_port = 8080

@@ -90,9 +90,10 @@ server {
     #
     # SITE_ORIGIN defaults to the same string it replaces, so with no override
     # this is an identity rewrite and the page is byte-identical to the repo.
-    # fly.toml sets the real value. When a custom domain is finally bought,
-    # exactly one line in fly.toml changes - no code, no rebuild of anything
-    # but the image.
+    # fly.toml sets the real value, which since 2026-09-19 is the custom
+    # domain https://skyhookplay.com. Moving the game to any other hostname is
+    # still exactly one line in fly.toml - no code, no rebuild of anything but
+    # the image.
     sub_filter_once off;
     sub_filter_types text/html;
     sub_filter 'https://leopechnicki.github.io/skyhook' '${SITE_ORIGIN}';

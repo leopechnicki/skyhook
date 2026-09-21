@@ -83,7 +83,7 @@ jobs:
       - name: Run it
         run: |
           docker run -d --name skyhook-ci -p 8080:8080 \
-            -e SITE_ORIGIN='https://skyhook-game.fly.dev' skyhook:ci
+            -e SITE_ORIGIN='https://skyhookplay.com' skyhook:ci
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8080/health > /dev/null; then
               echo "up after ${i}s"; exit 0
@@ -114,7 +114,7 @@ jobs:
           # SITE_ORIGIN actually reached the served HTML. This is the check
           # that makes the hostname genuinely configurable rather than
           # configurable-looking.
-          grep -q 'https://skyhook-game.fly.dev/' /tmp/index.html \
+          grep -q 'https://skyhookplay.com/' /tmp/index.html \
             || fail "sub_filter did not rewrite the canonical/og origin"
           # `grep -q ... && fail` would abort the step under `set -e` on the
           # HEALTHY path, because a grep that finds nothing exits 1. The
@@ -218,6 +218,11 @@ jobs:
       - name: Verify the live site
         run: |
           set -e
+          # Deliberately the fly.dev name and not skyhookplay.com. This step
+          # asserts that the DEPLOY worked. Pointing it at the custom domain
+          # would also be asserting that GoDaddy DNS and a Let's Encrypt cert
+          # are healthy, so a registrar problem would read here as a failed
+          # deploy. fly.dev is assigned by Fly and always resolves.
           base="https://skyhook-game.fly.dev"
           for i in $(seq 1 20); do
             curl -sf "$base/health" > /dev/null && break

@@ -128,7 +128,7 @@ anybody can actually *do* with it is decided entirely by the security rules in
 
 1. Commit `js/config.js` and push to `main`. GitHub Pages redeploys in a minute
    or two.
-2. Open <https://leopechnicki.github.io/skyhook/>. A **LEADERBOARD** button is
+2. Open <https://skyhookplay.com/>. A **LEADERBOARD** button is
    now on the title screen. (If it is not, the config did not take - see below.)
 3. Tap it, create an account, play a run, and watch the game-over screen say
    `RANK #1 GLOBAL`.
