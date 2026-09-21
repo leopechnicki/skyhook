@@ -85,10 +85,14 @@ const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
   check('Dockerfile SITE_ORIGIN defaults to an identity rewrite',
     !!env && !!sub && env[1] === sub[1], env ? env[1] : 'no ENV found');
 
+  /* Exact equality, not startsWith: `https://skyhookplay.co` is a prefix of the
+     home and a typo that would have passed a startsWith check while sending
+     every canonical tag in production to a domain Leo does not own. */
   const fly = read('fly.toml');
   const flyOrigin = /SITE_ORIGIN\s*=\s*'([^']+)'/.exec(fly);
   check('fly.toml ships the same origin the repo declares',
-    !!flyOrigin && HOME.startsWith(flyOrigin[1]), flyOrigin ? flyOrigin[1] : 'not set');
+    !!flyOrigin && !!sub && flyOrigin[1] === sub[1] && flyOrigin[1] + '/' === HOME,
+    flyOrigin ? flyOrigin[1] : 'not set');
 
   check('package.json homepage is the real home',
     JSON.parse(read('package.json')).homepage === HOME);
