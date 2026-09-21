@@ -9,6 +9,11 @@ test
 docs
 android-app
 
+# pages/ is the GitHub Pages redirect stub, not part of the game. The
+# Dockerfile names every file it copies so it was never going to be served -
+# this keeps it out of the upload to Fly's remote builder as well.
+pages
+
 package.json
 package-lock.json
 README.md

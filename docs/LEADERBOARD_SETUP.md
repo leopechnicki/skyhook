@@ -91,10 +91,19 @@ The live project is set to:
 | Site URL | `https://skyhookplay.com/` |
 | Redirect URLs | `https://skyhookplay.com/**`, `https://www.skyhookplay.com/**`, `https://skyhook-game.fly.dev/**`, `https://leopechnicki.github.io/skyhook/**` |
 
-Four entries because the same `main` is served from four origins (see
-`docs/DEPLOY.md`) and a player may have bookmarked any of them. The `/**`
-suffix is GoTrue's wildcard: without it only the exact address matches, and a
-link that arrives with its token in a query string can fail to match.
+Four entries because a player may have started from any of them, and
+`redirect_to` is built from the page the game is actually on (see `js/online.js`
+`redirectTarget()`). The `/**` suffix is GoTrue's wildcard: without it only the
+exact address matches, and a link that arrives with its token in a query string
+can fail to match.
+
+**Do not remove the `leopechnicki.github.io` entry yet.** That origin is being
+retired - GitHub Pages redirects to `skyhookplay.com` now rather than serving
+the game - but a confirmation or reset mail sent from it *before* the cutover
+carries `redirect_to=https://leopechnicki.github.io/skyhook/`, and GoTrue
+refuses a `redirect_to` that is not on this list. Dropping the entry breaks
+links that are already in somebody's inbox. It can go once mail that old has
+expired.
 
 ## Step 4 - Copy the two values into the game
 

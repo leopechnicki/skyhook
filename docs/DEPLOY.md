@@ -7,9 +7,13 @@ because Fly app names are one global namespace and `skyhook` was taken; that
 is stated here, in the first sentence, because this is the paragraph somebody
 copies a command out of.
 
-The advertised home is <https://skyhookplay.com/>, served by Fly. GitHub Pages
-still serves the same commit at <https://leopechnicki.github.io/skyhook/> as a
-free fallback, but it is not free of consequence: see "Two live origins" below.
+The one home is <https://skyhookplay.com/>, served by Fly, and `index.html`
+now says so itself - the canonical, `og:url`, `og:image` and `twitter:image`
+tags name it directly instead of naming GitHub Pages and relying on nginx to
+correct them on the way out. GitHub Pages is not switched off: it publishes a
+two-file REDIRECT to the same place, so links already shared as
+<https://leopechnicki.github.io/skyhook/> keep working. See "Retiring the Pages
+mirror" below - it ends in one setting Leo has to flip by hand.
 
 Netlify is not used and must never be reintroduced.
 
@@ -27,6 +31,8 @@ Everything that lives in the repo:
 | `fly.toml` | App name, region, port, health check, machine size. |
 | `.dockerignore` | Keeps the test suite, docs and `node_modules` out of the build context. |
 | `.github/workflows/deploy.yml` | Test suite -> container smoke test -> `flyctl deploy --remote-only` on push to `main`. |
+| `pages/` | The GitHub Pages redirect stub - two files, not the game. Published to the `gh-pages` branch by the `pages-stub` job so the retired `github.io` URL keeps working. See "Retiring the Pages mirror". |
+| `test/pages_stub.mjs` | Asserts the one canonical origin: that `index.html`, `conf/site.conf.template`, the `Dockerfile` default and `fly.toml` all agree, and that the stub redirects with the query string and hash intact. |
 
 The deploy job is **gated on the `FLY_API_TOKEN` secret**. Until that secret
 exists the workflow still runs the tests and still builds and curls the
@@ -144,12 +150,22 @@ somebody added a cert for a name that does not exist; remove it.
   SITE_ORIGIN = 'https://skyhookplay.com'
 ```
 
-That variable is the only place the public hostname appears in the whole
-deployment. `conf/site.conf.template` uses it to rewrite `<link rel=canonical>`,
-`og:url` and `og:image` in `index.html` at serve time, which is how the repo
-avoids hardcoding a hostname without acquiring a build step. Its default is the
-GitHub Pages origin already written into `index.html`, so with no override the
-rewrite is a no-op and the page is byte-identical to the repo.
+`conf/site.conf.template` uses that variable to rewrite `<link rel=canonical>`,
+`og:url` and `og:image` in `index.html` at serve time. **The rewrite is no longer
+what makes production correct.** `index.html` declares `https://skyhookplay.com`
+itself, the `Dockerfile` default and `fly.toml` both set the same string, so the
+rewrite is an identity no-op on every path that matters and the served page is
+byte-identical to the repo. What it still buys is the ability to serve the game
+from somewhere that genuinely is not skyhookplay.com - a staging machine that
+should not claim the canonical - without editing a tracked file.
+
+Three files hold that one origin string and nothing in the language connects
+them: `index.html` (the literal), `conf/site.conf.template` (the literal it
+searches for) and the `Dockerfile` (the identity default). `test/pages_stub.mjs`
+compares all three on every PR, and the `image` job in `deploy.yml` runs the
+container with a **deliberately different** `SITE_ORIGIN` so that "the rewrite
+happened" is an assertion that can still fail. Set CI to the production value
+and that assertion passes even with `sub_filter` deleted.
 
 **Deploying that value before the cert is Ready is the failure mode to avoid.**
 The game would still be served perfectly well on `skyhook-game.fly.dev`, but
@@ -160,41 +176,99 @@ that cannot reach the canonical target may drop the page entirely. Confirm
 
 ---
 
-## Two live origins
+## Retiring the Pages mirror
 
-Both of these serve SKYHOOK from the same commit right now:
+`skyhookplay.com` is the single home. Three hostnames still answer, and only one
+of them claims to be the site:
 
 | Origin | Served by | `<link rel=canonical>` it reports |
 |---|---|---|
-| <https://skyhookplay.com/> | Fly (this Dockerfile) - the advertised home | `https://skyhookplay.com/` - `SITE_ORIGIN`, rewritten by `sub_filter` |
-| <https://skyhook-game.fly.dev/> | Fly (this Dockerfile) | `https://skyhookplay.com/` - the same rewrite; the app answers on both names |
-| <https://leopechnicki.github.io/skyhook/> | GitHub Pages, source `main:/` | `https://leopechnicki.github.io/skyhook/` - the literal in the repo |
+| <https://skyhookplay.com/> | Fly (this Dockerfile) - the home | `https://skyhookplay.com/` - the literal in `index.html`, not a rewrite |
+| <https://skyhook-game.fly.dev/> | Fly (this Dockerfile) | `https://skyhookplay.com/` - the same file; the app answers on both names |
+| <https://leopechnicki.github.io/skyhook/> | GitHub Pages, publishing the `gh-pages` branch | nothing - it is a redirect to `https://skyhookplay.com/` |
 
-Buying `skyhookplay.com` settles which name *should* win but does not on its own
-close this down to one origin. Fly serves the game under both the custom domain
-and `skyhook-game.fly.dev`, which is harmless - one canonical is declared and it
-names the custom domain. GitHub Pages is the one that genuinely competes: it
-serves a second copy that declares *itself* canonical. That splits inbound links,
-and the day the two commits differ a player following an old link plays a
-different build than the one being tested.
+### What was wrong before
 
-The decision is Leo's:
+Two problems, and only one of them was the obvious one.
+
+1. **Pages served a second copy of the game that declared itself canonical.**
+   That splits inbound links, and the day the two commits differ a player
+   following an old link plays a different build than the one being tested.
+
+2. **The repo declared the wrong home.** `index.html` named the GitHub Pages URL
+   and `conf/site.conf.template` corrected it with `sub_filter` at serve time.
+   That made the deployed page right and the *checked-in file* wrong, so
+   anything serving the folder without nginx - a `file://` open, `npm start`,
+   a fork, a crawler reading the raw file - advertised a URL being retired. A
+   band-aid at the edge is not a canonical.
+
+Both are fixed: `index.html` names `https://skyhookplay.com/` directly, and
+`SITE_ORIGIN` is now an escape hatch rather than a correction.
+
+### Why Pages is redirected and not deleted
+
+The tempting one-liner is:
 
 ```sh
-# Option A - skyhookplay.com is the site. Turn Pages off once the cert is Ready.
-gh api -X DELETE repos/leopechnicki/skyhook/pages
-
-# Option B - Pages stays as a mirror. Then it should carry a canonical pointing
-# at skyhookplay.com rather than at itself, which means editing index.html - and
-# index.html's github.io literal is exactly what conf/site.conf.template rewrites
-# against, so that edit is not free. Option A is the cheaper end state.
+gh api -X DELETE repos/leopechnicki/skyhook/pages   # DO NOT
 ```
 
-Until that is decided, `README.md` and `package.json:homepage` continue to
-point at Pages, because that is still where the published link goes and
-`skyhookplay.com` does not resolve yet. They move to `https://skyhookplay.com/`
-in the same change that resolves this, not before - a README that advertises a
-URL that 404s is the worse of the two errors.
+Every link already shared as `https://leopechnicki.github.io/skyhook/` lives in
+somebody else's WhatsApp history, bookmarks and Discord scrollback. None of them
+can be recalled, and deleting Pages turns all of them into a hard 404. A
+redirect costs nothing to host, keeps them working, and its
+`<link rel=canonical>` hands the old URL's accumulated ranking to the new one
+instead of throwing it away.
+
+So `pages/` (on `main`) holds a two-file site:
+
+| File | Role |
+|---|---|
+| `pages/index.html` | The old site root. Redirects to `https://skyhookplay.com/`, **carrying the query string and the hash**. |
+| `pages/404.html` | Every other path. The same redirect, carrying the sub-path through as well. |
+
+The query and hash are the whole point. `?seed=123` selects a world, and a
+Supabase auth callback arrives as `?code=...` (PKCE) or `#access_token=...`
+(implicit / recovery). A redirect that drops either one looks like it works and
+silently breaks sign-in. The stub therefore redirects with an inline
+`location.replace()` **before** the `<meta http-equiv="refresh">`, because a
+meta refresh cannot carry a query string; the meta tag is the no-JavaScript
+fallback and the visible link is the fallback to that.
+`test/pages_stub.mjs` executes the stub's own script against fake locations and
+asserts each of those cases, rather than grepping the HTML and hoping.
+
+### Publishing it
+
+`.github/workflows/deploy.yml`, job `pages-stub`, force-pushes `pages/` to an
+orphan `gh-pages` branch on every push to `main`. So the branch exists and stays
+current automatically.
+
+**One step is manual and CI cannot do it.** The Pages publishing source is a
+repository setting; no workflow token can change it:
+
+> **Settings > Pages > Build and deployment > Source: Deploy from a branch >
+> Branch: `gh-pages` / `(root)` > Save**
+
+Until that is flipped, Pages keeps publishing `main:/` - which after this change
+is the game with a canonical pointing at `skyhookplay.com`. That is already the
+correct signal to a crawler, just not yet a redirect for a human. Nothing is
+broken in the interim; the flip is an improvement, not a repair.
+
+### Supabase redirect allow-list
+
+`leopechnicki.github.io/skyhook/` stays on the project's redirect allow-list
+(`docs/LEADERBOARD_SETUP.md`) and must not be removed yet. A confirmation or
+password-reset mail sent from the old origin before the cutover carries
+`redirect_to=https://leopechnicki.github.io/skyhook/`, and GoTrue refuses a
+`redirect_to` that is not allow-listed. Dropping the entry would break links
+that are already in people's inboxes. Remove it only once links that old have
+expired - the recovery link TTL is one hour, the signup confirmation longer.
+
+`redirect_to` is derived from `location.origin + location.pathname`, never
+hardcoded, which is what lets all three origins send a player back to the page
+they actually started on. `test/online.mjs` section 14 asserts that for all
+three and asserts they produce three *different* answers, so hardcoding the home
+fails the build.
 
 ---
 
@@ -257,5 +331,7 @@ fly releases --app skyhook            # find the version that was good
 fly deploy --image <image-ref-from-that-release> --app skyhook
 ```
 
-GitHub Pages is untouched by any of this and keeps serving the last commit to
-`main`, so it remains a working fallback for as long as it is enabled.
+GitHub Pages is **not** a fallback for this. It publishes the redirect stub, not
+the game, so a bad Fly release cannot be worked around by sending people to the
+old URL - it sends them straight back. Roll the Fly release back instead; that
+is the only lever, which is why the release history above matters.

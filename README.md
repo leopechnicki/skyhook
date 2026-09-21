@@ -3,7 +3,8 @@
 A one-touch neon climbing arcade game. Fly a rocket: tether it to a planet or a star, swing, then fire the thruster to let go and latch onto the next body. The climb is endless -- as long as you stay on screen.
 
 **[▶ Play it here](https://skyhookplay.com/)** — no install, works on desktop and mobile.
-Also mirrored on [GitHub Pages](https://leopechnicki.github.io/skyhook/).
+The old GitHub Pages URL still works: it redirects here, keeping `?seed=` and
+any auth callback intact, so links shared before the move are not broken.
 
 <p align="center">
   <img src="docs/screenshot-title.png" alt="SKYHOOK title screen" width="240">
@@ -73,10 +74,15 @@ npx serve .
 
 SKYHOOK is a fully static site -- four JS files, one CSS file, one HTML file. No server-side logic.
 
-**GitHub Pages** (how the live build above is hosted):
+**GitHub Pages** (the simplest way to host your own copy):
 1. Push this folder to a GitHub repo.
 2. Settings > Pages > Source: Deploy from a branch > `main` / `/ (root)`.
 3. The game is live at `https://<user>.github.io/<repo>/`.
+
+   Note that `index.html` declares `https://skyhookplay.com/` as its canonical
+   URL, so change those four meta tags (or set `SITE_ORIGIN`, see
+   `docs/DEPLOY.md`) or your copy will keep pointing search engines and link
+   previews back at the original.
 
 **Netlify:**
 1. Drag-and-drop this folder onto [app.netlify.com/drop](https://app.netlify.com/drop).
