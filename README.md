@@ -2,7 +2,8 @@
 
 A one-touch neon climbing arcade game. Fly a rocket: tether it to a planet or a star, swing, then fire the thruster to let go and latch onto the next body. The climb is endless -- as long as you stay on screen.
 
-**[▶ Play it here](https://leopechnicki.github.io/skyhook/)** — no install, works on desktop and mobile.
+**[▶ Play it here](https://skyhookplay.com/)** — no install, works on desktop and mobile.
+Also mirrored on [GitHub Pages](https://leopechnicki.github.io/skyhook/).
 
 <p align="center">
   <img src="docs/screenshot-title.png" alt="SKYHOOK title screen" width="240">
@@ -109,7 +110,7 @@ exists anywhere else in the codebase.
 ## Global leaderboard (live, and optional)
 
 `js/config.js` is filled in, so the deployed game at
-<https://leopechnicki.github.io/skyhook/> has a LEADERBOARD button, accounts, and
+<https://skyhookplay.com/> has a LEADERBOARD button, accounts, and
 globally ranked runs. Signing up asks for a username, an email and a password --
 nothing else. Sign-in is email/password, and a forgotten password is not a dead
 end: **Forgot password?** on the sign-in form mails a one-time link that brings

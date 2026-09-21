@@ -20,15 +20,11 @@ primary_region = 'ams'
   # The public origin, as the meta tags should report it. conf/site.conf.template
   # rewrites <link rel=canonical>, og:url and og:image to this at serve time.
   #
-  # The custom domain now exists: skyhookplay.com, registered on GoDaddy
-  # 2026-09-19. Fly certs are already requested for both skyhookplay.com and
-  # www.skyhookplay.com and go Ready once the GoDaddy records listed in
-  # docs/DEPLOY.md are in place.
-  #
-  # THIS LINE IS ONLY TRUE ONCE THAT CERT IS READY. Until the DNS is live,
-  # deploying this value makes <link rel=canonical> advertise a hostname that
-  # does not resolve, so the change that sets it must not merge before
-  # `fly certs check skyhookplay.com -a skyhook-game` says Ready.
+  # The custom domain is live: skyhookplay.com, registered on GoDaddy
+  # 2026-09-19, cut over to Fly 2026-09-21. The GoDaddy apex now answers with
+  # Fly's ingress (A 66.241.124.247, AAAA 2a09:8280:1::192:edd5:0) and both
+  # skyhookplay.com and www.skyhookplay.com serve a valid certificate, so the
+  # merge gate this line used to carry is satisfied and has been removed.
   #
   # skyhook-game.fly.dev keeps working either way - Fly assigns it at app
   # creation and it is what .github/workflows/deploy.yml verifies against.

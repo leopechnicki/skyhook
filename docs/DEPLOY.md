@@ -7,10 +7,9 @@ because Fly app names are one global namespace and `skyhook` was taken; that
 is stated here, in the first sentence, because this is the paragraph somebody
 copies a command out of.
 
-GitHub Pages still serves the same commit at
-<https://leopechnicki.github.io/skyhook/>. That is deliberate for now - it is
-a free fallback while Fly is new - but it is not free of consequence: see
-"Two live origins" below.
+The advertised home is <https://skyhookplay.com/>, served by Fly. GitHub Pages
+still serves the same commit at <https://leopechnicki.github.io/skyhook/> as a
+free fallback, but it is not free of consequence: see "Two live origins" below.
 
 Netlify is not used and must never be reintroduced.
 
@@ -167,7 +166,7 @@ Both of these serve SKYHOOK from the same commit right now:
 
 | Origin | Served by | `<link rel=canonical>` it reports |
 |---|---|---|
-| <https://skyhookplay.com/> | Fly, once DNS is live | `https://skyhookplay.com/` - `SITE_ORIGIN`, rewritten by `sub_filter` |
+| <https://skyhookplay.com/> | Fly (this Dockerfile) - the advertised home | `https://skyhookplay.com/` - `SITE_ORIGIN`, rewritten by `sub_filter` |
 | <https://skyhook-game.fly.dev/> | Fly (this Dockerfile) | `https://skyhookplay.com/` - the same rewrite; the app answers on both names |
 | <https://leopechnicki.github.io/skyhook/> | GitHub Pages, source `main:/` | `https://leopechnicki.github.io/skyhook/` - the literal in the repo |
 
