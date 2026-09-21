@@ -115,6 +115,14 @@ jobs:
       # breaks sign-in. Pure Node, no browser, sub-second.
       - name: Canonical origin + Pages redirect stub
         run: node test/pages_stub.mjs
+      # The password-reset email. It is not loaded by the game, so nothing else
+      # here would notice it rotting - and the only person who finds out is a
+      # locked-out player who cannot get back in. Asserts the GoTrue
+      # placeholder survives, that the mail carries nothing Gmail or Outlook
+      # will strip, and that its colours are really the game's, read out of
+      # css/style.css rather than claimed.
+      - name: Auth email templates
+        run: node test/email_templates.mjs
 
       # The staging pipeline's isolation, and it is in the CHEAP job on
       # purpose: what it protects is Leo's real leaderboard, so it has to run
