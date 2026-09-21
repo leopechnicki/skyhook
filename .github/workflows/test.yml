@@ -6,7 +6,8 @@
 #
 # Two jobs, split by cost so a broken world-stream is known in ~40s instead of
 # waiting on a browser download:
-#   logic    pure Node. Golden world stream + the balance gate. No browser.
+#   logic    pure Node. Golden world stream, the balance gate and the input
+#            latency gate. No browser.
 #   browser  real Chromium via Playwright. Full game loop + frame-time harness.
 name: tests
 
@@ -31,7 +32,7 @@ permissions:
 
 jobs:
   logic:
-    name: logic (world + balance)
+    name: logic (world + balance + latency)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -57,6 +58,17 @@ jobs:
       # - it is an open tuning question, not a regression any PR introduced.
       - name: Balance gate
         run: node test/balance.mjs --ci
+
+      # "It feels laggy" is not a bug report a diff can answer, so the four
+      # causes behind it are each measured in ms on the real game logic:
+      # input swallowed by the hitstop freeze, input deleted by the gameplay
+      # debounce, the drawn hull lagging the true launch vector, and the
+      # target lock being a gradient instead of an event. Every one of those
+      # is a TUNED CONSTANT, which is exactly the kind of thing a later
+      # "harmless" tweak puts back without anyone noticing. Pure Node,
+      # sub-second, exits non-zero on regression.
+      - name: Input latency gate
+        run: node test/latency.mjs
 
       # The account layer's wire protocol, in a vm sandbox with a scripted
       # fetch - no browser, no network, under a second. The first assertions

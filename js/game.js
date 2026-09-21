@@ -107,8 +107,21 @@
   var STEP         = 1 / 120;  // TRUE fixed step. Never subdivided.
   var MAX_TICKS    = 12;       // ...per rendered frame, then drop the backlog
   var STALL_MAX    = 0.25;     // a longer gap is a stall, not slow rendering
-  var ACT_DEBOUNCE = 0.12;     // seconds; measured on the SIM clock, not wall
+  /* Only job: swallow a SYNTHESISED duplicate event (the mousedown the browser
+     fires after a touchstart, a doubled pointerdown). Those arrive within a
+     couple of milliseconds. 120 ms was wide enough to delete deliberate human
+     taps instead - silently, with zero feedback, which reads as "the game
+     ignored me" rather than as lag. 40 ms kills every ghost and is shorter
+     than any human double tap. Measured on the SIM clock, not the wall clock:
+     a wall-clock debounce would swallow almost every input in the headless
+     balance harness, which plays 240 simulated seconds in a fraction of a
+     second. */
+  var ACT_DEBOUNCE = 0.04;     // seconds; measured on the SIM clock, not wall
   var GUIDE_LEN    = 220;      // release guide length (was 132)
+  /* How long the target marker spends SNAPPING IN after a lock is acquired.
+     Short on purpose: this is a confirmation, not an animation. Past it the
+     marker sits perfectly still, because "locked" should look settled. */
+  var LOCK_SNAP    = 0.12;     // seconds, on the SIM clock
   var LABEL_LIFE   = 0.65;
   var DEATH_ANIM   = 0.40;     // was 0.7
   var RETRY_LOCK   = 0.20;     // was 0.5
@@ -307,6 +320,19 @@
     for (var li = 0; li < 8; li++) this.labels.push({ t: 0, x: 0, y: 0, s: '', c: '255,255,255' });
 
     this.predict = { node: null, d: 0, t: 0 };
+
+    /* TARGET LOCK. `predict.node` already knew which body a release would
+       catch, but nothing on screen said so at a single unambiguous INSTANT -
+       the capture rings faded in over a 200 px distance gradient and the
+       target marker pulsed on a global sine, so "locked, shoot now" looked
+       like "getting warmer". These two fields make the lock a discrete EVENT
+       on the sim clock that the renderer can SNAP on: lockNode is the body,
+       lockT is seconds since it was acquired (0 on the exact acquisition
+       tick). Render-only - no physics, scoring or collision path reads them,
+       and they are absent from snapshot() - but advanced on the FIXED step so
+       the snap-in takes the same wall time on every device. */
+    this.lockNode = null;
+    this.lockT = 0;
 
     this._resetWorld();
   }
@@ -641,6 +667,8 @@
     this.hitstop = 0;
     this.queuedAction = false;
     this.lastActionT = -99;
+    this.lockNode = null;
+    this.lockT = 0;
     SK.Audio.resume();
     SK.Audio.start();
   };
@@ -835,6 +863,16 @@
     /* The tap lit the engine. Render-only: this is the one place the player's
        input becomes visible ON the ship instead of only in the trajectory. */
     p.burn = 1;
+    /* ...and the hull COMMITS, on this exact frame. Render-only, no physics
+       reads it. `aim` is normally eased onto the true heading with a 35 ms
+       half-life, which while orbiting leaves it a steady ~14 deg behind the
+       launch vector (omega * tau, measured in test/latency.mjs). Let that ease
+       run through a release and the ship keeps swinging into the shot for
+       ~92 ms after the click: the physics was instant, the thing the player
+       actually looks at was not. Snapping here - next to the burn flare and
+       the exhaust burst, so it reads as commitment rather than as a glitch -
+       is the single largest cut in PERCEIVED latency in this change. */
+    p.aim = SK.Rocket.heading(p);
     this.pendNode = null;
     this.lastForced = !!forced;
     this.tutHold = false;
@@ -1119,17 +1157,35 @@
   Game.prototype._tick = function () {
     var dt = STEP;
 
+    /* Queued input is consumed at the head of a tick, so identical taps at
+       identical timestamps replay identically at any refresh rate.
+
+       It is read BEFORE the hitstop freeze below, and that ordering is the
+       whole point. A tight catch freezes the sim for 35 ms of juice - five
+       ticks, 41.7 ms - and a tight catch is exactly the moment a good player
+       taps again. With the freeze checked first, that tap sat in the queue for
+       the entire freeze and the game read as laggy; worse, the frozen sim also
+       froze p.ang, so the player saw an unchanged screen, tapped again, and
+       ACT_DEBOUNCE deleted the retry. Measured at +41.7 ms worst case and 205
+       deleted retries per 480 s of play (test/latency.mjs).
+
+       A release therefore PUNCHES THROUGH a freeze: it fires on this tick and
+       cancels whatever is left of it, so the shot starts moving immediately
+       instead of after the flourish. Determinism is untouched - consumption is
+       still a function of the tick index alone, never of wall time or of how
+       many frames the display delivered. */
+    if (this.queuedAction) {
+      this.queuedAction = false;
+      if (this.player.mode === 'orbit') {
+        this._release(false);
+        this.hitstop = 0;
+      }
+    }
+
     if (this.hitstop > 0) {
       this.hitstop -= dt;
       this.particles.update(dt * 0.2);
       return;
-    }
-
-    /* Queued input is consumed at the head of a tick, so identical taps at
-       identical timestamps replay identically at any refresh rate. */
-    if (this.queuedAction) {
-      this.queuedAction = false;
-      if (this.player.mode === 'orbit') this._release(false);
     }
 
     this.time += dt;
@@ -1140,6 +1196,20 @@
     if (this.state !== 'playing') return;
 
     var p = this.player;
+
+    /* Latch the target lock. _predictRelease() runs inside _step() and only
+       while orbiting, so `predict` goes stale the moment the player lets go -
+       hence the explicit orbit test rather than trusting predict.node. The
+       lock is acquired on ONE tick (lockT === 0) and held with a sim-clock
+       age; the renderer snaps on the acquisition instead of cross-fading, so
+       there is a single frame the player can point at and call "locked". */
+    var lockTarget = (p.mode === 'orbit') ? this.predict.node : null;
+    if (lockTarget !== this.lockNode) {
+      this.lockNode = lockTarget;
+      this.lockT = 0;
+    } else if (lockTarget) {
+      this.lockT += dt;
+    }
 
     /* Node pop was decaying inside the draw call (-0.045 per painted frame),
        which made a purely cosmetic value depend on render scheduling. */
@@ -1157,9 +1227,18 @@
        cosmetic value animated there depends on render scheduling. */
     if (p.burn > 0) p.burn = Math.max(0, p.burn - dt / BURN_FADE);
     /* Ease the drawn heading onto the true one. Frame-rate independent, and
-       fed the FIXED dt, so the turn takes the same wall time on any device. */
-    p.aim = SK.Rocket.turn(p.aim, SK.Rocket.heading(p),
-      1 - Math.pow(2, -dt / AIM_HALF));
+       fed the FIXED dt, so the turn takes the same wall time on any device.
+       ORBIT ONLY. The ease exists for one event: a hook, which can reverse the
+       heading by nearly 180 degrees in a single tick, and snapping that reads
+       as a glitch. A flight is a straight line - the heading never changes
+       once _release() has set it - so easing there could only ever mean the
+       hull is lying about a direction it is already travelling in. */
+    if (p.mode === 'orbit') {
+      p.aim = SK.Rocket.turn(p.aim, SK.Rocket.heading(p),
+        1 - Math.pow(2, -dt / AIM_HALF));
+    } else {
+      p.aim = SK.Rocket.heading(p);
+    }
 
     /* Exhaust trail. It leaves the NOZZLE, not the hull centre, and it is
        thrown backwards along the heading instead of in a symmetric puff - a
@@ -1465,14 +1544,34 @@
       ctx.closePath();
       ctx.fill();
 
-      /* Mark the node this release would actually capture. */
+      /* Mark the node this release would actually capture.
+         This marker used to breathe on a GLOBAL sine - 0.5 + 0.3 * sin(time)
+         - so it looked exactly the same one millisecond after the lock was
+           acquired as it did five seconds later. There was no frame the
+         player could point at and call "locked"; combined with the capture
+         rings fading in over a distance gradient, the whole thing read as
+         "getting warmer" rather than "shoot NOW". That is the half of the
+         "delay quando o planeta fica com highlighted" report that no amount
+         of input latency would have fixed, because nothing on screen was
+         ever an EVENT.
+         `lockT` (latched in _tick, sim clock, 0 on the acquisition tick) is
+         that event. The marker now punches in bright and wide and collapses
+         onto the body over LOCK_SNAP, then holds perfectly steady. All of it
+         is driven by the FIXED step, so the snap takes the same wall time on
+         a 60 Hz phone and a 144 Hz monitor. */
       if (pr.node) {
         var tgt = pr.node;
+        /* Guard the draw against a paint that beats the first tick: without
+           a latched lock for THIS body there is no acquisition to animate. */
+        var snap = (this.lockNode === tgt)
+          ? clamp(1 - this.lockT / LOCK_SNAP, 0, 1)
+          : 0;
+        var snapE = snap * snap;   // bite hard on the first frames, settle fast
         ctx.save();
-        ctx.strokeStyle = 'rgba(' + gCol + ',' + (0.5 + 0.3 * Math.sin(this.time * 8)).toFixed(2) + ')';
-        ctx.lineWidth = 2.4;
+        ctx.strokeStyle = 'rgba(' + gCol + ',' + (0.55 + 0.45 * snap).toFixed(2) + ')';
+        ctx.lineWidth = 2.4 + 3.2 * snapE;
         ctx.beginPath();
-        ctx.arc(tgt.x, tgt.y, tgt.radius + 9, 0, TAU);
+        ctx.arc(tgt.x, tgt.y, tgt.radius + 9 + 30 * snapE, 0, TAU);
         ctx.stroke();
         ctx.restore();
       }
