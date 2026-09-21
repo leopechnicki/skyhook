@@ -118,6 +118,10 @@
      second. */
   var ACT_DEBOUNCE = 0.04;     // seconds; measured on the SIM clock, not wall
   var GUIDE_LEN    = 220;      // release guide length (was 132)
+  /* How long the target marker spends SNAPPING IN after a lock is acquired.
+     Short on purpose: this is a confirmation, not an animation. Past it the
+     marker sits perfectly still, because "locked" should look settled. */
+  var LOCK_SNAP    = 0.12;     // seconds, on the SIM clock
   var LABEL_LIFE   = 0.65;
   var DEATH_ANIM   = 0.40;     // was 0.7
   var RETRY_LOCK   = 0.20;     // was 0.5
@@ -1540,14 +1544,34 @@
       ctx.closePath();
       ctx.fill();
 
-      /* Mark the node this release would actually capture. */
+      /* Mark the node this release would actually capture.
+         This marker used to breathe on a GLOBAL sine - 0.5 + 0.3 * sin(time)
+         - so it looked exactly the same one millisecond after the lock was
+           acquired as it did five seconds later. There was no frame the
+         player could point at and call "locked"; combined with the capture
+         rings fading in over a distance gradient, the whole thing read as
+         "getting warmer" rather than "shoot NOW". That is the half of the
+         "delay quando o planeta fica com highlighted" report that no amount
+         of input latency would have fixed, because nothing on screen was
+         ever an EVENT.
+         `lockT` (latched in _tick, sim clock, 0 on the acquisition tick) is
+         that event. The marker now punches in bright and wide and collapses
+         onto the body over LOCK_SNAP, then holds perfectly steady. All of it
+         is driven by the FIXED step, so the snap takes the same wall time on
+         a 60 Hz phone and a 144 Hz monitor. */
       if (pr.node) {
         var tgt = pr.node;
+        /* Guard the draw against a paint that beats the first tick: without
+           a latched lock for THIS body there is no acquisition to animate. */
+        var snap = (this.lockNode === tgt)
+          ? clamp(1 - this.lockT / LOCK_SNAP, 0, 1)
+          : 0;
+        var snapE = snap * snap;   // bite hard on the first frames, settle fast
         ctx.save();
-        ctx.strokeStyle = 'rgba(' + gCol + ',' + (0.5 + 0.3 * Math.sin(this.time * 8)).toFixed(2) + ')';
-        ctx.lineWidth = 2.4;
+        ctx.strokeStyle = 'rgba(' + gCol + ',' + (0.55 + 0.45 * snap).toFixed(2) + ')';
+        ctx.lineWidth = 2.4 + 3.2 * snapE;
         ctx.beginPath();
-        ctx.arc(tgt.x, tgt.y, tgt.radius + 9, 0, TAU);
+        ctx.arc(tgt.x, tgt.y, tgt.radius + 9 + 30 * snapE, 0, TAU);
         ctx.stroke();
         ctx.restore();
       }
