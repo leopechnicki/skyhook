@@ -9,6 +9,39 @@ Legend: [ ] = TODO (blocked on account/identity/money)
 
 ---
 
+## Monetisation decision - v1 SHIPS AD-FREE (Leo, 2026-09-22)
+
+**Read this before touching anything in section C or D.**
+
+- **v1 ships with NO ads at all.** Not "ads configured but disabled" as a
+  launch story - the shipped v1 build shows a player zero ads.
+- **Ads are "in future yes", and the future model is ONE REWARDED ad to
+  CONTINUE A RUN, once per run.** The player dies, is offered a single
+  opt-in "watch an ad to keep going", and that offer is available at most
+  once per run.
+- **That is NOT what is currently wired.** The code today implements an
+  *interstitial* shown every 5th game-over (`src/native/ad-gate.mjs`), which
+  is an interruption the player never asked for. It is the wrong model and
+  must not be what ships when ads are eventually switched on.
+
+What this means for whoever picks this up next:
+
+- [ ] **Do NOT rip out the AdMob wiring.** It stays in the tree, tested and
+      inert. Deleting it just means rebuilding it later.
+- [ ] **Do NOT build the rewarded-continue flow yet.** It is not v1 scope.
+      Leo has decided the model, not scheduled the work.
+- [ ] For the v1 release, ensure no ad is requested or shown. The consent
+      (UMP) path in section H may stay wired - it is harmless when no ad is
+      requested - but nothing should call `showInterstitial`.
+- [ ] When ads DO get switched on: create a **Rewarded** ad unit, not just an
+      Interstitial one (section C currently only names an Interstitial), and
+      replace the every-5th-game-over cadence with a once-per-run opt-in
+      offer. The cadence gate in `ad-gate.mjs` is the piece to redesign.
+
+Sections C (AdMob) and D (Play Billing "remove ads") are therefore **not
+blockers for v1**. A "remove ads" purchase has nothing to remove in an
+ad-free build; revisit D together with the rewarded model.
+
 ## A. Toolchain - DONE (verified 2026-09-22, this machine)
 
 This section used to say the build was blocked on missing tooling. That is no
@@ -55,6 +88,11 @@ longer true and the whole section is now satisfied:
       audience, ads declaration (**"contains ads" = yes**), store listing.
 
 ## C. AdMob (real account, real ad unit IDs)
+
+> **Not required for v1 - v1 ships ad-free.** See "Monetisation decision"
+> at the top. When this section is eventually worked, the target is a
+> **Rewarded** ad unit for a once-per-run continue, not the interstitial
+> cadence currently wired.
 
 - [ ] Create an **AdMob account** (linked to the Play account / AdSense).
 - [ ] Register the app in AdMob -> get the real **App ID**
