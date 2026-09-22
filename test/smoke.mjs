@@ -256,8 +256,28 @@ async function main() {
     await tapCenter(page);
     await wait(200);
     s = await page.evaluate('window.__SKYHOOK.snapshot()');
+    /* 2026-09-22: `s.combo === 1` was the SAME flake one layer down, and it is
+       why run 35713958727 went red on a PR that touches only android-app/.
+       The paragraph above already knows a shard can sit within pickup range of
+       the opening orbit - that is where the `score < 100` bound came from - but
+       a shard does not only pay score. game.js:1135-1136 pays BOTH:
+
+           this.score += 25 * Math.max(1, Math.floor(this.combo * 0.5));
+           this.combo = Math.min(this.combo + 1, 9);
+
+       and it never touches this.hooks. So one shard collected during the 200 ms
+       settle reads exactly score=25, hooks=0, combo=2 - which is precisely what
+       the red run reported - out of a restart that was perfectly clean. The same
+       commit passed the identical check in the deploy workflow's copy of this
+       job, which is the other half of the proof.
+
+       Bound it instead of pinning it. A carried-over run cannot get near 3: it
+       would be showing the PREVIOUS run's combo, which reached 9 before the
+       death that triggered this restart. And combo is the weakest of the five
+       signals anyway - hooks === 0, altitude < 20 and simTime < 2 already make a
+       carried-over run impossible on their own. */
     const restarted = s.state === 'playing' && s.hooks === 0 && s.altitude < 20
-      && s.combo === 1 && s.simTime < 2 && s.score < 100;
+      && s.combo <= 3 && s.simTime < 2 && s.score < 100;
     check('tap on game over restarts cleanly', restarted,
       `state=${s.state} score=${s.score} hooks=${s.hooks} altitude=${s.altitude} `
       + `combo=${s.combo} simTime=${s.simTime.toFixed(2)} prevRunScore=${scoreAtDeath}`);
