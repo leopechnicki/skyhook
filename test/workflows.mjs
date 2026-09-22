@@ -110,15 +110,24 @@ for (const file of files) {
    * top-level block is the one that matters: a job may widen its own scope
    * deliberately (deploy.yml's pages-stub does, to push gh-pages), but the
    * floor must be written down. */
-  const topLevel = /^permissions:\s*$/m.test(src) || /^permissions:\s*\S/m.test(src);
-  check(`${file}: declares a top-level permissions block`, topLevel,
+  const block  = src.match(/^permissions:\s*\n((?:[ \t]+\S.*\n)+)/m);  // permissions:\n  contents: read
+  const inline = src.match(/^permissions:[ \t]+(\S.*)$/m);             // permissions: write-all
+
+  check(`${file}: declares a top-level permissions block`, !!(block || inline),
     'without it the token scope comes from a repo setting, not this file');
 
-  const top = src.match(/^permissions:\s*\n((?:[ \t]+\S.*\n)+)/m);
-  if (top) {
-    check(`${file}: top-level permissions are read-only`,
-      !/:\s*write\b/.test(top[1]),
-      `write at workflow level: ${top[1].trim().replace(/\s+/g, ' ')}`);
+  /* BOTH SPELLINGS, and that is not pedantry. An earlier draft of this file
+     understood only the block form, so `permissions: write-all` - the single
+     most permissive value GitHub accepts, a token that can push to main and
+     rewrite releases - passed as "declares a permissions block" with nothing
+     ever looking at the value. A gate that green-lights the worst possible
+     configuration is worse than no gate, because it is believed. Caught by
+     review; the mutation for it is M7 in the PR. */
+  const scope = block ? block[1] : inline ? inline[1] : null;
+  if (scope !== null) {
+    const readOnly = !/write-all\b/.test(scope) && !/:\s*write\b/.test(scope);
+    check(`${file}: top-level permissions are read-only`, readOnly,
+      `write at workflow level: ${scope.trim().replace(/\s+/g, ' ')}`);
   }
 }
 
