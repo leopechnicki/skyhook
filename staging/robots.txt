@@ -1,0 +1,7 @@
+# SKYHOOK staging. Not the game - https://skyhookplay.com is the game.
+#
+# Copied to the web root ONLY by a build carrying --build-arg
+# SKYHOOK_ENV=staging. Production serves no robots.txt at all and that is
+# unchanged by this file existing in the repo.
+User-agent: *
+Disallow: /
