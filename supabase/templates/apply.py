@@ -19,6 +19,11 @@ SKYHOOK_SECRETS (Leo's machine: C:/Users/leops/skyhook_supabase.local.txt).
     python supabase/templates/apply.py            # apply, then read back
     python supabase/templates/apply.py --check    # read back only, change nothing
 
+Both modes end by printing the live auth config and exit 0 only if the mail a
+player would receive right now is the one in this repo. Exit 1 means it is not
+live - which is the honest answer while the project is still on the built-in
+mailer. See README.md for how to unblock that.
+
 The leading documentation comment in recovery.html is stripped before sending:
 it is here for whoever edits the file, not for the player's inbox.
 """
@@ -110,6 +115,44 @@ def api(ref, pat, method="GET", payload=None):
         sys.exit("%s %s failed: %s %s" % (method, "config/auth", exc.code, exc.read().decode()[:600]))
 
 
+def report_live(cfg, subject, sending):
+    """Print exactly what the project is serving to players right now.
+
+    Run before a change to show the starting point, and after to prove the
+    change landed. Everything here is read from the live config, never cached.
+    """
+    live_subject = cfg.get("mailer_subjects_recovery")
+    live_body = cfg.get("mailer_templates_recovery_content") or ""
+    custom_flags = cfg.get("mailer_subjects_custom_contents") or {}
+    host = cfg.get("smtp_host")
+
+    print("")
+    print("live state of project auth config")
+    print("---------------------------------")
+    if host:
+        print("  smtp            custom: %s:%s" % (host, cfg.get("smtp_port")))
+        print("  smtp user       %s" % cfg.get("smtp_user"))
+        print("  sender          %s <%s>" % (cfg.get("smtp_sender_name"),
+                                             cfg.get("smtp_admin_email")))
+    else:
+        print("  smtp            built-in Supabase mailer (no custom SMTP)")
+        print("                  -> free tier REFUSES custom templates in this")
+        print("                     state; see README 'Unblocking it'.")
+    print("  email rate limit%s/hour, project-wide" % str(cfg.get("rate_limit_email_sent")).rjust(3))
+    print("  site_url        %s" % cfg.get("site_url"))
+    print("  link expiry     %ss" % cfg.get("mailer_otp_exp"))
+    print("  recovery subj   %r" % live_subject)
+    print("  recovery body   %d bytes live vs %d bytes in this repo" % (len(live_body), len(sending)))
+    print("  marked custom   %s" % custom_flags.get("MAILER_SUBJECTS_RECOVERY"))
+
+    branded = live_subject == subject and live_body == sending
+    print("")
+    print("  VERDICT: %s" % (
+        "the SKYHOOK reset mail is LIVE" if branded else
+        "NOT live - players still get Supabase's stock reset mail"))
+    return branded
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="read back only, change nothing")
@@ -140,18 +183,10 @@ def main():
         print("PATCH config/auth -> %s" % status)
 
     _, cfg = api(ref, pat)
-    live_subject = cfg.get("mailer_subjects_recovery")
-    live_body = cfg.get("mailer_templates_recovery_content") or ""
-    ok = check("live subject matches", live_subject == subject, repr(live_subject))
-    ok &= check("live body matches byte for byte", live_body == sending,
-                "live=%d local=%d" % (len(live_body), len(sending)))
-    # Things the template depends on that live elsewhere in the project config.
-    check("site_url", cfg.get("site_url") == "https://skyhookplay.com/", str(cfg.get("site_url")))
-    check("link expiry is the 1 hour the copy promises",
-          cfg.get("mailer_otp_exp") == 3600, "mailer_otp_exp=%s" % cfg.get("mailer_otp_exp"))
-    if not cfg.get("smtp_host"):
-        print("  note  built-in SMTP: %s mails/hour project-wide" % cfg.get("rate_limit_email_sent"))
-    sys.exit(0 if ok else 1)
+    branded = report_live(cfg, subject, sending)
+    # Exit code is the useful bit for scripts and for CI-by-hand: 0 means the
+    # mail a player receives is the one in this repo, 1 means it is not.
+    sys.exit(0 if branded else 1)
 
 
 if __name__ == "__main__":
