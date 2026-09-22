@@ -33,11 +33,12 @@ COPY conf/404.html ./404.html
 # contents instead of by whoever wrote the machine's env.
 #
 # What the overlay swaps:
-#   js/config.js   -> staging/config.staging.js. Same Supabase project, plus
-#                     readOnlyScores:true, which js/online.js honours by
-#                     refusing every score submission. Also injects the
-#                     noindex meta and the orange STAGING banner. The long
-#                     justification for sharing the project lives in that file.
+#   js/config.js   -> staging/config.staging.js. A DIFFERENT Supabase project
+#                     from production's, carrying the same schema from
+#                     supabase/schema.sql but none of its data. Also injects
+#                     the noindex meta and the orange STAGING banner. The long
+#                     version, including why readOnlyScores is now false, lives
+#                     in that file.
 #   robots.txt     -> Disallow: /. Production still serves no robots.txt; this
 #                     line cannot change that, because it does not run.
 #

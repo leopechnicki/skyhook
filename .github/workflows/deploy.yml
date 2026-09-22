@@ -202,8 +202,9 @@ jobs:
       #
       # Every assertion below is the difference between "staging is isolated"
       # and "staging looked isolated". The first one is the one that matters:
-      # if readOnlyScores stops reaching the served config, a test run lands on
-      # Leo's real leaderboard and nothing else in this repo would notice.
+      # if the served staging config stops pointing at staging's OWN Supabase
+      # project, a test run lands in Leo's real data and nothing else in this
+      # repo would notice.
       - name: Build the staging variant
         run: docker build --build-arg SKYHOOK_ENV=staging -t skyhook:staging .
 
@@ -224,8 +225,6 @@ jobs:
           # 1. The overlay actually replaced js/config.js. Not "a staging file
           #    exists somewhere in the image" - the file the PAGE loads.
           curl -sf http://localhost:8081/js/config.js > /tmp/scfg.js || fail "staging /js/config.js did not serve"
-          grep -q 'readOnlyScores: true' /tmp/scfg.js \
-            || fail "staging config has no readOnlyScores - runs would reach the real leaderboard"
           grep -q 'STAGING BUILD' /tmp/scfg.js || fail "staging config is not the staging config"
 
           # 2. and production's is untouched by the same source tree.
@@ -233,6 +232,52 @@ jobs:
           if grep -q 'readOnlyScores' /tmp/pcfg.js; then
             fail "the staging overlay leaked into the production image"
           fi
+
+          # 2b. THE isolation, asserted between the two SERVED artefacts rather
+          #     than between two files in the tree. Staging has had its own
+          #     Supabase project since 2026-09-23, so the property to check is
+          #     "different project". readOnlyScores is no longer the guarantee;
+          #     it is the FALLBACK, required only if the two refs ever match
+          #     again. Refs are extracted, never hardcoded, so renumbering
+          #     either project cannot quietly turn this into a tautology.
+          refof() { sed -n "s#.*supabaseUrl: 'https://\([a-z0-9]\{1,\}\)\.supabase\.co'.*#\1#p" "$1" | head -1; }
+          prod_ref=$(refof /tmp/pcfg.js)
+          stag_ref=$(refof /tmp/scfg.js)
+          [ -n "$prod_ref" ] || fail "could not read a project ref out of the served PRODUCTION config"
+          [ -n "$stag_ref" ] || fail "could not read a project ref out of the served STAGING config"
+          if [ "$stag_ref" = "$prod_ref" ]; then
+            # Same project: the only thing left between a staging run and Leo's
+            # real data is the flag, so here it becomes mandatory again.
+            grep -q 'readOnlyScores: true' /tmp/scfg.js \
+              || fail "staging serves production's project AND is writable - runs would reach the real leaderboard"
+            echo "WARNING: staging shares production's Supabase project, held safe only by readOnlyScores"
+          else
+            echo "OK: staging project and production project differ"
+          fi
+
+          # 2c. The URL and the KEY must name the same project. A staging URL
+          #     carrying production's anon key is a production client wearing a
+          #     staging banner, and 2b cannot see it - 2b compares URLs, and in
+          #     that scenario the URLs are exactly what you would want them to
+          #     be. Supabase mints the ref into the JWT, so it is checkable
+          #     offline.
+          keyref() {
+            k=$(sed -n "s#.*supabaseAnonKey: '\([^']*\)'.*#\1#p" "$1" | head -1)
+            payload=$(printf '%s' "$k" | cut -d. -f2 | tr '_-' '/+')
+            # base64 refuses input that is not a multiple of 4; base64url drops
+            # the padding, so it has to be put back before decoding.
+            while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="${payload}="; done
+            printf '%s' "$payload" | base64 -d 2>/dev/null \
+              | sed -n 's#.*"ref":"\([a-z0-9]\{1,\}\)".*#\1#p' | head -1
+          }
+          stag_key_ref=$(keyref /tmp/scfg.js)
+          [ -n "$stag_key_ref" ] || fail "could not decode a project ref out of the staging anon key"
+          [ "$stag_key_ref" = "$stag_ref" ] \
+            || fail "the staging build serves one project's URL and another project's anon key"
+          if [ "$stag_key_ref" = "$prod_ref" ]; then
+            fail "the staging build ships PRODUCTION's anon key"
+          fi
+          echo "OK: the staging anon key belongs to the project staging points at"
 
           # 3. Three independent noindex signals, because a staging copy of the
           #    game outranking the game is not quickly undone.
@@ -398,9 +443,10 @@ jobs:
   # And the image it ships is not the production image: fly.staging.toml
   # carries SKYHOOK_ENV=staging as a build arg, which makes the Dockerfile
   # overlay staging/config.staging.js over js/config.js. The `image` job above
-  # proves, on this same commit, that the overlay lands and that it carries
-  # readOnlyScores - the flag js/online.js honours by refusing to write a
-  # score. Staging reads the production leaderboard and cannot add to it.
+  # proves, on this same commit, that the overlay lands and that it points at
+  # staging's OWN Supabase project - a different database from production's,
+  # carrying the same schema from supabase/schema.sql. Staging reads and writes
+  # its own leaderboard and cannot see production's at all.
   staging:
     name: fly deploy (staging)
     needs: [tests, image, preflight]
@@ -447,9 +493,27 @@ jobs:
           done
 
           # The isolation, asserted against the thing that is actually running
-          # rather than against the image that was meant to be built.
-          curl -sf "$base/js/config.js" | grep -q 'readOnlyScores: true' \
-            || { echo "FAIL: live staging config would write to the real leaderboard"; exit 1; }
+          # rather than against the image that was meant to be built. The repo
+          # is checked out in this job, so production's ref is read out of
+          # js/config.js at this commit rather than hardcoded here: one place
+          # defines it, and this is not that place.
+          curl -sf "$base/js/config.js" > /tmp/live.js || { echo "FAIL: /js/config.js"; exit 1; }
+          refof() { sed -n "s#.*supabaseUrl: 'https://\([a-z0-9]\{1,\}\)\.supabase\.co'.*#\1#p" "$1" | head -1; }
+          prod_ref=$(refof js/config.js)
+          live_ref=$(refof /tmp/live.js)
+          [ -n "$prod_ref" ] || { echo "FAIL: no project ref in js/config.js"; exit 1; }
+          [ -n "$live_ref" ] || { echo "FAIL: no project ref in the LIVE staging config"; exit 1; }
+          if [ "$live_ref" = "$prod_ref" ]; then
+            grep -q 'readOnlyScores: true' /tmp/live.js \
+              || { echo "FAIL: live staging serves production's project AND is writable"; exit 1; }
+            echo "WARNING: live staging is on production's project, held safe only by readOnlyScores"
+          fi
+          # Belt to that brace: production's ref must not appear ANYWHERE in the
+          # served staging config - not in the URL, and not in the anon key,
+          # which is the half a URL comparison cannot see.
+          if grep -q "$prod_ref" /tmp/live.js; then
+            echo "FAIL: production's project ref appears in the live staging config"; exit 1
+          fi
           curl -sf "$base/robots.txt" | grep -q '^Disallow: /' \
             || { echo "FAIL: staging robots.txt"; exit 1; }
           curl -sfI "$base/" | grep -qi '^x-robots-tag: noindex' \
@@ -472,11 +536,16 @@ jobs:
             echo ""
             echo "**<https://skyhook-staging.fly.dev/>** - branch \`${{ github.ref_name }}\` @ \`${{ github.sha }}\`"
             echo ""
-            echo "Scores rolled here are NOT written to the leaderboard"
-            echo "(\`readOnlyScores\`); everything else - sign in, sign up,"
-            echo "reading the board, ranks, profiles - runs against the real"
-            echo "Supabase project. The machine stops itself when you close"
-            echo "the tab and starts again on the next request."
+            echo "Staging has its OWN Supabase project. Scores rolled here"
+            echo "ARE saved - to staging's board, which nobody else sees."
+            echo ""
+            echo "**Your production account does not exist here.** The database"
+            echo "starts empty, so sign up on staging rather than signing in."
+            echo "That is expected, not a bug - it is what stops a test run"
+            echo "editing a real account."
+            echo ""
+            echo "The machine stops itself when you close the tab and starts"
+            echo "again on the next request."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ------------------------------------------------------- 6. the Pages stub
