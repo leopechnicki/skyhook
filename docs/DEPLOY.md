@@ -17,6 +17,14 @@ mirror" below - it ends in one setting Leo has to flip by hand.
 
 Netlify is not used and must never be reintroduced.
 
+There is a second app, `skyhook-staging`, and every branch that is not `main`
+deploys to it: <https://skyhook-staging.fly.dev/>. It exists so a change can be
+played on a real URL before it reaches skyhookplay.com, and a run played there
+is never written to the leaderboard. Nothing in this file changes because of
+it - production is still `skyhook-game`, still driven by `fly.toml`, still only
+from `main`. The staging half is documented on its own, in
+[docs/STAGING.md](STAGING.md).
+
 ---
 
 ## What is already done
@@ -30,7 +38,10 @@ Everything that lives in the repo:
 | `conf/404.html` | A 404 page that looks like the game instead of like nginx. |
 | `fly.toml` | App name, region, port, health check, machine size. |
 | `.dockerignore` | Keeps the test suite, docs and `node_modules` out of the build context. |
-| `.github/workflows/deploy.yml` | Test suite -> container smoke test -> `flyctl deploy --remote-only` on push to `main`. |
+| `.github/workflows/deploy.yml` | Test suite -> container smoke test -> `flyctl deploy --remote-only` on push to `main`. Branches go to staging instead; see [STAGING.md](STAGING.md). |
+| `fly.staging.toml` | The staging app. A separate file, not a flag on `fly.toml`, so the production app name and the staging app name are never in the same command line. |
+| `staging/` | The only two files that differ on staging: the read-only config and a `Disallow: /` robots.txt. Copied over the originals by the Dockerfile, and only when built with `--build-arg SKYHOOK_ENV=staging`. |
+| `test/staging.mjs` | Asserts a staging run cannot reach the real leaderboard, that reads still work, that production is unaffected, and that `main` and a feature branch cannot reach each other's deploy job. |
 | `pages/` | The GitHub Pages redirect stub - two files, not the game. Published to the `gh-pages` branch by the `pages-stub` job so the retired `github.io` URL keeps working. See "Retiring the Pages mirror". |
 | `test/pages_stub.mjs` | Asserts the one canonical origin: that `index.html`, `conf/site.conf.template`, the `Dockerfile` default and `fly.toml` all agree, and that the stub redirects with the query string and hash intact. |
 

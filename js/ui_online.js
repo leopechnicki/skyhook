@@ -550,6 +550,16 @@
 
   function handleRunEnded(run) {
     var s = Online.state();
+    /* Staging. Online.submitRun refuses the run on its own - this branch adds
+       nothing to the SAFETY of that, it exists so the message is true. The
+       signed-out path below says "sign in to put this run on the board", and
+       on a read-only build signing in would not put it on the board, so
+       printing that line here would be teaching the tester something false
+       about the build they are testing. */
+    if (s.readOnlyScores) {
+      setStatus('staging - score not sent to the leaderboard');
+      return;
+    }
     if (!s.signedIn) {
       /* Park it. When they sign in, flushPending sends the best one, so
          choosing to make an account later never costs them the run that made

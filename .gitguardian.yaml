@@ -1,7 +1,11 @@
 # GitGuardian configuration for SKYHOOK.
 #
-# ONE ignore rule, for ONE string: the Supabase *anon* key in js/config.js.
-# Nothing else is suppressed, and the scanner is not disabled anywhere.
+# ONE ignore rule, for ONE string: the Supabase *anon* key. It appears twice
+# in the repo now - js/config.js (production) and staging/config.staging.js
+# (the staging overlay, which points at the same project deliberately; see
+# docs/STAGING.md). The rule ignores the MATCH, not a path, so it covers both
+# without listing either. Nothing else is suppressed, and the scanner is not
+# disabled anywhere.
 #
 # ---------------------------------------------------------------------------
 # Why that key is committed, and why it is not a leak
@@ -46,6 +50,12 @@
 # the one mistake that would actually matter here, someone pasting the
 # service_role key into the slot right next to this one. Ignoring the specific
 # string keeps js/config.js scanned: any other secret in it still fires.
+#
+# It also scales for free. staging/config.staging.js carries the same key and
+# needed no new rule; had this been a path ignore, the staging file would have
+# arrived with a second path ignore and a second blind spot. test/staging.mjs
+# decodes the staging key too and fails the build unless its role claim is
+# literally "anon", exactly as test/online.mjs does for the production one.
 #
 # ---------------------------------------------------------------------------
 # Scope: what this file is known to affect, and what it may not

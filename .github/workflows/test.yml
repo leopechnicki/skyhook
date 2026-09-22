@@ -90,6 +90,22 @@ jobs:
       - name: Canonical origin + Pages redirect stub
         run: node test/pages_stub.mjs
 
+      # The staging pipeline's isolation, and it is in the CHEAP job on
+      # purpose: what it protects is Leo's real leaderboard, so it has to run
+      # on every PR rather than only on the ones that reach a deploy.
+      #
+      # skyhook-staging shares the production Supabase project - there is no
+      # second project to point it at, see staging/config.staging.js - so the
+      # only thing between a test run and the live board is readOnlyScores and
+      # the lines in js/online.js that honour it. This asserts the flag is
+      # there, that submitRun refuses on it WITHOUT queueing the run for a
+      # later session that could write, that reads still work (or the staging
+      # site could not test the feature it exists for), that production is
+      # untouched by any of it, and that main and a feature branch cannot
+      # reach each other's deploy job.
+      - name: Staging isolation (scores cannot reach the real board)
+        run: node test/staging.mjs
+
       # The Android wrapper's two pure-logic modules: the interstitial cadence
       # gate and the AdMob consent/targeting path. Both are dependency-free
       # (node: builtins + relative imports only), so they run here with no

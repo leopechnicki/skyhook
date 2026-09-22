@@ -57,6 +57,19 @@ server {
   add_header X-Frame-Options "SAMEORIGIN" always;
   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
+  # --------------------------------------------------------------- crawlers
+  # ROBOTS_TAG is "all" in production (Dockerfile) - the documented no-op,
+  # identical in meaning to sending no X-Robots-Tag at all - and
+  # "noindex, nofollow" on staging (fly.staging.toml).
+  #
+  # This is the strongest of the three noindex signals the staging build
+  # carries, and the only one that works on a client running no JavaScript
+  # and ignoring robots.txt, because it is in the response itself. The other
+  # two are staging/robots.txt and the meta tag staging/config.staging.js
+  # injects. Three, because "the staging copy of the game outranked the game"
+  # is not a mistake that can be undone quickly once it has happened.
+  add_header X-Robots-Tag "${ROBOTS_TAG}" always;
+
   # ----------------------------------------------------------------- caching
   # There is no content hashing in the asset names, because content hashing
   # needs a build step. That single fact decides every number below: nothing
@@ -82,6 +95,10 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # Restated for the same reason as the three above: add_header does not
+    # merge across contexts. Omitting it here would leave X-Robots-Tag on
+    # every asset and missing from the one response a crawler actually reads.
+    add_header X-Robots-Tag "${ROBOTS_TAG}" always;
 
     # index.html declares https://skyhookplay.com as its canonical, og:url,
     # og:image and twitter:image. That is now the TRUE answer, not a

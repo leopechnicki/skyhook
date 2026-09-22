@@ -24,6 +24,47 @@ COPY css/ ./css/
 COPY js/ ./js/
 COPY conf/404.html ./404.html
 
+# --------------------------------------------------------------- the overlay
+# The ONLY difference between the production image and the staging image, and
+# it is a build argument rather than a runtime environment variable on
+# purpose. A runtime flag is a flag production can be started with by mistake;
+# a build that did not pass --build-arg SKYHOOK_ENV=staging has no staging
+# bytes in it at all, so "is this production?" is answered by the image's
+# contents instead of by whoever wrote the machine's env.
+#
+# What the overlay swaps:
+#   js/config.js   -> staging/config.staging.js. Same Supabase project, plus
+#                     readOnlyScores:true, which js/online.js honours by
+#                     refusing every score submission. Also injects the
+#                     noindex meta and the orange STAGING banner. The long
+#                     justification for sharing the project lives in that file.
+#   robots.txt     -> Disallow: /. Production still serves no robots.txt; this
+#                     line cannot change that, because it does not run.
+#
+# The `*)` arm is the important one. Without it a typo - SKYHOOK_ENV=stagging -
+# would fall through silently and produce a PRODUCTION image under a staging
+# app name: the staging site would come up pointed at the real leaderboard
+# with write access and look completely normal. deploy.yml builds with a
+# deliberately misspelled value and fails if that build succeeds.
+#
+# `set -e` is explicit rather than assumed, so a renamed or deleted staging/
+# file reads as a broken build rather than as a half-applied overlay.
+ARG SKYHOOK_ENV=production
+COPY staging/ /staging/
+RUN set -e; \
+    case "$SKYHOOK_ENV" in \
+      staging) \
+        cp /staging/config.staging.js js/config.js; \
+        cp /staging/robots.txt robots.txt; \
+        echo "overlay applied: staging" ;; \
+      production) \
+        echo "overlay skipped: production" ;; \
+      *) \
+        echo "FATAL: SKYHOOK_ENV must be 'production' or 'staging', got '$SKYHOOK_ENV'" >&2; \
+        exit 1 ;; \
+    esac; \
+    rm -rf /staging
+
 # ---------------------------------------------------------------------------
 # 2. Serve it.
 # ---------------------------------------------------------------------------
@@ -65,6 +106,17 @@ RUN find /usr/share/nginx/html \
 # override is for serving the game from somewhere that genuinely is not
 # skyhookplay.com, e.g. a staging host that should not claim the canonical.
 ENV SITE_ORIGIN="https://skyhookplay.com"
+
+# Crawler policy, as a response header. conf/site.conf.template emits
+# `X-Robots-Tag: ${ROBOTS_TAG}` and envsubst needs the name to EXIST in the
+# environment or the literal survives into the config and nginx refuses to
+# start - so this default is load-bearing, not decorative.
+#
+# "all" is the documented no-op: index and follow, which is exactly what a
+# response with no X-Robots-Tag at all already means. Production's behaviour
+# is therefore unchanged; it just now says out loud what it was silent about.
+# fly.staging.toml overrides this with "noindex, nofollow".
+ENV ROBOTS_TAG="all"
 
 # nginx must run in the foreground: on Fly the machine's lifecycle IS the
 # process's lifecycle, and a daemonised nginx exits at once and reads as a
