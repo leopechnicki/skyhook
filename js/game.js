@@ -1169,17 +1169,31 @@
        ACT_DEBOUNCE deleted the retry. Measured at +41.7 ms worst case and 205
        deleted retries per 480 s of play (test/latency.mjs).
 
-       A release therefore PUNCHES THROUGH a freeze: it fires on this tick and
-       cancels whatever is left of it, so the shot starts moving immediately
-       instead of after the flourish. Determinism is untouched - consumption is
-       still a function of the tick index alone, never of wall time or of how
-       many frames the display delivered. */
+       A release therefore PUNCHES THROUGH a freeze: it fires on this tick, so
+       the engine lights, the hull commits to the launch vector and the shot is
+       locked in on the frame the player asked for it.
+
+       The freeze itself is deliberately LEFT TO RUN. An earlier draft also did
+       `this.hitstop = 0` here to start the ship moving immediately, and that
+       was measured as a real balance change rather than a latency fix: the
+       expert profile in test/balance.mjs - the only one with no coin flips, so
+       the only one that is a clean signal - went from 0.136 to 0.165
+       deaths/min and from 57.3% to 50.0% of runs reaching the cap, reproduced
+       at two independent seed bases. The reason is that a tight catch buys the
+       player ~35 ms of frozen sky, and cancelling it hands that protection
+       back. It bought nothing: the latency gate scores an identical 16/16
+       either way, because the sim is frozen, so p.ang and p.r do not move
+       during the freeze and the launch vector is the same whether the release
+       resolves at the head of the freeze or at its tail. Hitstop is also
+       supposed to be a constant - a flourish whose length depends on whether
+       the player happened to tap during it is worse juice, not better.
+
+       Determinism is untouched - consumption is still a function of the tick
+       index alone, never of wall time or of how many frames the display
+       delivered. */
     if (this.queuedAction) {
       this.queuedAction = false;
-      if (this.player.mode === 'orbit') {
-        this._release(false);
-        this.hitstop = 0;
-      }
+      if (this.player.mode === 'orbit') this._release(false);
     }
 
     if (this.hitstop > 0) {
