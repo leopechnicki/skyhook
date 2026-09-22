@@ -90,6 +90,20 @@ jobs:
       - name: Canonical origin + Pages redirect stub
         run: node test/pages_stub.mjs
 
+      # The Android wrapper's two pure-logic modules: the interstitial cadence
+      # gate and the AdMob consent/targeting path. Both are dependency-free
+      # (node: builtins + relative imports only), so they run here with no
+      # `npm ci` in android-app/ and no Android SDK - which is the whole reason
+      # they are in the cheap `logic` job rather than a native build job.
+      #
+      # They are gated at all because android-app/ landed as one commit of
+      # previously-untracked code: the ad cadence decides how often a player is
+      # interrupted, and the consent path is the difference between a compliant
+      # ad request and a policy strike. Neither should be able to regress
+      # silently just because the native build is not run in CI.
+      - name: Android wrapper logic (ad cadence + consent)
+        run: node android-app/src/test/ad-gate.test.mjs && node android-app/src/test/ads-consent.test.mjs
+
   browser:
     name: browser (smoke + frame time)
     runs-on: ubuntu-latest
