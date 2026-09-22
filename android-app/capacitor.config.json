@@ -1,0 +1,13 @@
+{
+  "appId": "com.leopechnicki.skyhook",
+  "appName": "SKYHOOK",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "AdMob": {
+      "comment": "Initialised in test mode by src/native/ads.mjs. Test IDs only. The AdMob APPLICATION_ID is set as AndroidManifest meta-data by scripts/patch-manifest.mjs after 'cap add android'. Real app id is added only per RELEASE-CHECKLIST.md."
+    }
+  }
+}
