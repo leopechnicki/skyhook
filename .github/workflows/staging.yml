@@ -1,0 +1,262 @@
+# SKYHOOK - deploy to the STAGING app on Fly.io.
+#
+# What this is for: Leo plays a change on a real URL, on a real phone, BEFORE
+# it is merged. The production deploy (.github/workflows/deploy.yml) still
+# happens on exactly one event - a push to main - and nothing in this file can
+# trigger it.
+#
+# THE ONE INVARIANT
+# -----------------
+# This workflow must never be able to touch `skyhook-game`. Three independent
+# mechanisms enforce that, because one of them would just be a comment:
+#
+#   1. The config is a separate file, fly.staging.toml, whose `app` line says
+#      skyhook-staging.
+#   2. `--app skyhook-staging` is passed on the command line as well, so a bad
+#      edit to the toml is overridden rather than obeyed.
+#   3. The credential is a DIFFERENT secret - FLY_STAGING_API_TOKEN - minted
+#      with `fly tokens create deploy -a skyhook-staging`. Fly scopes it to
+#      that one app, so even a workflow rewritten to say `--app skyhook-game`
+#      is refused by the API. This is the mechanism that actually holds; the
+#      first two exist to make the mistake loud rather than possible.
+#
+# The `guard` job below also greps the toml and fails if the production app
+# name appears in it at all. Cheap, and it turns a copy-the-whole-file mistake
+# into a red X in ten seconds.
+#
+# AND THE LEADERBOARD
+# -------------------
+# Staging talks to the SAME Supabase project as production. A second project
+# would mean a second schema to keep in step, and a stale staging schema is a
+# worse lie than no staging at all. The isolation is therefore at the WRITE
+# boundary: fly.staging.toml sets SITE_ENV=staging, the page reads it as
+# window.SKYHOOK_ENV, and js/online.js refuses every score submission in that
+# mode. Reads - the board, the champion - stay live, which is the entire point
+# of testing against real data. docs/DEPLOY.md > "Staging" carries the full
+# argument and the list of what staging can and cannot write.
+name: staging
+
+on:
+  pull_request:
+  push:
+    branches: ['crew/**']
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older staging deploy pointless -
+# cancel it. Cross-branch serialisation is a different problem and is handled
+# on the deploy job itself.
+concurrency:
+  group: staging-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write     # to leave the staging URL on the PR
+
+jobs:
+  # ---------------------------------------------------------------- 1. tests
+  # The same gate main gets. A staging URL somebody is asked to test is worth
+  # nothing if the build behind it is one the suite would have rejected.
+  tests:
+    name: test suite
+    uses: ./.github/workflows/test.yml
+
+  # ------------------------------------------------------------- 2. guardrail
+  guard:
+    name: staging config sanity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: fly.staging.toml points at staging and only staging
+        run: |
+          set -e
+          test -f fly.staging.toml || { echo "FAIL: fly.staging.toml is missing"; exit 1; }
+          grep -q "^app = 'skyhook-staging'$" fly.staging.toml \
+            || { echo "FAIL: fly.staging.toml does not declare app = 'skyhook-staging'"; exit 1; }
+          if grep -q 'skyhook-game' fly.staging.toml; then
+            echo "FAIL: the production app name appears in fly.staging.toml"
+            exit 1
+          fi
+          grep -q "SITE_ENV = 'staging'" fly.staging.toml \
+            || { echo "FAIL: fly.staging.toml does not set SITE_ENV=staging - that build would submit scores to the real leaderboard"; exit 1; }
+          echo "OK: the staging config is staging-shaped"
+
+  # ---------------------------------------------------------------- 3. image
+  # deploy.yml proves the production container serves the game. This proves
+  # the STAGING container does too and - the part production cannot check -
+  # that SITE_ENV actually reaches the served HTML. If that rewrite silently
+  # stops working, staging becomes a build that writes to the real
+  # leaderboard, which is the one failure this workflow exists to prevent. So
+  # it is asserted here, before anything is deployed.
+  image:
+    name: container (staging env reaches the page)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t skyhook:staging-ci .
+
+      - name: Run it with the staging environment
+        run: |
+          docker run -d --name skyhook-staging-ci -p 8080:8080 \
+            -e SITE_ORIGIN='https://skyhook-staging.fly.dev' \
+            -e SITE_ENV='staging' skyhook:staging-ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health > /dev/null; then
+              echo "up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "FAIL: container never answered /health"
+          docker logs skyhook-staging-ci
+          exit 1
+
+      - name: The page knows it is staging
+        run: |
+          set -e
+          fail() { echo "FAIL: $1"; docker logs skyhook-staging-ci; exit 1; }
+          curl -sf http://localhost:8080/ > /tmp/index.html || fail "/ did not serve"
+          grep -q '<canvas id="game"' /tmp/index.html || fail "/ served something that is not the game"
+          grep -q "window.SKYHOOK_ENV = 'staging'" /tmp/index.html \
+            || fail "SITE_ENV did not reach the page - this build would write to the production leaderboard"
+          if grep -q "window.SKYHOOK_ENV = 'production'" /tmp/index.html; then
+            fail "the production marker survived the rewrite"
+          fi
+          grep -q 'https://skyhook-staging.fly.dev/' /tmp/index.html \
+            || fail "SITE_ORIGIN did not rewrite the canonical/og origin"
+          echo "OK: the staging container serves a page that knows it is staging"
+
+      - name: Container logs
+        if: always()
+        run: docker logs skyhook-staging-ci || true
+
+  # ------------------------------------------------------------- 4. preflight
+  # `secrets` cannot be read in a job-level `if`, so the presence of the token
+  # becomes a job output. With no token the workflow still runs the whole gate
+  # and prints the commands that fix it, instead of a red X that only means
+  # "somebody has not set a secret yet".
+  preflight:
+    name: fly credentials (staging)
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          FLY_STAGING_API_TOKEN: ${{ secrets.FLY_STAGING_API_TOKEN }}
+        run: |
+          if [ -n "$FLY_STAGING_API_TOKEN" ]; then
+            echo "configured=yes" >> "$GITHUB_OUTPUT"
+            echo "FLY_STAGING_API_TOKEN is set - staging will be deployed."
+          else
+            echo "configured=no" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Staging deploy skipped - no FLY_STAGING_API_TOKEN"
+              echo ""
+              echo '```sh'
+              echo "fly apps create skyhook-staging --org personal"
+              echo "fly tokens create deploy -a skyhook-staging -x 8760h   # copy the output"
+              echo "gh secret set FLY_STAGING_API_TOKEN --repo leopechnicki/skyhook"
+              echo '```'
+              echo ""
+              echo "The token must be scoped to skyhook-staging. Do NOT reuse FLY_API_TOKEN:"
+              echo "that one can deploy production, and the point of this pipeline is that it cannot."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ---------------------------------------------------------------- 5. deploy
+  deploy:
+    name: fly deploy (staging)
+    needs: [tests, guard, image, preflight]
+    if: needs.preflight.outputs.configured == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # One staging app, so two branches must not deploy it at the same time.
+    # Not cancellable: a half-applied release is worse than a queued one.
+    concurrency:
+      group: staging-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to skyhook-staging
+        run: flyctl deploy --config fly.staging.toml --app skyhook-staging --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STAGING_API_TOKEN }}
+
+      # A deploy that reports success and serves a blank page has happened to
+      # this team before. Assert the live site, the assets, AND the staging
+      # marker - a staging URL quietly running in production mode is the one
+      # outcome that would be worse than a failed deploy.
+      - name: Verify the staging site
+        run: |
+          set -e
+          base="https://skyhook-staging.fly.dev"
+          for i in $(seq 1 20); do
+            curl -sf "$base/health" > /dev/null && break
+            echo "waiting for $base ..."; sleep 5
+          done
+          curl -sf "$base/health" > /dev/null || { echo "FAIL: /health"; exit 1; }
+          curl -sf "$base/" > /tmp/staging.html || { echo "FAIL: / did not serve"; exit 1; }
+          grep -q '<canvas id="game"' /tmp/staging.html || { echo "FAIL: / is not the game"; exit 1; }
+          grep -q "window.SKYHOOK_ENV = 'staging'" /tmp/staging.html \
+            || { echo "FAIL: the deployed staging site does not know it is staging"; exit 1; }
+          # The asset list is READ OUT OF THE SERVED PAGE rather than restated
+          # here. A hand-kept list stops matching the game the first time
+          # somebody adds a script tag, and the file it forgets is exactly the
+          # one nobody checked. index.html names every script it needs, so the
+          # page is the list.
+          assets=$(sed -n 's/.*src="\(js\/[^"]*\.js\)".*/\1/p' /tmp/staging.html)
+          test -n "$assets" || { echo "FAIL: no script tags found in the served page"; exit 1; }
+          for f in $assets css/style.css screenshot.png; do
+            curl -sfI "$base/$f" > /dev/null || { echo "FAIL: $f is not 200"; exit 1; }
+            echo "  ok $f"
+          done
+          echo "OK: $base is live, complete, and in staging mode"
+
+      - name: Publish the URL
+        run: |
+          {
+            echo "## SKYHOOK staging is live"
+            echo ""
+            echo "**https://skyhook-staging.fly.dev/**"
+            echo ""
+            echo "Commit ${GITHUB_SHA} on ${GITHUB_REF_NAME}."
+            echo ""
+            echo "Scores played here are NOT submitted to the global leaderboard:"
+            echo "SITE_ENV=staging puts the online layer in read-only mode."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # One comment per PR, edited in place. A fresh comment per push turns a
+      # busy branch into a wall of near-identical bot noise, and the URL never
+      # changes anyway - only the commit behind it does.
+      - name: Leave the URL on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          marker='<!-- skyhook-staging-url -->'
+          {
+            echo "$marker"
+            echo "**Staging:** https://skyhook-staging.fly.dev/"
+            echo ""
+            echo "Deployed from \`${GITHUB_SHA}\`. Scores played on staging are not submitted"
+            echo "to the global leaderboard."
+            echo ""
+            echo "_Crew Leo Agile dev team_"
+          } > /tmp/comment.md
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+                 --jq "map(select(.body | startswith(\"$marker\"))) | .[0].id // empty")
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F body=@/tmp/comment.md > /dev/null
+            echo "updated comment $id"
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F body=@/tmp/comment.md > /dev/null
+            echo "posted a new comment"
+          fi

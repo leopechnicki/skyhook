@@ -31,6 +31,8 @@ Everything that lives in the repo:
 | `fly.toml` | App name, region, port, health check, machine size. |
 | `.dockerignore` | Keeps the test suite, docs and `node_modules` out of the build context. |
 | `.github/workflows/deploy.yml` | Test suite -> container smoke test -> `flyctl deploy --remote-only` on push to `main`. |
+| `fly.staging.toml` | The staging app's config: `skyhook-staging`, `SITE_ORIGIN` and `SITE_ENV=staging`. See "Staging". |
+| `.github/workflows/staging.yml` | Test suite -> config guard -> container check -> deploy to **staging only**, on every PR and every `crew/**` push. |
 | `pages/` | The GitHub Pages redirect stub - two files, not the game. Published to the `gh-pages` branch by the `pages-stub` job so the retired `github.io` URL keeps working. See "Retiring the Pages mirror". |
 | `test/pages_stub.mjs` | Asserts the one canonical origin: that `index.html`, `conf/site.conf.template`, the `Dockerfile` default and `fly.toml` all agree, and that the stub redirects with the query string and hash intact. |
 
@@ -173,6 +175,90 @@ every copy of the page would declare itself canonical at a hostname that does
 not resolve - which is worse than claiming the wrong origin, because a crawler
 that cannot reach the canonical target may drop the page entirely. Confirm
 `fly certs check skyhookplay.com -a skyhook-game` reports **Ready** first.
+
+---
+
+## Staging
+
+There is a second Fly app, `skyhook-staging` (org `personal`, region `ams`,
+same Dockerfile, same image), served at <https://skyhook-staging.fly.dev/>.
+It exists so a change can be played on a phone before it is merged, which is
+the review step no amount of CI replaces.
+
+| File | What it does |
+|---|---|
+| `fly.staging.toml` | App name, region, and the two env vars that make this build staging: `SITE_ORIGIN` and `SITE_ENV`. |
+| `.github/workflows/staging.yml` | Test suite -> config guard -> container check -> `flyctl deploy --config fly.staging.toml --app skyhook-staging`. |
+| `FLY_STAGING_API_TOKEN` | Repo secret. A **deploy token scoped to `skyhook-staging`**, minted 2026-09-22, one-year expiry. |
+
+**When it deploys:** every `pull_request`, and every push to a `crew/**`
+branch. Never on a push to `main` - production is the only thing main
+deploys, and staging is the only thing this workflow deploys.
+
+**Where the URL appears:** the run summary of the `staging` workflow, and a
+single comment on the PR that is edited in place on each push.
+
+### Why it cannot deploy production
+
+Three mechanisms, listed in increasing order of how much they actually hold:
+
+1. `fly.staging.toml` declares `app = 'skyhook-staging'`, and a guard job
+   fails the build if the string `skyhook-game` appears in that file at all.
+2. `--app skyhook-staging` is passed explicitly on the command line, so it
+   wins over the toml.
+3. The token is a different secret from `FLY_API_TOKEN` and is scoped by Fly
+   to the staging app. A workflow edited to say `--app skyhook-game` gets a
+   permission error from the API, not a deploy.
+
+Do not reuse `FLY_API_TOKEN` here. It can deploy production, and the point of
+this pipeline is that it cannot.
+
+### The leaderboard, and why staging shares it
+
+Staging points at the **same Supabase project as production**. That was a
+choice, and the alternative was considered: a second project means a second
+copy of `supabase/schema.sql` to keep in step by hand, and a staging backend
+whose schema has quietly drifted is a worse lie than no staging at all - it
+produces confident green results about a database nobody has.
+
+The isolation is at the **write boundary** instead:
+
+* `fly.staging.toml` sets `SITE_ENV = 'staging'`.
+* `conf/site.conf.template` rewrites `window.SKYHOOK_ENV` in the served page.
+* `js/online.js` reads that marker and **refuses every score submission** in
+  staging mode. `submitRun()` returns `{ submitted: false, queued: false }`
+  without making a request, and without parking the run for later either - a
+  queued staging run would upload itself the next time the player opened
+  production, which is the same leak with a delay.
+* `js/ui_ship.js` draws a permanent banner saying so, so nobody plays a good
+  run on staging believing it counted.
+
+What staging therefore **cannot** do: add a row to `scores`, and so cannot
+change anybody's rank, the board, or the champion.
+
+What staging **can** still do, deliberately: read the live board (the golden
+champion has to be derived from real data to be worth testing), sign in with a
+real account, create an account, and write that account's **ship palette** to
+`public.ship_palettes`. A palette is per-user cosmetic state, it is not on the
+board, and being able to test that it survives a reload on a real account is
+most of the point.
+
+If that last allowance ever stops being acceptable, the switch is one line in
+`js/online.js` - `savePalette` already asks the same `readOnly()` guard that
+`submitRun` does, it is simply told to allow this one write. Flagged to Leo
+2026-09-22 rather than decided silently.
+
+### Reproducing the staging app from scratch
+
+```sh
+fly apps create skyhook-staging --org personal
+fly tokens create deploy -a skyhook-staging -x 8760h   # copy the output
+gh secret set FLY_STAGING_API_TOKEN --repo leopechnicki/skyhook
+```
+
+The first deploy is whatever the next PR or `crew/**` push produces; there is
+no manual `fly deploy` step and there should not be one, because a staging
+build nobody can trace to a commit is not a test of anything.
 
 ---
 

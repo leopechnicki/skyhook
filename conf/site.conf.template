@@ -106,6 +106,22 @@ server {
     sub_filter_once off;
     sub_filter_types text/html;
     sub_filter 'https://skyhookplay.com' '${SITE_ORIGIN}';
+
+    # The environment marker, by the same mechanism and with the same
+    # identity-by-default property: index.html ships the literal below,
+    # SITE_ENV is "production" everywhere except fly.staging.toml, so on
+    # production this replaces the string with itself.
+    #
+    # A rewrite rather than an injected <script> on purpose. An injected tag
+    # has to be positioned relative to markup nginx cannot see the structure
+    # of, and if the injection silently stops matching, the page gets NO
+    # marker at all. If THIS stops matching, the page still says
+    # 'production' - which is the answer that submits scores to the real
+    # board and never mistakes the real board for a sandbox. Same WARNING as
+    # above applies: the literal here and the one in index.html are one fact
+    # written twice, and staging.yml's container job runs with a deliberately
+    # different SITE_ENV so a mismatch fails CI instead of failing quietly.
+    sub_filter "window.SKYHOOK_ENV = 'production'" "window.SKYHOOK_ENV = '${SITE_ENV}'";
   }
 
   location ~* \.(?:js|css)$ {

@@ -66,6 +66,19 @@ RUN find /usr/share/nginx/html \
 # skyhookplay.com, e.g. a staging host that should not claim the canonical.
 ENV SITE_ORIGIN="https://skyhookplay.com"
 
+# The OTHER knob: which environment this container IS. The page ships
+# window.SKYHOOK_ENV = 'production' and conf/site.conf.template rewrites it
+# through the same sub_filter mechanism as the origin above. It decides two
+# things and nothing else: whether the staging banner is drawn, and whether
+# the online layer refuses to write to the leaderboard.
+#
+# It defaults to "production", which makes the rewrite an identity no-op
+# unless fly.staging.toml overrides it. That is the safe direction to fail
+# in: a container that has lost this variable behaves as production - it
+# submits scores, which is what production is for - rather than silently
+# turning the real site read-only and swallowing everybody's runs.
+ENV SITE_ENV="production"
+
 # nginx must run in the foreground: on Fly the machine's lifecycle IS the
 # process's lifecycle, and a daemonised nginx exits at once and reads as a
 # crash loop.

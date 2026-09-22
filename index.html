@@ -145,7 +145,18 @@
 
 </div>
 
-<!-- config.js first: it only sets a global, and js/online.js reads it. It is
+<!-- Which environment is serving this page. The repo, a file:// open, GitHub
+     Pages and the production container all say 'production'; only the staging
+     container rewrites it, via sub_filter in conf/site.conf.template (see
+     SITE_ENV there and in fly.staging.toml). Kept on ONE line, because that
+     line is the literal nginx searches for.
+
+     Two consumers, both of which fail safe if this is missing: js/ui_ship.js
+     draws the staging banner, and js/ui_online.js puts the online layer in
+     read-only mode so a run played on staging can never reach the production
+     leaderboard. -->
+<script>window.SKYHOOK_ENV = 'production';</script>
+<!-- config.js next: it only sets a global, and js/online.js reads it. It is
      empty in the repo, which is what keeps the default build offline. -->
 <script src="js/config.js"></script>
 <script src="js/utils.js"></script>

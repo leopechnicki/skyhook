@@ -1,0 +1,53 @@
+# SKYHOOK on Fly.io - STAGING.
+#
+# The same image, the same region and the same machine economics as
+# fly.toml. Three lines differ, and all three exist so that a mistake here
+# cannot reach players:
+#
+#   app          skyhook-staging, never skyhook-game. The staging workflow
+#                also passes --app explicitly and asserts this string, so
+#                promoting staging to production takes a deliberate edit in
+#                two files rather than a typo in one.
+#   SITE_ORIGIN  the staging hostname, so the canonical/og tags on this build
+#                point at itself. A staging page advertising skyhookplay.com
+#                is a page that can be indexed in production's name.
+#   SITE_ENV     'staging', which is the ONE switch the game reads. It turns
+#                on the staging banner and puts the online layer in read-only
+#                mode: no run submitted from this app can ever land in the
+#                production leaderboard. See docs/DEPLOY.md > "Staging".
+#
+# Deployed by .github/workflows/staging.yml on every PR and on every push to
+# a crew/** branch. Nothing here is ever deployed by a push to main.
+
+app = 'skyhook-staging'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  SITE_ORIGIN = 'https://skyhook-staging.fly.dev'
+  SITE_ENV = 'staging'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Staging is idle almost all of the time: a machine that stops when nobody
+  # is testing is the difference between "costs nothing" and "costs the same
+  # as production for a site with one user".
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = '5s'
+    interval = '30s'
+    method = 'GET'
+    path = '/health'
+    timeout = '5s'
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
