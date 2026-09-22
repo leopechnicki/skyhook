@@ -23,11 +23,13 @@ primary_region = 'ams'
     # and on no other; the default is 'production', and any third value fails
     # the build rather than being ignored.
     #
-    # Consequence: the staging container cannot write a score to the
-    # production leaderboard, because js/online.js refuses every submission
-    # while readOnlyScores is true. It can still READ the board, sign in,
-    # sign up and recover a password against the real project - which is what
-    # makes the staging site worth having instead of a dead backend.
+    # Consequence: the staging container talks to staging's OWN Supabase
+    # project, not production's. Sign up, sign in, password recovery, profile
+    # edits and scores are all real and all fully exercisable - they simply
+    # land in a different database, which starts empty. Before 2026-09-23 the
+    # two shared a project and safety came from readOnlyScores refusing every
+    # submission; that flag is now off, because the database boundary does the
+    # job the flag was standing in for.
     SKYHOOK_ENV = 'staging'
 
 [env]

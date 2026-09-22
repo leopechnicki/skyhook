@@ -13,63 +13,70 @@ through `fly.toml`, exactly as it did before, and no branch can reach that app.
 
 ## The one thing worth understanding
 
-**A run played on staging is never written to the leaderboard.**
+**Staging has its own Supabase project. Its database starts empty.**
 
-Staging talks to the *production* Supabase project. That is a deliberate
-choice, not an oversight, and the isolation is aimed narrowly at the thing
-that actually matters.
+Your production account does not exist on staging. Signing in with it will
+fail; testing staging means **signing up on staging**. That is expected, not a
+bug - and it is the whole point.
 
-### Why the same project
+### What changed on 2026-09-23
 
-A separate Supabase project is the textbook answer and was the first choice.
-It is not available:
+Staging used to share production's Supabase project, and bought its safety with
+a single flag: `readOnlyScores: true`, which `js/online.js` honours by refusing
+to submit a score. That blocked exactly one write.
 
-* The only credential this repo has is a **project-scoped** personal access
-  token (`~/skyhook_supabase.local.txt`, expires 2026-09-28).
-  `GET /v1/organizations` returns `[]` with it, so it cannot create a project.
-  Creating one is an account-level action Leo would have to take by hand.
-* And once created it would be a second stack - schema, RLS policies, auth
-  settings, email templates, the OAuth redirect allow-list - that drifts from
-  the first one silently, with nothing in CI comparing them.
+A score is not the only write the game makes. Signing up created a *real
+production account*. Changing a username renamed a *real production profile*.
+The account-settings work is precisely a feature whose writes are not scores,
+so testing it against the shared project meant editing production rows to find
+out whether the editor worked.
 
-### Why it is safe anyway
+Leo created a second project (Central EU / Frankfurt, free tier).
+`supabase/schema.sql` was applied to it whole, so staging has its own tables,
+its own RLS policies, its own triggers and its own leaderboard view - the same
+schema from the same file, and none of the data.
 
-`public.leaderboard` is a **view** over `public.scores` joined to `profiles`
-(`supabase/schema.sql`, section 6). A user with no row in `scores` has no row
-on the board: no rank, no entry, nothing rendered.
-
-So blocking the one `INSERT` into `scores` is sufficient to keep the visible
-leaderboard clean - and it leaves everything else working against real data:
+`readOnlyScores` is now **false** on staging. The flag existed to protect
+production's board; staging owns its board, so refusing to write would only
+mean the leaderboard could never be tested end to end.
 
 | On staging | Works? |
 |---|---|
-| Read the leaderboard | Yes |
-| Sign up, sign in, sign out | Yes |
-| Password recovery, Google OAuth | Yes |
-| `my_rank()`, profile row | Yes |
-| **Write a score** | **No - refused, and not queued** |
+| Read the leaderboard | Yes - staging's own, starts empty |
+| Sign up | Yes - and you must, your production account is not here |
+| Sign in, sign out | Yes, with a staging account |
+| Password recovery | Yes |
+| Change username / password | Yes - against a staging profile |
+| **Write a score** | **Yes - to staging's board** |
 
-That is what makes the staging site worth deploying. A staging build with the
-backend switched off could not test a leaderboard feature at all, which is
-most of what is currently being built.
+### The guard is off, not gone
 
-### Where it is enforced
+`js/online.js` still reads and honours `readOnlyScores`, and `test/staging.mjs`
+still proves the guard works - against a fixture that forces it on, rather than
+against the live config where it is off. A guard only ever exercised in the
+configuration that disables it is a guard nobody is testing.
 
-`js/online.js`, in `submitRun()` - the single function every score that has
-ever reached the board went through. A check any higher up is a check a future
-call site can forget to make.
+That matters because the safety property is now an *implication*, not a
+constant:
 
-The run is **dropped, not queued**. Queueing is what every other failure path
-does, and here it would be exactly wrong: a queued run is a run waiting for a
-session that *can* write, and no such moment may ever arrive for a score
-rolled on staging. `test/staging.mjs` fails the build if that changes.
+```
+staging is NOT production's project  =>  staging may write freely
+staging IS  production's project     =>  staging MUST be read-only
+```
+
+`test/staging.mjs` pins that implication, and the deploy workflow re-checks it
+against the served artefact and again against the live site. Pointing staging
+back at production without turning the flag on is a red build, not a quiet
+accident. So is shipping a staging URL with production's anon key - the key's
+`ref` claim is decoded and compared, because a production key under a staging
+URL is still a `role: anon` key and a role check alone cannot see it.
 
 ### What this does not protect against
 
-A tester who opens devtools and calls PostgREST by hand can still write a
-score - the anon key and the RLS policies are the production ones. That is
-accepted: the tester is Leo. This guards against the accident, not its author.
-
+Nothing here is a secret, and nothing here is a sandbox. The anon key is public
+by design and RLS in `supabase/schema.sql` decides what it may do, on staging
+exactly as on production. The separation is between two **databases**, not
+between a trusted and an untrusted client.
 ---
 
 ## How a branch becomes a URL
@@ -80,7 +87,7 @@ push to any branch except main
   -> container build + serve checks, for BOTH variants
   -> flyctl deploy --remote-only --config fly.staging.toml
   -> curl the live site: /health, the game, every asset,
-     readOnlyScores, robots.txt, X-Robots-Tag
+     the Supabase project ref, robots.txt, X-Robots-Tag
   -> the URL is printed into the run summary
 ```
 
@@ -115,11 +122,12 @@ all. Any value other than `production` or `staging` fails the build.
 | | production | staging |
 |---|---|---|
 | `js/config.js` | `js/config.js` | overlaid with `staging/config.staging.js` |
-| `readOnlyScores` | absent | `true` |
+| Supabase project | `ievfcqnyrekdixxbsite` | `qlaenczyhzjkmqkraiup` (its own) |
+| `readOnlyScores` | absent | `false` |
 | `SITE_ORIGIN` | `https://skyhookplay.com` | `https://skyhook-staging.fly.dev` |
 | `X-Robots-Tag` | `all` (the documented no-op) | `noindex, nofollow` |
 | `/robots.txt` | 404 | `Disallow: /` |
-| Banner | none | orange `STAGING - scores are not saved` |
+| Banner | none | orange `STAGING - separate database ...` |
 | Fly app | `skyhook-game` | `skyhook-staging` |
 | Config file | `fly.toml` | `fly.staging.toml` |
 | Secret | `FLY_API_TOKEN` | `FLY_STAGING_API_TOKEN` |
@@ -186,23 +194,42 @@ the disk the image sits on.
 | The overlay actually lands in the built image | `deploy.yml`, `image` job |
 | Production's image did not pick the overlay up | `deploy.yml`, `image` job |
 | A misspelled `SKYHOOK_ENV` fails the build | `deploy.yml`, `image` job |
-| The **live** staging site is read-only and unindexed | `deploy.yml`, `staging` job |
+| The **live** staging site is on its own project and unindexed | `deploy.yml`, `staging` job |
 
 `test/staging.mjs` runs in the cheap `logic` job, so it gates every PR rather
 than only the ones that reach a deploy.
 
 ---
 
-## If a dedicated staging Supabase project is ever created
+## The dedicated staging project (done 2026-09-23)
 
-Change the two strings at the top of `staging/config.staging.js` and set
-`readOnlyScores: false`. Nothing else has to move: the test that pins the
-read-only rule is written as an implication - *if staging points at
-production's project, it must be read-only* - so a genuinely separate project
-lifts the restriction instead of fighting it.
+This section used to describe a plan. It has been carried out, and it went
+exactly as written: the two strings at the top of `staging/config.staging.js`
+changed and `readOnlyScores` went to `false`. The implication-shaped test did
+its job - it needed relaxing in one place (the assertion that the flag is
+literally `true`) and the invariant itself was not touched.
 
-Apply `supabase/schema.sql` to the new project first, and add
-`https://skyhook-staging.fly.dev` to its auth redirect allow-list.
+What was done, in order:
+
+1. `supabase/schema.sql` applied **whole** to the new project, then applied a
+   second time to confirm the idempotence the file claims.
+2. Verified against `pg_policies` and `information_schema.column_privileges`:
+   RLS on for `profiles` and `scores`, `profiles_update_own`, the column-level
+   `grant update (username)` and nothing wider, the `profiles_rename_guard`
+   trigger, the `scores_rate_limit` trigger, the `on_auth_user_created` trigger
+   and the `leaderboard` view.
+3. Proved isolation with a live probe: a score written to staging's board
+   through the public anon key appeared on staging's leaderboard and did **not**
+   appear on production's. The probe account was then deleted, so staging's
+   database is empty again.
+
+### Still outstanding
+
+`https://skyhook-staging.fly.dev` must be added to the **auth redirect
+allow-list** of the staging project (Dashboard -> Authentication -> URL
+Configuration). Without it, password-recovery links and any OAuth return leg
+will bounce on staging. This needs dashboard access and cannot be done from the
+repo. Email/password sign-up and sign-in work without it.
 
 ---
 

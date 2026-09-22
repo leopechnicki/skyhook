@@ -3,22 +3,34 @@
  * What this file is defending, in one sentence: a test run must never end up
  * on Leo's real leaderboard.
  *
- * The staging site shares the production Supabase project - the full argument
- * for that is at the top of staging/config.staging.js, and the short version
- * is that the only credential this repo holds is scoped to that one project,
- * so a second one cannot be created without Leo doing it by hand, and a
- * staging build with no backend at all cannot test a leaderboard feature.
- * Sharing the project means the ONLY thing standing between a staging run and
- * the real board is one flag and the three lines in js/online.js that honour
- * it, so those get a test with teeth rather than a comment.
+ * Staging has its OWN Supabase project as of 2026-09-23. Before that it shared
+ * production's and bought safety with a flag - readOnlyScores - which blocked
+ * the one write that could reach Leo's board. That flag is no longer what does
+ * the isolating; a separate database is. So this file pins the property that
+ * actually holds now, stated as an implication rather than as a constant:
+ *
+ *     staging may write freely  <=>  staging is NOT production's project
+ *     staging is production's project  =>  staging must be read-only
+ *
+ * Written that way on purpose. "readOnlyScores === true" would have been the
+ * easier assertion and it would now be a false one, and - worse - it would
+ * have had to be deleted to let the separate project land, taking the real
+ * guarantee with it. The implication survives both worlds and fails loudly in
+ * the only one that is dangerous.
+ *
+ * The flag's machinery is still tested, hard, against a fixture that forces it
+ * on (GUARD below). It is off in production-of-staging, not gone, and the day
+ * somebody repoints this file at production the guard has to still work.
  *
  * Every check below can fail. Several are deliberately written to fail if
  * somebody "simplifies" the thing they check:
- *   - delete readOnlyScores from the staging config            -> FAIL
- *   - make submitRun queue the run instead of dropping it      -> FAIL
- *   - copy the staging config over the production one          -> FAIL
- *   - point fly.staging.toml at the production app             -> FAIL
- *   - let main reach the staging job, or a branch the prod job -> FAIL
+ *   - point staging back at production's project and let it write -> FAIL
+ *   - paste production's anon key under the staging URL           -> FAIL
+ *   - make submitRun queue a refused run instead of dropping it   -> FAIL
+ *   - gut the readOnlyScores guard in js/online.js                -> FAIL
+ *   - copy the staging config over the production one             -> FAIL
+ *   - point fly.staging.toml at the production app                -> FAIL
+ *   - let main reach the staging job, or a branch the prod job    -> FAIL
  *
  * Pure Node, no browser, no network, sub-second.
  *
@@ -72,14 +84,23 @@ const prod = evalConfig('js/config.js');
 const stag = evalConfig('staging/config.staging.js');
 
 check('staging config evaluates to a SKYHOOK_CONFIG', !!stag.cfg);
-check('staging config sets readOnlyScores === true', stag.cfg.readOnlyScores === true,
+/* Deliberately NOT "=== true". Staging has its own project now, so it SHOULD
+   write; what must never happen is the flag going missing while the URL is
+   production's, and that is the next check's job rather than this one's. This
+   one only pins that the flag is still a declared boolean - a config that
+   dropped the key entirely would read `undefined`, which is falsey, which
+   would sail through an `=== false` test having actually lost the guard. */
+check('staging config still declares readOnlyScores as a boolean',
+  typeof stag.cfg.readOnlyScores === 'boolean',
   JSON.stringify(stag.cfg.readOnlyScores));
 
 /* THE invariant, stated as an implication rather than as "these two strings
-   are equal". If a dedicated staging Supabase project is ever created, that is
-   an improvement and this test must not stand in its way - so what is pinned
-   is the thing that is actually dangerous: pointing staging at the SAME
-   project as production while letting it write. */
+   are equal". Staging having its own project is an improvement and this test
+   must not stand in its way - so what is pinned is the thing that is actually
+   dangerous: pointing staging at the SAME project as production while letting
+   it write. This is the check that was load-bearing before the split and is
+   still load-bearing after it; it did not need changing to let the split
+   land, which is the whole argument for writing it this way. */
 const sameProject =
   String(stag.cfg.supabaseUrl).replace(/\/+$/, '') ===
   String(prod.cfg.supabaseUrl).replace(/\/+$/, '');
@@ -88,6 +109,13 @@ check(
   !sameProject || stag.cfg.readOnlyScores === true,
   sameProject ? 'same project' : 'separate project - read-only no longer required'
 );
+/* Where we actually expect to be today. Kept separate from the invariant above
+   so the two failures read differently: that one means "you broke the safety
+   property", this one means "the split got reverted". */
+check('staging points at a DIFFERENT Supabase project from production',
+  !sameProject, `${stag.cfg.supabaseUrl} vs ${prod.cfg.supabaseUrl}`);
+check('staging writes are ENABLED (it owns its board, so it must exercise it)',
+  stag.cfg.readOnlyScores === false, JSON.stringify(stag.cfg.readOnlyScores));
 
 /* The overlay must never travel the other way. */
 check('production config does NOT carry readOnlyScores',
@@ -100,16 +128,44 @@ check('production config file has no readOnlyScores text at all',
    identical at a glance - so the role claim is decoded rather than trusted.
    test/online.mjs does this for js/config.js; the staging config needs it for
    exactly the same reason and is a different file. */
-function role(jwt) {
+function claims(jwt) {
   try {
     const p = String(jwt).split('.')[1];
     return JSON.parse(
       Buffer.from(p.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
-    ).role;
-  } catch { return null; }
+    );
+  } catch { return {}; }
 }
+const role = jwt => claims(jwt).role ?? null;
 check('staging anon key role claim is literally "anon"',
   role(stag.cfg.supabaseAnonKey) === 'anon', String(role(stag.cfg.supabaseAnonKey)));
+
+/* Now that the two builds hold two DIFFERENT keys, the URL and the key can
+   disagree - and that failure is silent and severe. A staging URL with
+   production's key is not a broken staging site; it is a PRODUCTION client
+   wearing a staging banner, and every assertion above about "different
+   project" would still pass, because they all read the URL. So the key gets
+   checked against the URL, and against production's key, directly.
+
+   Supabase mints the project ref into the token as `ref`, and it is also the
+   first label of the API hostname, so the two are comparable without a
+   network call. */
+const refOfUrl = u => (String(u).match(/^https:\/\/([a-z0-9]+)\.supabase\.co/) || [])[1] || null;
+const stagUrlRef = refOfUrl(stag.cfg.supabaseUrl);
+const stagKeyRef = claims(stag.cfg.supabaseAnonKey).ref ?? null;
+const prodUrlRef = refOfUrl(prod.cfg.supabaseUrl);
+
+check('staging supabaseUrl is a parseable supabase.co project URL', !!stagUrlRef,
+  String(stag.cfg.supabaseUrl));
+check('staging anon key carries a project ref claim', !!stagKeyRef, String(stagKeyRef));
+check('staging anon key belongs to the project staging points at',
+  !!stagUrlRef && stagKeyRef === stagUrlRef, `key ref ${stagKeyRef} vs url ref ${stagUrlRef}`);
+/* The one that catches a half-done swap: URL moved, key forgotten. */
+check('staging anon key is NOT production’s project key',
+  !!stagKeyRef && !!prodUrlRef && stagKeyRef !== prodUrlRef,
+  `staging key ref ${stagKeyRef}, production ref ${prodUrlRef}`);
+check('the two builds do not literally share an anon key',
+  String(stag.cfg.supabaseAnonKey) !== String(prod.cfg.supabaseAnonKey));
 
 /* The two things that keep staging from being mistaken for production, and
    from outranking it. */
@@ -126,10 +182,21 @@ check('the banner cannot eat a tap (pointer-events:none)',
   !!banner && /pointer-events:\s*none/.test(banner.style.cssText || ''));
 
 /* --------------------------------------------------------------------------
- * 2. js/online.js actually honours the flag.
+ * 2. js/online.js actually honours the flag, AND staging really writes.
  *
- * This is the half that matters. The flag is inert on its own; what protects
- * the leaderboard is submitRun refusing, and refusing WITHOUT queueing.
+ * Two different things are proved here and they must not be conflated:
+ *
+ *   a) The GUARD still works. Exercised against a fixture that forces
+ *      readOnlyScores on, NOT against the live staging config - because the
+ *      live config has it off now, and a guard that is only ever tested in the
+ *      configuration where it is disabled is a guard nobody is testing. If
+ *      staging is ever repointed at production, the invariant in section 1
+ *      demands this flag, and these checks are what make demanding it mean
+ *      something.
+ *
+ *   b) The live staging config actually SUBMITS, and submits to STAGING. The
+ *      second half is the interesting one: "it wrote a score" is not reassuring
+ *      on its own, because the question is which database it wrote it to.
  * ------------------------------------------------------------------------ */
 function sandbox() {
   const storage = new Map();
@@ -188,11 +255,22 @@ control.Online.configure({ ...prod.cfg });
 check('control: the production config accepts the fixture run',
   !control.Online.validateRun(RUN), String(control.Online.validateRun(RUN)));
 
-const s = sandbox();
-s.Online.configure({ ...stag.cfg });
+/* (a) The guard, forced on. Everything about this fixture is the real staging
+   config except the one flag, so what is being tested is js/online.js's
+   handling of it and nothing else. */
+const GUARD = { ...stag.cfg, readOnlyScores: true };
+
+const live = sandbox();
+live.Online.configure({ ...stag.cfg });
 check('staging build is still "configured" (the backend is NOT disabled)',
-  s.Online.isConfigured() === true);
-check('state() reports readOnlyScores so the UI can say why',
+  live.Online.isConfigured() === true);
+check('state() reports readOnlyScores: false, so the UI stops saying scores are dropped',
+  live.Online.state().readOnlyScores === false,
+  JSON.stringify(live.Online.state().readOnlyScores));
+
+const s = sandbox();
+s.Online.configure({ ...GUARD });
+check('state() reports readOnlyScores so the UI can say why (guard fixture)',
   s.Online.state().readOnlyScores === true);
 
 const before = s.calls.length;
@@ -212,7 +290,7 @@ check('nothing was written to the pending-run slot',
    purpose: "not signed in" is the path that queues. */
 const s2 = sandbox();
 s2.storage.set('skyhook.session', SESSION);
-s2.Online.configure({ ...stag.cfg });
+s2.Online.configure({ ...GUARD });
 check('control: the session fixture really does sign the sandbox in',
   s2.Online.isSignedIn() === true);
 const n2 = s2.calls.length;
@@ -227,7 +305,7 @@ check('a signed-in submitRun still makes zero network calls', s2.calls.length ==
 const s3 = sandbox();
 s3.storage.set('skyhook.pendingRun', JSON.stringify(RUN));
 s3.storage.set('skyhook.session', SESSION);
-s3.Online.configure({ ...stag.cfg });
+s3.Online.configure({ ...GUARD });
 const flushed = await s3.Online.flushPending();
 check('flushPending is a no-op on staging', flushed === false);
 check('flushPending did not destroy the pending run',
@@ -243,6 +321,30 @@ await s4.Online.topScores(10).catch(() => null);
 check('reading the leaderboard still hits the network on staging',
   s4.calls.length > n4 && /\/rest\/v1\/leaderboard/.test(s4.calls[n4].url),
   s4.calls.slice(n4).map(c => c.url).join(', '));
+
+/* (b) The half that is new. Staging owns its board, so it must actually write
+   to it - and the assertion that carries the weight is not "it wrote" but
+   "it wrote HERE". A staging build that submits to production's host is the
+   exact accident the whole project split exists to prevent, and it would pass
+   every check above this one that only reads the config. */
+const w = sandbox();
+w.storage.set('skyhook.session', SESSION);
+w.Online.configure({ ...stag.cfg });
+const nw = w.calls.length;
+const wres = await w.Online.submitRun(RUN);
+check('staging SUBMITS the run (its own board is there to be written to)',
+  wres.submitted === true, JSON.stringify(wres));
+const wposts = w.calls.slice(nw).filter(c => c.method === 'POST' && /\/rest\/v1\/scores/.test(c.url));
+check('staging POSTed it to /rest/v1/scores', wposts.length > 0,
+  w.calls.slice(nw).map(c => c.method + ' ' + c.url).join(', '));
+check('every staging call went to STAGING’s host',
+  w.calls.slice(nw).every(c => String(c.url).startsWith(stag.cfg.supabaseUrl)),
+  w.calls.slice(nw).map(c => c.url).join(', '));
+/* Stated against production's URL directly, so it keeps working if either
+   project is ever renumbered. */
+check('NOT ONE staging call touched production’s host',
+  !w.calls.slice(nw).some(c => String(c.url).startsWith(prod.cfg.supabaseUrl)),
+  w.calls.slice(nw).map(c => c.url).join(', '));
 
 /* And production must be unaffected by all of the above. */
 const p = sandbox();
@@ -339,8 +441,20 @@ check('staging waits for the test suite and the container checks',
    race for the single machine Leo is about to open. */
 check('staging deploys are serialised on the app, not on the branch',
   /group:\s*fly-skyhook-staging/.test(stagJob) && /cancel-in-progress:\s*false/.test(stagJob));
-check('the pipeline verifies the LIVE staging site is read-only',
+/* The post-deploy verification must check the LIVE site's project, not just
+   the image that was meant to be built. Both halves are pinned: that it reads
+   a ref out of the served config, and that it compares against production's
+   ref taken from js/config.js rather than a copy pasted into the workflow. */
+check('the pipeline verifies the LIVE staging site’s Supabase project',
+  /refof \/tmp\/live\.js/.test(stagJob) && /live_ref/.test(stagJob));
+check('the pipeline reads production’s ref from js/config.js, not a hardcoded copy',
+  /refof js\/config\.js/.test(stagJob));
+check('the pipeline still demands readOnlyScores in the shared-project fallback',
   /readOnlyScores: true/.test(stagJob));
+/* The workflow must not contain a literal project ref - that is the copy that
+   goes stale and turns a real check into a passing one. */
+check('the workflow hardcodes NO supabase project ref',
+  !new RegExp(String(prodUrlRef)).test(wf), String(prodUrlRef));
 
 console.log(fails ? `\n${fails} FAILED` : '\nAll staging pipeline checks passed');
 process.exit(fails ? 1 : 0);

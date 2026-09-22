@@ -6,66 +6,71 @@
  * can reach skyhookplay.com by accident: there is no flag to get wrong at
  * runtime, only a build that either applied the overlay or did not.
  *
- * WHY THE SAME SUPABASE PROJECT AS PRODUCTION
- * -------------------------------------------
- * A second Supabase project is the textbook answer and it was the first
- * choice. It is not available: the only credential this repo has is a
- * PROJECT-scoped personal access token (~/skyhook_supabase.local.txt, expires
- * 2026-09-28). GET /v1/organizations returns [] with it, so it cannot create
- * a project, and project creation is an account-level action Leo would have
- * to take by hand in the dashboard - after which the schema, the auth
- * settings, the email templates and the OAuth redirect allow-list all become
- * a second stack that drifts from the first one silently.
+ * STAGING HAS ITS OWN SUPABASE PROJECT
+ * ------------------------------------
+ * It did not always. Until 2026-09-23 this file pointed at the SAME project as
+ * production and bought its safety with a flag: `readOnlyScores: true`, which
+ * js/online.js honours by refusing to submit. That bought exactly one thing -
+ * a staging run could not land on the real leaderboard - and it left a hole
+ * the flag could not cover, because a score is not the only write the game
+ * makes. Signing up created a real production account. Changing a username
+ * renamed a real production profile. The account-settings work is precisely a
+ * feature whose writes are NOT scores, so testing it against the shared
+ * project meant editing production rows to find out whether the editor worked.
  *
- * The failure mode actually worth preventing is narrower than "staging
- * touches production": it is "test runs pollute Leo's real scores". So the
- * isolation is aimed exactly there.
+ * Leo created a second project (Central EU / Frankfurt, free tier) and
+ * supabase/schema.sql was applied to it whole, so staging now has its own
+ * tables, its own RLS policies, its own triggers and its own leaderboard view.
+ * The two stacks are the same schema from the same file; they are not the same
+ * data.
  *
- *   public.leaderboard is a VIEW over public.scores joined to profiles
- *   (supabase/schema.sql, section 6). A user with no row in `scores` has no
- *   row on the board - no rank, no entry, nothing rendered.
+ * CONSEQUENCE, AND IT IS THE POINT RATHER THAN A BUG
+ *   Staging's database starts EMPTY. No accounts, no scores, no leaderboard.
+ *   Leo's production account does not exist here and signing in with it will
+ *   fail; testing staging means signing up on staging. Scores rolled here are
+ *   real and they are saved - to staging's board, which nobody else sees.
  *
- * Therefore blocking the ONE insert into `scores` is sufficient to keep the
- * visible leaderboard clean, and it leaves everything else - sign up, sign
- * in, Google OAuth, password recovery, reading the board, my_rank(), the
- * profile row - working against real data. That is what makes the staging
- * site worth deploying: items 2 and 3 of the brief (the rank-#1 golden ship,
- * the ship customiser) are READS and profile writes, and a staging build that
- * disabled the backend outright could not test either of them.
- *
- * The enforcement is not in this file. This file only sets the flag;
- * js/online.js refuses the request in submitRun(), which is the single
- * function every score has ever gone through, and test/staging.mjs fails the
- * build if that refusal stops happening or if this file ever loses the flag.
+ * WHY readOnlyScores IS NOW false
+ *   The flag existed to stop writes reaching PRODUCTION's board. Staging owns
+ *   its board now, so refusing to write would only mean the leaderboard - the
+ *   feature this site exists to test - could never be exercised end to end.
+ *   The guard is not deleted, though: js/online.js still honours the flag, and
+ *   test/staging.mjs still proves it works, against a forced-on fixture. It is
+ *   kept loaded so that repointing this file at production without also
+ *   turning it back on is a red build rather than a quiet accident.
  *
  * WHAT THIS DOES NOT PROTECT
- *   A staging tester who opens devtools and calls PostgREST by hand can still
- *   write a score - the anon key and the RLS policies are the production
- *   ones. That is accepted: the tester is Leo. This guards against the
- *   accident (a test run landing on the real board), not against its author.
+ *   Nothing here is a secret. The anon key below is public by definition, and
+ *   RLS in supabase/schema.sql is what actually decides what it may do. The
+ *   separation is between two DATABASES, not between a trusted and an
+ *   untrusted client.
  */
 window.SKYHOOK_CONFIG = {
-  /* Identical to js/config.js on purpose - see the block comment above. If a
-     dedicated staging Supabase project is ever created, these two strings and
-     nothing else are what change, and readOnlyScores below can then go false. */
-  supabaseUrl: 'https://ievfcqnyrekdixxbsite.supabase.co',
+  /* The STAGING project - deliberately NOT the one in js/config.js. The
+     invariant test/staging.mjs pins is exactly this: staging may write freely
+     as long as it is a different project from production, and must be
+     read-only if it is ever pointed back at the same one. */
+  supabaseUrl: 'https://qlaenczyhzjkmqkraiup.supabase.co',
 
   /* The "anon" / "public" key. Public by definition, shipped to every browser
      that loads the game, and powerless on its own - Row Level Security in
-     supabase/schema.sql decides what it can do. test/online.mjs decodes it and
-     fails the build unless the role claim is literally "anon", so a
-     service_role key pasted here cannot ship. */
-  supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldmZjcW55cmVrZGl4eGJzaXRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1NzQ0MjYsImV4cCI6MjEwNTE1MDQyNn0.DPaeAv6WFnAQMomXQzlMWZulkM12jqicrymSInQygOM',
+     supabase/schema.sql decides what it can do. test/staging.mjs decodes it
+     and fails the build unless the role claim is literally "anon", so a
+     service_role key pasted here cannot ship. It also fails the build if the
+     `ref` claim is production's, which is the mistake that would matter: a
+     staging URL with a production key is a production client wearing a
+     staging banner. */
+  supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFsYWVuY3p5aHpqa21xa3JhaXVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAxMTI2MzEsImV4cCI6MjEwNTY4ODYzMX0.L_DGdRS9H5ru49J4Jda5XFsAw1GljB3sAn5Q1qfC75I',
 
   boardLimit: 50,
 
   googleSignIn: false,
 
-  /* THE staging flag. js/online.js reads it in normalise() and refuses every
-     score submission while it is true, without queueing the run for later -
-     a queued run is a run waiting for a session that can write, and no such
-     moment may ever arrive for a score rolled here. */
-  readOnlyScores: true
+  /* false, and that is the whole change. See the block comment above: the flag
+     guarded production's leaderboard, staging no longer shares it, and a
+     staging site that cannot save a score cannot test saving a score.
+     js/online.js still reads and honours this flag - it is off, not gone. */
+  readOnlyScores: false
 };
 
 /* ---------------------------------------------------------------------------
@@ -103,7 +108,7 @@ window.SKYHOOK_CONFIG = {
       if (document.getElementById('sk-staging-banner')) return;
       var el = document.createElement('div');
       el.id = 'sk-staging-banner';
-      el.textContent = 'STAGING - scores are not saved';
+      el.textContent = 'STAGING - separate database, your production account does not exist here';
       el.style.cssText = [
         'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:2147483647',
         'pointer-events:none',
