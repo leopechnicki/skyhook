@@ -80,6 +80,16 @@ jobs:
       - name: Online layer (offline default + RLS rules)
         run: node test/online.mjs
 
+      # The one canonical origin, both halves of it. index.html has to DECLARE
+      # https://skyhookplay.com rather than have nginx correct it on the way
+      # out, and pages/ has to redirect the retired GitHub Pages URL there
+      # while carrying the query string and the hash - because ?seed=123 picks
+      # a world and a Supabase auth callback arrives as ?code= or
+      # #access_token=. A redirect that drops either looks like it works and
+      # breaks sign-in. Pure Node, no browser, sub-second.
+      - name: Canonical origin + Pages redirect stub
+        run: node test/pages_stub.mjs
+
   browser:
     name: browser (smoke + frame time)
     runs-on: ubuntu-latest

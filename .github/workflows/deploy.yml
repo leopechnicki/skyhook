@@ -75,15 +75,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Built with the same SITE_ORIGIN fly.toml sets, so the rewrite asserted
-      # below is the rewrite production will actually perform.
       - name: Build image
         run: docker build -t skyhook:ci .
 
+      # SITE_ORIGIN here is DELIBERATELY NOT the value fly.toml sets.
+      #
+      # index.html now declares https://skyhookplay.com for real, and fly.toml
+      # sets SITE_ORIGIN to the same string, so production is an identity
+      # rewrite. Running CI that way too would make the "the rewrite happened"
+      # assertion below pass even if sub_filter were deleted outright - a green
+      # tick that cannot go red, which test.yml's header correctly calls worse
+      # than no tick at all. Overriding to the fly.dev name is what keeps that
+      # assertion falsifiable: the served page must contain the OVERRIDE and
+      # must NOT contain the source literal.
       - name: Run it
         run: |
           docker run -d --name skyhook-ci -p 8080:8080 \
-            -e SITE_ORIGIN='https://skyhookplay.com' skyhook:ci
+            -e SITE_ORIGIN='https://skyhook-game.fly.dev' skyhook:ci
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8080/health > /dev/null; then
               echo "up after ${i}s"; exit 0
@@ -113,14 +121,25 @@ jobs:
 
           # SITE_ORIGIN actually reached the served HTML. This is the check
           # that makes the hostname genuinely configurable rather than
-          # configurable-looking.
-          grep -q 'https://skyhookplay.com/' /tmp/index.html \
+          # configurable-looking. The container above was started with the
+          # fly.dev name precisely so this line is able to fail.
+          grep -q 'https://skyhook-game.fly.dev/' /tmp/index.html \
             || fail "sub_filter did not rewrite the canonical/og origin"
           # `grep -q ... && fail` would abort the step under `set -e` on the
           # HEALTHY path, because a grep that finds nothing exits 1. The
           # assertion has to be spelled out.
+          #
+          # The SOURCE literal must be gone, not merely accompanied. index.html
+          # and conf/site.conf.template hold the same origin string twice; if
+          # they ever drift apart the rewrite silently stops happening, and this
+          # is the only line in the repo that would notice.
+          if grep -q 'https://skyhookplay.com' /tmp/index.html; then
+            fail "source origin survived: index.html and conf/site.conf.template disagree"
+          fi
+          # GitHub Pages is a redirect stub now (see pages/), not a second copy
+          # of the game. The retired origin must never reappear in what Fly serves.
           if grep -q 'leopechnicki.github.io' /tmp/index.html; then
-            fail "the old origin survived the rewrite"
+            fail "the retired GitHub Pages origin came back into index.html"
           fi
 
           # Headers on the page. add_header does not merge across nginx
@@ -234,3 +253,89 @@ jobs:
             curl -sfI "$base/$f" > /dev/null || { echo "FAIL: $f is not 200"; exit 1; }
           done
           echo "OK: $base is live and complete"
+
+  # ------------------------------------------------------- 5. the Pages stub
+  #
+  # GitHub Pages used to publish `main:/` - a SECOND, complete copy of the game
+  # that declared itself canonical. That is the thing being retired. It is not
+  # deleted, because every link already shared as
+  # https://leopechnicki.github.io/skyhook/ lives in somebody else's messages,
+  # bookmarks and chat history and cannot be recalled; turning Pages off turns
+  # all of them into a hard 404.
+  #
+  # So Pages publishes a two-file redirect instead, and this job is what keeps
+  # that redirect equal to `pages/` on main rather than a thing somebody pushed
+  # by hand once and never touched again.
+  #
+  # WHAT THIS JOB CANNOT DO: point Pages at the branch. The publishing source is
+  # a repository SETTING, and no workflow token can change it. Leo flips it once
+  # - Settings > Pages > Build and deployment > Branch: gh-pages / (root). Until
+  # he does, Pages keeps serving main:/, which after this PR is the game with a
+  # canonical pointing at skyhookplay.com - already the right signal, just not
+  # yet a redirect. Nothing breaks in the meantime; the flip is an improvement,
+  # not a repair.
+  pages-stub:
+    name: pages redirect stub (gh-pages)
+    needs: [tests]
+    # Same gate as `deploy`: never on a PR, and only from main. A
+    # workflow_dispatch on some other branch must not publish that branch's
+    # stub over the one main says is correct.
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Elevated for this job ONLY. The workflow default is contents: read; the
+      # single write this needs is the push to gh-pages below.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish pages/ to the gh-pages branch
+        run: |
+          set -e
+          # An orphan branch: gh-pages shares no history with main and holds
+          # nothing but the stub. A crawler or a curious visitor that walks the
+          # published site can therefore never reach the game's source through
+          # it, and `git log gh-pages` is a readable record of the redirect
+          # rather than a duplicate of the project's history.
+          work=$(mktemp -d)
+          # Named file by file, the same way the Dockerfile names what the
+          # public may fetch. `cp -r pages/.` would also publish pages/README.md
+          # - developer notes, served at the retired URL, for nobody. The
+          # published site is exactly the redirect and nothing else.
+          # test/pages_stub.mjs asserts every pages/*.html appears on this line,
+          # so adding a stub file and forgetting to publish it fails the build.
+          cp pages/index.html pages/404.html pages/.nojekyll "$work"/
+          cd "$work"
+          git init -q
+          git checkout -q -b gh-pages
+          git config user.name  "Crew Leo Agile dev team"
+          git config user.email "noreply@github.com"
+          git add -A
+          # Two -m flags rather than one multi-line string: inside a YAML block
+          # scalar the continuation lines of a quoted string carry their
+          # indentation into the commit message.
+          git commit -q -m "pages: redirect the retired GitHub Pages URL to skyhookplay.com" -m "Mirrored from pages/ at ${{ github.sha }} by .github/workflows/deploy.yml. Edit pages/ on main - never this branch, the next push to main overwrites it."
+          # Force, because this branch is generated output and its history is
+          # not interesting. It is the ONLY branch this token ever writes to.
+          git push -q --force \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            gh-pages
+          echo "gh-pages updated from pages/"
+
+      - name: Say what is still manual
+        run: |
+          {
+            echo "### Pages redirect stub published to \`gh-pages\`"
+            echo ""
+            echo "One manual step remains, and CI cannot do it - the Pages"
+            echo "publishing source is a repository setting:"
+            echo ""
+            echo "**Settings > Pages > Build and deployment >**"
+            echo "**Source: Deploy from a branch > Branch: \`gh-pages\` / \`(root)\` > Save**"
+            echo ""
+            echo "After that, <https://leopechnicki.github.io/skyhook/> redirects"
+            echo "to <https://skyhookplay.com/> and keeps its query string and hash."
+          } >> "$GITHUB_STEP_SUMMARY"

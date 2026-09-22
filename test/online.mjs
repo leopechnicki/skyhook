@@ -48,7 +48,17 @@ const CONFIG = {
 /* --------------------------------------------------------------------------
  * Sandbox: the real js/utils.js and js/online.js, a fake browser around them.
  * ------------------------------------------------------------------------ */
-function makeSandbox({ href = 'https://leopechnicki.github.io/skyhook/', search = '', hash = '' } = {}) {
+/* `href` is the page the game believes it is being served from, and it is a
+   REAL parameter now: origin and pathname are derived from it below. They used
+   to be hardcoded to the GitHub Pages URL while `href` only chose the protocol,
+   so passing a different href changed nothing and the parameter quietly lied.
+
+   The default is the game's canonical home. https://leopechnicki.github.io/skyhook/
+   is still exercised deliberately, in the sub-path case further down - it stays
+   on Supabase's redirect allow-list while old links are being retired, and it is
+   the shape that proves redirect_to carries a sub-path rather than an origin. */
+function makeSandbox({ href = 'https://skyhookplay.com/', search = '', hash = '' } = {}) {
+  const _u = new URL(href);
   const storage = new Map();
   const calls = [];
   let router = () => ({ status: 404, body: { message: 'no route' } });
@@ -92,9 +102,9 @@ function makeSandbox({ href = 'https://leopechnicki.github.io/skyhook/', search 
     fetch: fetchStub,
     document: { createElement: () => ({ width: 0, height: 0, getContext: () => new Proxy({}, { get: () => () => ({ addColorStop() {} }) }) }) },
     location: {
-      protocol: href.startsWith('https') ? 'https:' : 'http:',
-      origin: 'https://leopechnicki.github.io',
-      pathname: '/skyhook/',
+      protocol: _u.protocol,
+      origin: _u.origin,
+      pathname: _u.pathname,
       search,
       hash,
       assign: url => { assigned = url; }
@@ -271,9 +281,14 @@ const TOKEN_OK = {
      GoTrue falls back to the project's Site URL, which is origin-shaped - so
      on GitHub Pages, served from /skyhook/, the confirmation link dropped the
      player on the domain root with no game in sight. Verified happening
-     against the live project before this was added. */
+     against the live project before this was added.
+
+     Asserted against the sandbox's own URL, which is the canonical home. The
+     sub-path case that this behaviour originally existed for is covered
+     explicitly in section 14; deleting it because the default no longer has a
+     sub-path would delete the only reason this line is here. */
   check('sign-up tells GoTrue to send the confirmation link back to THIS page',
-    signup.url.includes('redirect_to=' + encodeURIComponent('https://leopechnicki.github.io/skyhook/')),
+    signup.url.includes('redirect_to=' + encodeURIComponent('https://skyhookplay.com/')),
     signup.url);
   check('sign-up left the session signed in', s.Online.isSignedIn() === true);
   check('an auth event fired on sign-up', authEvents.length >= 1 && authEvents[0] === true);
@@ -518,7 +533,7 @@ const TOKEN_OK = {
     url.startsWith('https://testproj.supabase.co/auth/v1/authorize?'));
   check('...for the google provider', url.includes('provider=google'));
   check('...with a redirect back to this exact page',
-    url.includes('redirect_to=' + encodeURIComponent('https://leopechnicki.github.io/skyhook/')));
+    url.includes('redirect_to=' + encodeURIComponent('https://skyhookplay.com/')));
   check('...using PKCE with SHA-256, so no token is ever put in the address bar',
     url.includes('code_challenge=') && url.includes('code_challenge_method=s256'));
   check('...and the verifier is kept locally, never sent in the redirect',
@@ -947,7 +962,7 @@ const TOKEN_OK = {
        hardcoded, so every origin the game is served from gets itself back. */
     const back = /[?&]redirect_to=([^&]+)/.exec(url);
     check('it asks GoTrue to send the player back to THIS page, not to a site root',
-      !!back && decodeURIComponent(back[1]) === 'https://leopechnicki.github.io/skyhook/',
+      !!back && decodeURIComponent(back[1]) === 'https://skyhookplay.com/',
       back ? decodeURIComponent(back[1]) : 'no redirect_to');
 
     /* Not a detail: signUp derives the same value from the same helper, so a
@@ -1100,8 +1115,13 @@ const TOKEN_OK = {
     check('the access token is scrubbed out of the URL',
       s.replaced.length > 0 && s.replaced.every(u => String(u).indexOf('access_token') < 0),
       JSON.stringify(s.replaced));
+    /* Read off the sandbox rather than written out. It used to be the literal
+       '/skyhook/', which was only correct while every sandbox was pinned to
+       the GitHub Pages sub-path; the assertion is "the page it is already on",
+       and that is what it should say. */
     check('and what replaces it is the page itself, not some other location',
-      s.replaced[s.replaced.length - 1] === '/skyhook/', JSON.stringify(s.replaced));
+      s.replaced[s.replaced.length - 1] === s.location.pathname,
+      JSON.stringify(s.replaced) + ' vs ' + s.location.pathname);
 
     s.calls.length = 0;
     await s.Online.setNewPassword(CHOSEN);
@@ -1167,6 +1187,96 @@ const TOKEN_OK = {
       a === 'offline' && b === 'offline' && s.calls.length === 0,
       JSON.stringify([a, b, s.calls.length]));
   }
+}
+
+/* ==========================================================================
+ * 14. WHERE THE GAME SAYS IT LIVES - redirect_to follows the page, always.
+ * ==========================================================================
+ * SKYHOOK is advertised from exactly one place now, https://skyhookplay.com/,
+ * and GitHub Pages redirects to it instead of serving a second copy. The
+ * tempting simplification that follows is to stop deriving redirect_to from
+ * the page and just hardcode the home - and that breaks three things at once:
+ *
+ *   - https://skyhook-game.fly.dev/ answers with the same app, and a player who
+ *     signs in there must come back THERE, not be thrown across origins.
+ *   - the Pages stub is an ordinary web page while the old URL is being
+ *     retired; a link already sitting in somebody's inbox can still open
+ *     under /skyhook/ and must still work.
+ *   - a sub-path origin is the entire reason redirect_to exists. GoTrue falls
+ *     back to the project's Site URL, which is origin-shaped, so without it the
+ *     player lands on a domain root with no game in sight.
+ *
+ * Every origin below is on the Supabase redirect allow-list, checked live
+ * against the project on 2026-09-21: skyhookplay.com, www.skyhookplay.com,
+ * skyhook-game.fly.dev and leopechnicki.github.io/skyhook/ are all allowed.
+ * GoTrue silently refuses a redirect_to that is not on that list, so an origin
+ * the game can serve itself from but the project does not allow is a dead end
+ * discovered only by a player who cannot get back in.
+ * ======================================================================== */
+{
+  const ORIGINS = [
+    ['the canonical home', 'https://skyhookplay.com/'],
+    ['the Fly hostname the same app also answers on', 'https://skyhook-game.fly.dev/'],
+    ['the retired Pages sub-path, while old links are still in the wild',
+      'https://leopechnicki.github.io/skyhook/']
+  ];
+
+  for (const [what, href] of ORIGINS) {
+    /* All three entry points derive the return address from the same helper.
+       Asserting only one of them is how a refactor sends the confirmation mail
+       home and the reset mail somewhere else. */
+    const signupBack = await (async () => {
+      const t = makeSandbox({ href });
+      t.Online.configure(CONFIG);
+      t.route(() => ({ status: 200, body: TOKEN_OK }));
+      await t.Online.signUp('pilot', 'pilot@example.com', 'hunter2hunter2');
+      const m = /[?&]redirect_to=([^&]+)/.exec(String(t.calls[0].url));
+      return m ? decodeURIComponent(m[1]) : 'no redirect_to';
+    })();
+    check(`sign-up from ${what} comes back to ${href}`, signupBack === href, signupBack);
+
+    const resetBack = await (async () => {
+      const t = makeSandbox({ href });
+      t.Online.configure(CONFIG);
+      t.route(() => ({ status: 200, body: {} }));
+      await t.Online.requestPasswordReset('klaudia@example.com');
+      const m = /[?&]redirect_to=([^&]+)/.exec(String(t.calls[0].url));
+      return m ? decodeURIComponent(m[1]) : 'no redirect_to';
+    })();
+    check(`a reset link asked for from ${what} comes back to ${href}`,
+      resetBack === href, resetBack);
+
+    const googleBack = await (async () => {
+      const t = makeSandbox({ href });
+      t.Online.configure(CONFIG);
+      const u = await t.Online.signInWithGoogle('google');
+      const m = /[?&]redirect_to=([^&]+)/.exec(String(u));
+      return m ? decodeURIComponent(m[1]) : 'no redirect_to';
+    })();
+    check(`Google sign-in from ${what} comes back to ${href}`,
+      googleBack === href, googleBack);
+  }
+
+  /* The assertion that makes the three above mean something. Hardcoding
+     redirect_to to the canonical home would still satisfy every check in this
+     section for skyhookplay.com, so state the rule directly: three origins
+     must produce three different answers. */
+  const answers = [];
+  for (const [, href] of ORIGINS) {
+    const t = makeSandbox({ href });
+    t.Online.configure(CONFIG);
+    t.route(() => ({ status: 200, body: {} }));
+    await t.Online.requestPasswordReset('klaudia@example.com');
+    const m = /[?&]redirect_to=([^&]+)/.exec(String(t.calls[0].url));
+    answers.push(m ? decodeURIComponent(m[1]) : '');
+  }
+  check('redirect_to is read off the page, not baked in - three origins, three answers',
+    new Set(answers).size === ORIGINS.length, JSON.stringify(answers));
+
+  /* And the sub-path itself survives. `location.origin` alone would pass
+     everything above except this one line. */
+  check('a sub-path origin keeps its sub-path, not just its host',
+    answers[2] === 'https://leopechnicki.github.io/skyhook/', answers[2]);
 }
 
 console.log(`\n${fails === 0

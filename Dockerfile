@@ -57,12 +57,14 @@ RUN find /usr/share/nginx/html \
       \( -name '*.js' -o -name '*.css' -o -name '*.svg' \) \
       -exec gzip -9 -k {} \;
 
-# The ONE knob that carries the public hostname. It defaults to the origin
-# that is hardcoded in index.html today, which makes the default an identity
-# rewrite - a no-op - rather than a silent mangling of the meta tags. fly.toml
-# overrides it with the real origin. No custom domain is hardcoded anywhere in
-# this repo, because none has been bought yet.
-ENV SITE_ORIGIN="https://leopechnicki.github.io/skyhook"
+# The ONE knob that carries the public hostname. It MUST match the origin
+# literal in index.html, which conf/site.conf.template searches for; equal
+# values make the default an identity rewrite - a no-op - rather than a silent
+# mangling of the meta tags. fly.toml sets the same value, so production is an
+# identity rewrite too and the served page is byte-identical to the repo. An
+# override is for serving the game from somewhere that genuinely is not
+# skyhookplay.com, e.g. a staging host that should not claim the canonical.
+ENV SITE_ORIGIN="https://skyhookplay.com"
 
 # nginx must run in the foreground: on Fly the machine's lifecycle IS the
 # process's lifecycle, and a daemonised nginx exits at once and reads as a
