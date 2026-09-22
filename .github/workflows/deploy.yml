@@ -220,7 +220,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      # PINNED TO A COMMIT, NOT A BRANCH - AND THIS IS THE ONE STEP IN THE
+      # REPO WHERE THAT DISTINCTION IS LOAD-BEARING.
+      #
+      # This is the only third-party action in the repo, and it is the only
+      # step in the only job that can read FLY_API_TOKEN - a token that can
+      # deploy, scale, read secrets and destroy every app in the org. `@master`
+      # meant "whatever superfly pushed most recently", so a compromised
+      # upstream account, or one bad merge, would run arbitrary code inside
+      # that job on the next push to main. Nothing here would have noticed:
+      # the deploy would still succeed, and the token would leave anyway.
+      #
+      # A SHA is the only ref GitHub will not let anyone move. Tags can be
+      # force-pushed to a different commit; branches are expected to move.
+      #
+      # ed8efb3 is `master`, AND tag `v1`, AND tag `1.6`, all at the same
+      # commit as of 2026-04-08 - so this is the current release, not some
+      # mid-development state picked up by accident.
+      #
+      # The cost of the pin: it does not update itself. That is the intended
+      # trade. To move it, re-resolve and re-read the diff deliberately:
+      #
+      #   gh api repos/superfly/flyctl-actions/commits/master --jq .sha
+      #
+      # Note this pins the ACTION, not flyctl. The action's `version` input
+      # still defaults to "latest", so the CLI it installs stays current -
+      # from Fly's own release channel, which is the same trust boundary the
+      # deploy already sits behind.
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (== v1 == 1.6) as of 2026-04-08
 
       # --remote-only: the image is built on Fly's builder, so the runner
       # never needs a registry credential and the layer cache lives next to

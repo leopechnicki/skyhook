@@ -90,6 +90,18 @@ jobs:
       - name: Canonical origin + Pages redirect stub
         run: node test/pages_stub.mjs
 
+      # The CI configuration is itself attack surface, and it is the only part
+      # of the repo whose compromise hands over a credential rather than a
+      # bug. `deploy` reads FLY_API_TOKEN - deploy, scale, read secrets,
+      # destroy, for every app in the Fly org - so any third-party action in
+      # that workflow is arbitrary code running next to it. This asserts the
+      # rules deploy.yml's comments claim: third-party actions pinned to an
+      # immovable commit SHA, no pull_request_target anywhere, a written-down
+      # least-privilege floor in every workflow, and that token readable by
+      # no job but preflight and deploy. Pure Node, sub-second.
+      - name: CI supply chain (pinned actions + least privilege)
+        run: node test/workflows.mjs
+
       # The Android wrapper's two pure-logic modules: the interstitial cadence
       # gate and the AdMob consent/targeting path. Both are dependency-free
       # (node: builtins + relative imports only), so they run here with no
