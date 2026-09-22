@@ -14,3 +14,7 @@ test/screenshots/
 Thumbs.db
 .vscode/
 .idea/
+
+# python bytecode from supabase/templates/apply.py
+__pycache__/
+*.pyc
