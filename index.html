@@ -78,6 +78,17 @@
 
       <section id="ol-board" class="ol-view">
         <p id="ol-account" class="ol-account"></p>
+        <!-- The account line said "Signed in as leo" and stopped there, so
+             the only thing a signed-in player could do with their account was
+             leave it. These two are the way in to changing the name on the
+             board and the password behind it. They are hidden by
+             js/ui_online.js whenever they would not work - signed out, and
+             during a run - because a link that cannot do its job should not
+             be drawn. -->
+        <div class="ol-account-links" id="ol-account-links" hidden>
+          <button type="button" id="ol-edit-name" class="ol-link">Change username</button>
+          <button type="button" id="ol-edit-password" class="ol-link">Change password</button>
+        </div>
         <ol id="ol-list" class="ol-list"></ol>
         <p id="ol-board-msg" class="ol-msg" role="status" aria-live="polite"></p>
         <p id="ol-myrank" class="ol-myrank"></p>
@@ -123,6 +134,17 @@
             <label for="ol-password" id="ol-password-label">Password</label>
             <input type="password" id="ol-password" name="password"
                    autocomplete="current-password" placeholder="at least 8 characters">
+          </div>
+          <!-- CHANGE PASSWORD is the only view that needs two password boxes:
+               the current one, which is proof of who is typing, and the new
+               one. Every other view hides this whole field. The autocomplete
+               value is fixed rather than rewritten per mode because this box
+               is only ever the NEW password - the box above it is the one
+               whose meaning changes. -->
+          <div class="ol-field" id="ol-password2-field" hidden>
+            <label for="ol-password2" id="ol-password2-label">New password</label>
+            <input type="password" id="ol-password2" name="new-password"
+                   autocomplete="new-password" placeholder="at least 8 characters">
           </div>
           <button type="submit" id="ol-submit" class="ol-btn ol-btn-primary">SIGN IN</button>
         </form>

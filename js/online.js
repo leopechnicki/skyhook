@@ -173,6 +173,44 @@
          did. */
       network: 'Cannot reach the server. Check your connection and try again.'
     },
+    /* Changing the name on an account that already has one. */
+    rename: {
+      /* 23505 is deliberately NOT overridden here. CODE_MESSAGES already
+         answers a taken name with "That name is already taken.", and that is
+         the same refusal from the same unique index whether it was hit at
+         sign-up or at a rename. A second sentence for one event is how two
+         halves of a product start telling a player different stories about
+         it. */
+      /* profiles_username_shape. The form checks the same rule before sending,
+         so arriving here means something got past it - a paste, an old cached
+         script - and the player still deserves the actual rule rather than
+         "Something went wrong". */
+      '23514': 'A name is 3-16 letters, numbers or underscores.',
+      /* The rename limit raised by profiles_rename_guard in schema.sql. It
+         comes back as HTTP 500 because PostgREST maps SQLSTATE class 54 that
+         way; the status is therefore useless here and the code is everything. */
+      '54000': 'You have changed your name five times today. Try again tomorrow.',
+      /* The column grant refusing a column that is not `username`. A player
+         cannot reach this from the form at all, so if it ever shows up the
+         honest thing to report is that nothing changed. */
+      '42501': 'The server refused that change. Your name is unchanged.',
+      network: 'Cannot reach the server. Your name was not changed.'
+    },
+    /* Changing the password from inside a signed-in session, which needs the
+       CURRENT one typed first. */
+    changePassword: {
+      /* The default line for this code ends "Sign in with your email address,
+         not your leaderboard name." - exactly right on a sign-in form, and
+         nonsense to somebody who is already signed in and typed one box. The
+         only credential they offered is the current password, so that is the
+         only thing that can have been wrong. */
+      invalid_credentials: 'That is not your current password.',
+      /* No email is sent anywhere in this flow, so the email-quota sentence
+         would be describing a thing that did not happen. */
+      over_email_send_rate_limit:
+        'The server is rate-limiting this right now. Wait a minute and try again.',
+      network: 'Cannot reach the server. Your password was not changed.'
+    },
     newPassword: {
       /* There is no email in this step at all - only the PUT that sets the
          password - so an email-quota message here would be nonsense. */
@@ -420,6 +458,33 @@
 
   /* --------------------------------------------------------------- session */
 
+  /* WHICH DOORS OPEN THIS ACCOUNT. `identities` is the authoritative list -
+     one entry per linked sign-in method - and app_metadata repeats it in a
+     flatter shape that some GoTrue responses carry when identities do not. An
+     account created with an email and a password has an `email` identity; one
+     created by clicking Continue with Google has a `google` identity and no
+     password at all, which is the difference between showing that player a
+     password form and showing them a form they can never fill in. */
+  function providersOf(user) {
+    var list = [];
+    function add(p) {
+      p = String(p || '');
+      if (p && list.indexOf(p) < 0) list.push(p);
+    }
+    if (!user) return list;
+    var ids = user.identities;
+    if (ids && ids.length) {
+      for (var i = 0; i < ids.length; i++) add(ids[i] && ids[i].provider);
+    }
+    var meta = user.app_metadata;
+    if (meta) {
+      var many = meta.providers;
+      if (many && many.length) { for (var j = 0; j < many.length; j++) add(many[j]); }
+      add(meta.provider);
+    }
+    return list;
+  }
+
   function sessionFrom(data) {
     if (!data || !data.access_token) return null;
     var expiresIn = parseInt(data.expires_in, 10);
@@ -430,7 +495,8 @@
       user: {
         id: (data.user && data.user.id) || '',
         username: '',
-        email: (data.user && data.user.email) || ''
+        email: (data.user && data.user.email) || '',
+        providers: providersOf(data.user)
       }
     };
   }
@@ -438,12 +504,20 @@
   function persist() {
     if (session) {
       /* The email is held in memory for the "signed in as" line only. It is
-         never written to disk and never sent to the scores table. */
+         never written to disk and never sent to the scores table.
+         The provider list IS written: it names a KIND of login, never an
+         address or a credential, and without it a reloaded page cannot tell a
+         Google account from an email one until it asks the server - which is
+         one round trip in front of a button the player has not pressed yet. */
       writeJSON(K_SESSION, {
         access_token: session.access_token,
         refresh_token: session.refresh_token,
         expires_at: session.expires_at,
-        user: { id: session.user.id, username: session.user.username }
+        user: {
+          id: session.user.id,
+          username: session.user.username,
+          providers: session.user.providers || []
+        }
       });
     } else {
       clearKey(K_SESSION);
@@ -470,6 +544,12 @@
       var next = sessionFrom(data);
       if (!next) throw new Error('no session');
       next.user.username = session.user.username;
+      /* A refresh response does not always repeat the user object, and losing
+         these to a token rotation would send the account panel back to the
+         server for facts it already had - or worse, show a Google account a
+         password form for the one frame before the answer lands. */
+      if (!next.user.email) next.user.email = session.user.email;
+      if (!next.user.providers.length) next.user.providers = session.user.providers || [];
       setSession(next);
       refreshing = null;
       return next;
@@ -508,6 +588,53 @@
       }
       return name;
     }, function () { return ''; });
+  }
+
+  /* What the account panel needs to know before it can draw anything: the
+     address the account is keyed on, and which sign-in methods it has.
+     Answered from the session when the session already knows - the sign-in and
+     sign-up responses both carry it - and from GoTrue otherwise, because a
+     page that was reloaded has an id and a username on disk and deliberately
+     no email.
+
+     Never cached negatively: a failed lookup leaves the session as it was, so
+     pressing the button again asks again instead of hardening one bad network
+     moment into "this account has no email". */
+  function infoFrom() {
+    var list = (session && session.user.providers) || [];
+    return {
+      email: (session && session.user.email) || '',
+      providers: list.slice(),
+      /* An `email` identity is the only positive evidence of a password that
+         a client can get: GoTrue does not report "has a password" and the
+         password itself is obviously not readable. So this is a statement
+         about how the account was CREATED, and it is wrong in exactly one
+         case - an account made with Google that has since been given a
+         password through a recovery link, which keeps its google identity.
+         The password view is written so that case is still not a dead end:
+         the Google branch offers that same link rather than refusing. */
+      hasPassword: list.indexOf('email') >= 0
+    };
+  }
+
+  function accountInfo() {
+    if (!cfg) return Promise.reject(new Error('offline'));
+    if (!session) return Promise.reject(new Error('not signed in'));
+    if (session.user.email && session.user.providers.length && session.user.id) {
+      return Promise.resolve(infoFrom());
+    }
+    return withToken(function (token) {
+      return request('/auth/v1/user', { token: token });
+    }).then(function (user) {
+      if (session && user) {
+        if (user.id) session.user.id = user.id;
+        if (user.email) session.user.email = user.email;
+        var ps = providersOf(user);
+        if (ps.length) session.user.providers = ps;
+        persist();
+      }
+      return infoFrom();
+    });
   }
 
   /* --------------------------------------------------------------- PKCE */
@@ -612,7 +739,8 @@
           user: {
             id: (saved.user && saved.user.id) || '',
             username: (saved.user && saved.user.username) || '',
-            email: ''
+            email: '',
+            providers: (saved.user && saved.user.providers) || []
           }
         };
       }
@@ -804,6 +932,173 @@
     },
 
     isRecovering: function () { return recovering; },
+
+    /* ------------------------------------------- account settings */
+
+    /* The email and the sign-in methods on the current account. Resolves with
+       { email, providers, hasPassword }; rejects only when there is nothing to
+       ask about (offline, signed out) or the lookup itself failed. */
+    accountInfo: function () { return accountInfo(); },
+
+    /* Rename.
+     *
+     * The leaderboard is a VIEW that joins profiles (supabase/schema.sql
+     * section 7), so this one UPDATE relabels every score the player has ever
+     * set. There is nothing to backfill and nothing that can end up half
+     * renamed.
+     *
+     * THE FAILURE THAT DOES NOT LOOK LIKE ONE. Under Row Level Security an
+     * UPDATE whose USING clause matches no row is not an error: PostgREST
+     * answers 200 and updates nothing. Before profiles_update_own existed
+     * that was the answer to EVERY rename - a success status, an empty body,
+     * and a player told their name had changed when the database had refused
+     * it. So the row is asked for back (`Prefer: return=representation`) and
+     * the new name is read out of the ANSWER rather than out of what we sent.
+     * No row back means it did not happen, whatever the status line said.
+     */
+    changeUsername: function (name) {
+      if (!cfg) return Promise.reject(new Error('offline'));
+      if (!session) return Promise.reject(new Error('Sign in first.'));
+      name = String(name || '').trim();
+      /* Same rule as sign-up, and the same sentence, because it is the same
+         rule: profiles_username_shape in the database decides, and both forms
+         are a copy of it kept close to the player. */
+      if (!USERNAME_RE.test(name)) {
+        return Promise.reject(new Error('Username: 3-16 letters, numbers or _'));
+      }
+      /* Renaming to the name you already have would spend one of the day's
+         five changes on nothing. Case-sensitive on purpose: leo -> Leo is a
+         real change, and the unique index is the half that does not care. */
+      if (name === session.user.username) {
+        return Promise.reject(new Error('That is already your name.'));
+      }
+
+      /* The id is on disk with the session, except on the one path that never
+         had it - the implicit OAuth leg answers with tokens and no user - so
+         ask for it rather than send a request that can only match no row. */
+      var haveId = session.user.id
+        ? Promise.resolve(session.user.id)
+        : accountInfo().then(function () { return session && session.user.id; });
+
+      return haveId.then(function (id) {
+        if (!id) throw new Error('Could not tell which account this is. Sign out and in again.');
+        return withToken(function (token) {
+          return request('/rest/v1/profiles?select=username&id=eq.' + encodeURIComponent(id), {
+            method: 'PATCH',
+            token: token,
+            headers: { Prefer: 'return=representation' },
+            body: { username: name }
+          }).then(null, function (err) {
+            throw playerError(err, 'Could not change that name.', 'rename');
+          });
+        });
+      }).then(function (rows) {
+        var saved = rows && rows[0] && rows[0].username;
+        if (!saved) {
+          throw new Error('The server did not change that name, and did not say why. Your name is unchanged.');
+        }
+        /* Read back, not assumed: the database holds what the board will show. */
+        session.user.username = saved;
+        persist();
+        emit('auth', publicState());
+        return publicState();
+      });
+    },
+
+    /* Change the password of an account that is already signed in.
+     *
+     * THE CURRENT PASSWORD IS REQUIRED, AND IT IS CHECKED. PUT /auth/v1/user
+     * on its own will happily set a new password from nothing but a live
+     * session, which means a session left open on a shared machine is not a
+     * nuisance - it is the account. Whoever sits down at it could lock the
+     * owner out permanently in two keystrokes, and the owner's own password
+     * would stop working. So the old one is verified first, against the
+     * server, with grant_type=password: the same call that would have signed
+     * them in, used here as proof that the person typing is the owner.
+     *
+     * Supabase has two project settings that would do this server-side -
+     * "secure password change" (reauthentication by emailed code) and a
+     * require-current-password toggle. BOTH ARE OFF on this project, read out
+     * of the Management API on 2026-09-22, which is why the check lives here.
+     * If either is switched on later, GoTrue starts refusing the PUT by
+     * itself and the refusal is surfaced rather than swallowed - this stays
+     * correct, it just stops being the only thing standing there.
+     *
+     * The verification call mints a second session, which is deliberately
+     * DROPPED rather than adopted or revoked. Adopting it would swap the
+     * player's tokens underneath a page that is mid-flow; revoking it means
+     * calling logout with a token from the same account, and the cost of
+     * getting that scope wrong is the exact outcome this path exists to avoid
+     * - the player signed out by the act of changing their password. An
+     * unused refresh token that never touched disk is the cheaper mistake.
+     */
+    changePassword: function (current, next) {
+      if (!cfg) return Promise.reject(new Error('offline'));
+      if (!session) return Promise.reject(new Error('Sign in first.'));
+      current = String(current || '');
+      next = String(next || '');
+      if (!current) return Promise.reject(new Error('Type your current password first.'));
+      if (next.length < PASSWORD_MIN) {
+        return Promise.reject(new Error('Password must be at least ' + PASSWORD_MIN + ' characters.'));
+      }
+      if (next === current) {
+        return Promise.reject(new Error('That is already your password. Choose a different one.'));
+      }
+
+      return accountInfo().then(function (info) {
+        if (!info.email) {
+          throw new Error('This account has no email address on it, so the current password cannot be checked here.');
+        }
+        if (!info.hasPassword) {
+          /* The panel does not offer this form to a Google account, so getting
+             here means something is out of step. Name the account's actual
+             sign-in method instead of failing at the server a moment later
+             with a sentence about credentials. */
+          throw new Error('This account signs in with Google, so there is no current password to check.');
+        }
+        return request('/auth/v1/token?grant_type=password', {
+          method: 'POST',
+          body: { email: info.email, password: current }
+        }).then(null, function (err) {
+          throw playerError(err, 'Could not check your current password.', 'changePassword');
+        });
+      }, function (err) {
+        throw playerError(err, 'Could not reach the server. Your password was not changed.', 'changePassword');
+      }).then(function () {
+        return withToken(function (token) {
+          return request('/auth/v1/user', {
+            method: 'PUT', token: token, body: { password: next }
+          }).then(null, function (err) {
+            throw playerError(err, 'Could not change that password.', 'changePassword');
+          });
+        });
+      }).then(function () {
+        /* GoTrue leaves the current session alone here - the access token and
+           the refresh token both keep working, measured against the live
+           project on 2026-09-22 - so there is nothing to restore and nobody is
+           signed out mid-run. Only the OTHER sessions die, which is the
+           behaviour somebody changing a password is asking for. */
+        return publicState();
+      });
+    },
+
+    /* How a Google account gets a password: the same emailed link the
+       forgotten-password flow uses, aimed at the address already on the
+       account. It says "set" rather than "change" because there may be
+       nothing to change - and it works either way, which is why the Google
+       branch of the panel is an offer and not an apology. */
+    sendSetPasswordLink: function () {
+      if (!cfg) return Promise.reject(new Error('offline'));
+      if (!session) return Promise.reject(new Error('Sign in first.'));
+      return accountInfo().then(function (info) {
+        if (!info.email) {
+          throw new Error('This account has no email address on it, so there is nowhere to send a link.');
+        }
+        return Online.requestPasswordReset(info.email);
+      }, function (err) {
+        throw playerError(err, 'Could not reach the server.', 'reset');
+      });
+    },
 
     /* ------------------------------------------------- sign in with Google */
     /* Returns the URL it is sending the browser to (handy for the harness),

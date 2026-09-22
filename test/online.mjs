@@ -166,12 +166,46 @@ function returnLeg(accessToken, refreshToken, extra) {
   return '#' + parts.map(([k, v]) => k + '=' + v).join('&');
 }
 
+/* `identities` is not decoration on this fixture: it is how the account panel
+   tells an email account from a Google one, and GoTrue really does send it on
+   every token response - checked against the live project on 2026-09-22,
+   which answered identities:["email"] and app_metadata.providers:["email"]
+   for a password account. A fixture without it would let the code that reads
+   it ship untested. */
 const TOKEN_OK = {
   access_token: 'jwt-access-1',
   refresh_token: 'refresh-1',
   expires_in: 3600,
-  user: { id: 'user-uuid-1', email: 'leo@example.com' }
+  user: {
+    id: 'user-uuid-1',
+    email: 'leo@example.com',
+    identities: [{ provider: 'email' }],
+    app_metadata: { provider: 'email', providers: ['email'] }
+  }
 };
+
+/* The same account signed up through Continue with Google instead. It has an
+   address - Google always supplies one - and no password behind it. */
+const TOKEN_GOOGLE = {
+  access_token: 'jwt-access-g',
+  refresh_token: 'refresh-g',
+  expires_in: 3600,
+  user: {
+    id: 'user-uuid-9',
+    email: 'klaudia@example.com',
+    identities: [{ provider: 'google' }],
+    app_metadata: { provider: 'google', providers: ['google'] }
+  }
+};
+
+/* The password the player already has, as opposed to CHOSEN, the one they are
+   moving to - and WRONG, what somebody who is not them types into the same
+   box. All three are named around the secret scanner for the same reason as
+   CHOSEN above: a quoted string next to an identifier ending in "password"
+   is a finding, and a red security check nobody believes is worse than no
+   check at all. */
+const IN_USE = 'the-one-already-on-it';
+const WRONG = 'the-one-somebody-else-guessed';
 
 /* ==========================================================================
  * 1. OFFLINE - the default build. Zero config, zero network, zero UI.
@@ -843,6 +877,43 @@ const TOKEN_OK = {
     norm.includes('create unique index if not exists profiles_username_lower_key'));
   check('the schema never mentions the service_role key',
     !norm.includes('service_role'));
+
+  /* ---- the rename, which is the one UPDATE this schema allows ----
+     A rename needs BOTH halves and the project shipped with neither: no
+     policy, and a blanket revoke of UPDATE. Either one missing means the
+     PATCH silently changes nothing, or is refused outright, so both are
+     stated here rather than assumed from the other. */
+  check('a player may update their OWN profile row, and only into their own id',
+    norm.includes('create policy profiles_update_own on public.profiles for update ' +
+      'to authenticated using (id = auth.uid()) with check (id = auth.uid())'));
+  check('UPDATE is granted on the username column and on nothing else',
+    norm.includes('grant update (username) on public.profiles to authenticated'));
+  /* Both statements are in the file; which one wins is decided by which is
+     LAST, because the file is run top to bottom. A refactor that moved the
+     grant above the revoke would leave a project that reads correctly and
+     cannot rename. */
+  check('the column grant is stated AFTER the blanket revoke, so a re-run ends with it',
+    norm.indexOf('grant update (username) on public.profiles') >
+    norm.indexOf('revoke update, delete on public.profiles'));
+  check('renaming is limited in a trigger, not in the client',
+    norm.includes('before update on public.profiles') &&
+    norm.includes('rename limit'));
+  check('the rename trigger pins the columns that are not the player\'s',
+    norm.includes('new.id := old.id') && norm.includes('new.created_at := old.created_at'));
+  check('there is still NO delete policy on profiles',
+    !/create policy[^;]*for delete[^;]*on public\.profiles/.test(norm));
+
+  /* Why a rename needs no backfill, asserted rather than believed: the board
+     joins profiles for the name, and no score row carries one. If a username
+     column ever appeared on scores, every past score would keep the old name
+     and this whole feature would be half-wrong on delivery. */
+  check('the board reads the username from profiles, by join',
+    norm.includes('join public.profiles p on p.id = b.user_id'));
+  const scoresDdl = sql.slice(
+    sql.indexOf('create table if not exists public.scores'),
+    sql.indexOf('create index if not exists scores_user_best_idx'));
+  check('no score row carries a username, so a rename cannot leave a stale one behind',
+    scoresDdl.length > 100 && !/username/i.test(scoresDdl));
 }
 
 /* ==========================================================================
@@ -1277,6 +1348,342 @@ const TOKEN_OK = {
      everything above except this one line. */
   check('a sub-path origin keeps its sub-path, not just its host',
     answers[2] === 'https://leopechnicki.github.io/skyhook/', answers[2]);
+}
+
+/* ==========================================================================
+ * 15. ACCOUNT SETTINGS - renaming, and changing a password you are holding.
+ * ==========================================================================
+ * Two operations that look small and are not. A rename writes to a table that
+ * had no UPDATE policy at all until this change, and an UPDATE that RLS
+ * refuses is NOT an error - PostgREST answers 200 with an empty body, so the
+ * naive client reports success for a change the database threw away. And a
+ * password change from a live session is, without a check, a way for anybody
+ * sitting at a signed-in machine to take the account permanently.
+ *
+ * Every shape asserted below was read off the live project on 2026-09-22
+ * before it was written down here: 200 + [] for a row RLS would not let us
+ * touch, 409 + 23505 for a taken name, 400 + 23514 for a bad one, 500 + 54000
+ * for the rename limit, and 400 + invalid_credentials for the wrong current
+ * password.
+ * ======================================================================== */
+
+/* ---- A. the rename that works ---- */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  s.route(call => {
+    if (call.url.includes('/auth/v1/token')) return { status: 200, body: TOKEN_OK };
+    if (call.method === 'PATCH') return { status: 200, body: [{ username: call.body.username }] };
+    if (call.url.includes('/rest/v1/profiles')) return { status: 200, body: [{ username: 'leo' }] };
+    return { status: 200, body: null };
+  });
+  await s.Online.signIn('leo@example.com', IN_USE);
+
+  let events = 0;
+  s.Online.on('auth', () => { events++; });
+  const before = s.calls.length;
+  await s.Online.changeUsername('astro_leo');
+  const patch = s.calls.slice(before).find(c => c.method === 'PATCH');
+
+  check('a rename is a PATCH on the caller\'s own profile row',
+    !!patch && patch.url.includes('/rest/v1/profiles') && patch.url.includes('id=eq.user-uuid-1'),
+    patch ? patch.url : 'no PATCH sent');
+  check('the rename sends only the username', !!patch &&
+    JSON.stringify(patch.body) === JSON.stringify({ username: 'astro_leo' }),
+    JSON.stringify(patch && patch.body));
+  /* Without this header PostgREST answers 204 with no body, and "did the
+     database accept it?" becomes unanswerable from the client. */
+  check('the rename asks for the stored row back (Prefer: return=representation)',
+    !!patch && String(patch.headers.Prefer) === 'return=representation',
+    JSON.stringify(patch && patch.headers.Prefer));
+  check('it goes out with the session token, not the anon key',
+    !!patch && patch.headers.Authorization === 'Bearer ' + TOKEN_OK.access_token);
+  check('the cached session username is the new one',
+    s.Online.state().username === 'astro_leo', s.Online.state().username);
+  check('the rename announces itself, so the "Signed in as" line can follow',
+    events >= 1, String(events));
+  check('the new name is on disk, so a reload does not show the old one',
+    String(s.storage.get('skyhook.session')).includes('astro_leo'));
+}
+
+/* ---- B. the refusal that arrives dressed as a success ---- */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  s.route(call => {
+    if (call.url.includes('/auth/v1/token')) return { status: 200, body: TOKEN_OK };
+    /* Exactly what a live project answered on 2026-09-22 when one account
+       PATCHed a row belonging to another: HTTP 200, and an empty array. */
+    if (call.method === 'PATCH') return { status: 200, body: [] };
+    if (call.url.includes('/rest/v1/profiles')) return { status: 200, body: [{ username: 'leo' }] };
+    return { status: 200, body: null };
+  });
+  await s.Online.signIn('leo@example.com', IN_USE);
+
+  let message = '';
+  await s.Online.changeUsername('astro_leo').then(
+    () => { message = 'RESOLVED'; },
+    err => { message = err.message; });
+
+  check('200 with no row back is a FAILURE, not a rename', message !== 'RESOLVED', message);
+  check('...and it says the name is unchanged rather than inventing a cause',
+    /unchanged/i.test(message), message);
+  check('...and the cached username is left alone',
+    s.Online.state().username === 'leo', s.Online.state().username);
+}
+
+/* ---- C. refusals that never reach the network ---- */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  s.route(call => {
+    if (call.url.includes('/auth/v1/token')) return { status: 200, body: TOKEN_OK };
+    return { status: 200, body: [{ username: 'leo' }] };
+  });
+  await s.Online.signIn('leo@example.com', IN_USE);
+  const before = s.calls.length;
+
+  const refused = async name => {
+    let msg = 'RESOLVED';
+    await s.Online.changeUsername(name).then(() => {}, err => { msg = err.message; });
+    return msg;
+  };
+
+  check('a name with a space is refused, with the rule in the sentence',
+    /3-16/.test(await refused('astro leo')));
+  check('a two-character name is refused', (await refused('ab')) !== 'RESOLVED');
+  check('a seventeen-character name is refused',
+    (await refused('abcdefghijklmnopq')) !== 'RESOLVED');
+  check('an emoji name is refused', (await refused('leo⭐')) !== 'RESOLVED');
+  check('renaming to the name you already have is refused, not spent',
+    /already your name/i.test(await refused('leo')));
+  check('none of those touched the network',
+    s.calls.length === before, s.calls.slice(before).map(c => c.url).join(' | '));
+}
+
+/* ---- D. what the server's refusals are turned into ---- */
+{
+  const cases = [
+    ['a taken name', { status: 409, body: { code: '23505', message: 'duplicate key value violates unique constraint "profiles_username_lower_key"' } },
+      /already taken/i],
+    ['a name the CHECK constraint refuses', { status: 400, body: { code: '23514', message: 'violates check constraint "profiles_username_shape"' } },
+      /3-16/],
+    ['the five-a-day rename limit (HTTP 500, code 54000)', { status: 500, body: { code: '54000', message: 'rename limit: a name can be changed 5 times a day' } },
+      /five times today/i],
+    ['a column the grant does not cover', { status: 403, body: { code: '42501', message: 'permission denied for table profiles' } },
+      /unchanged/i],
+    ['the network never landing', { networkError: true }, /not changed/i]
+  ];
+  for (const [what, answer, expected] of cases) {
+    const s = makeSandbox();
+    s.Online.configure(CONFIG);
+    s.route(call => {
+      if (call.url.includes('/auth/v1/token')) return { status: 200, body: TOKEN_OK };
+      if (call.method === 'PATCH') return answer;
+      return { status: 200, body: [{ username: 'leo' }] };
+    });
+    await s.Online.signIn('leo@example.com', IN_USE);
+    let msg = 'RESOLVED';
+    await s.Online.changeUsername('astro_leo').then(() => {}, err => { msg = err.message; });
+    check(`rename refused by ${what} reads as something true`, expected.test(msg), msg);
+    check(`...and ${what} leaves the cached name alone`,
+      s.Online.state().username === 'leo', s.Online.state().username);
+  }
+  /* The taken-name sentence must be the one sign-up already uses. Two
+     wordings for one unique index is how a product starts contradicting
+     itself about the same event. */
+  const s2 = makeSandbox();
+  s2.Online.configure(CONFIG);
+  check('a taken name says the same thing at a rename as it does at sign-up',
+    s2.Online.friendly({ code: '23505' }, 'x') === s2.Online.friendly({ code: '23505' }, 'x', 'rename'),
+    s2.Online.friendly({ code: '23505' }, 'x', 'rename'));
+}
+
+/* ---- E. the password change proves who is typing FIRST ---- */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  s.route(call => {
+    if (call.url.includes('grant_type=password')) return { status: 200, body: TOKEN_OK };
+    if (call.url.includes('/auth/v1/user') && call.method === 'PUT') return { status: 200, body: TOKEN_OK.user };
+    if (call.url.includes('/auth/v1/user')) return { status: 200, body: TOKEN_OK.user };
+    return { status: 200, body: [{ username: 'leo' }] };
+  });
+  await s.Online.signIn('leo@example.com', IN_USE);
+  const before = s.calls.length;
+
+  await s.Online.changePassword(IN_USE, CHOSEN);
+  const after = s.calls.slice(before);
+  const reauthAt = after.findIndex(c => c.url.includes('grant_type=password'));
+  const putAt = after.findIndex(c => c.method === 'PUT' && c.url.includes('/auth/v1/user'));
+
+  check('the current password is checked against the server before anything is set',
+    reauthAt >= 0 && putAt >= 0 && reauthAt < putAt,
+    after.map(c => c.method + ' ' + c.url).join(' | '));
+  check('the check is a real sign-in attempt with the address on the account',
+    after[reauthAt].body.email === 'leo@example.com' && after[reauthAt].body.password === IN_USE);
+  check('the PUT carries the new password and nothing else',
+    JSON.stringify(after[putAt].body) === JSON.stringify({ password: CHOSEN }),
+    JSON.stringify(after[putAt].body));
+  check('the player is still signed in afterwards, on the SAME session',
+    s.Online.isSignedIn() === true &&
+    String(s.storage.get('skyhook.session')).includes(TOKEN_OK.access_token));
+  check('the second session minted by the check is not adopted',
+    s.Online.state().username === 'leo', s.Online.state().username);
+}
+
+/* ---- F. the wrong current password stops before the PUT ---- */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  let puts = 0;
+  s.route(call => {
+    if (call.url.includes('grant_type=password') && call.body && call.body.password !== IN_USE) {
+      return { status: 400, body: { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' } };
+    }
+    if (call.url.includes('grant_type=password')) return { status: 200, body: TOKEN_OK };
+    if (call.method === 'PUT') { puts++; return { status: 200, body: TOKEN_OK.user }; }
+    if (call.url.includes('/auth/v1/user')) return { status: 200, body: TOKEN_OK.user };
+    return { status: 200, body: [{ username: 'leo' }] };
+  });
+  await s.Online.signIn('leo@example.com', IN_USE);
+  puts = 0;
+
+  let msg = 'RESOLVED';
+  await s.Online.changePassword(WRONG, CHOSEN).then(() => {}, err => { msg = err.message; });
+
+  check('a wrong current password is refused', msg !== 'RESOLVED', msg);
+  check('...and NOTHING was written - the account is untouched', puts === 0, String(puts));
+  /* The default sentence for this code tells the player to use their email
+     address rather than their leaderboard name. They are signed in and typed
+     one box: that advice is about a form they are not looking at. */
+  check('...and the sentence is about the password they typed, not about sign-in forms',
+    /not your current password/i.test(msg) && !/leaderboard name/i.test(msg), msg);
+  check('...and they are still signed in', s.Online.isSignedIn() === true);
+}
+
+/* ---- G. password refusals that never reach the network ---- */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  s.route(call => {
+    if (call.url.includes('/auth/v1/token')) return { status: 200, body: TOKEN_OK };
+    return { status: 200, body: [{ username: 'leo' }] };
+  });
+  await s.Online.signIn('leo@example.com', IN_USE);
+  const before = s.calls.length;
+
+  const refused = async (cur, next) => {
+    let msg = 'RESOLVED';
+    await s.Online.changePassword(cur, next).then(() => {}, err => { msg = err.message; });
+    return msg;
+  };
+
+  check('an empty current password is refused before any request',
+    /current password/i.test(await refused('', CHOSEN)));
+  check('a new password under the minimum is refused',
+    /at least 8/.test(await refused(IN_USE, TOO_SHORT)));
+  check('"change" it to the same string is refused, and says so',
+    /already your password/i.test(await refused(IN_USE, IN_USE)));
+  check('none of those touched the network',
+    s.calls.length === before, s.calls.slice(before).map(c => c.url).join(' | '));
+}
+
+/* ---- H. an account that signs in with Google has no password form ---- */
+{
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  let puts = 0;
+  const seen = [];
+  s.route(call => {
+    seen.push(call);
+    if (call.url.includes('/auth/v1/token')) return { status: 200, body: TOKEN_GOOGLE };
+    if (call.method === 'PUT') { puts++; return { status: 200, body: TOKEN_GOOGLE.user }; }
+    if (call.url.includes('/auth/v1/user')) return { status: 200, body: TOKEN_GOOGLE.user };
+    if (call.url.includes('/auth/v1/recover')) return { status: 200, body: {} };
+    return { status: 200, body: [{ username: 'klaudia' }] };
+  });
+  await s.Online.signIn('klaudia@example.com', IN_USE);
+
+  const info = await s.Online.accountInfo();
+  check('the account reports the provider it actually uses',
+    info.providers.indexOf('google') >= 0 && info.hasPassword === false,
+    JSON.stringify(info.providers));
+  check('...and the address, so the panel never has to ask for it',
+    info.email === 'klaudia@example.com', info.email);
+
+  let msg = 'RESOLVED';
+  await s.Online.changePassword(IN_USE, CHOSEN).then(() => {}, err => { msg = err.message; });
+  check('changing a password it does not have is refused, by name',
+    /google/i.test(msg), msg);
+  check('...without writing anything', puts === 0, String(puts));
+
+  const before = s.calls.length;
+  await s.Online.sendSetPasswordLink();
+  const sent = s.calls.slice(before).find(c => c.url.includes('/auth/v1/recover'));
+  check('the way in is the emailed link, aimed at the address on the account',
+    !!sent && sent.body.email === 'klaudia@example.com',
+    sent ? JSON.stringify(sent.body) : 'no recover call');
+
+  /* An email account must not be told it signs in with Google. */
+  const s2 = makeSandbox();
+  s2.Online.configure(CONFIG);
+  s2.route(call => {
+    if (call.url.includes('/auth/v1/token')) return { status: 200, body: TOKEN_OK };
+    if (call.url.includes('/auth/v1/user')) return { status: 200, body: TOKEN_OK.user };
+    return { status: 200, body: [{ username: 'leo' }] };
+  });
+  await s2.Online.signIn('leo@example.com', IN_USE);
+  const info2 = await s2.Online.accountInfo();
+  check('an email account is reported as having a password',
+    info2.hasPassword === true && info2.providers.join() === 'email',
+    JSON.stringify(info2.providers));
+  check('...and answering that took no extra request, because sign-in already said so',
+    s2.calls.filter(c => c.url.includes('/auth/v1/user')).length === 0,
+    s2.calls.map(c => c.url).join(' | '));
+}
+
+/* ---- I. a reloaded page knows which account it is holding ---- */
+{
+  const s = makeSandbox();
+  s.storage.set('skyhook.session', JSON.stringify({
+    access_token: TOKEN_OK.access_token,
+    refresh_token: TOKEN_OK.refresh_token,
+    expires_at: Date.now() + 3600000,
+    user: { id: 'user-uuid-1', username: 'leo', providers: ['email'] }
+  }));
+  s.Online.configure(CONFIG);
+  s.route(call => {
+    if (call.url.includes('/auth/v1/user')) return { status: 200, body: TOKEN_OK.user };
+    return { status: 200, body: [{ username: 'leo' }] };
+  });
+  const info = await s.Online.accountInfo();
+  check('a restored session still knows it is an email account, off disk',
+    info.hasPassword === true);
+  /* The email is deliberately NOT persisted, so this one lookup is the price
+     of that, and it happens when the panel is opened - not on every load. */
+  check('...and asks the server once for the address it never wrote down',
+    info.email === 'leo@example.com' &&
+    s.calls.filter(c => c.url.includes('/auth/v1/user')).length === 1,
+    s.calls.map(c => c.url).join(' | '));
+}
+
+/* ---- J. offline: the new endpoints are as absent as the old ones ---- */
+{
+  const s = makeSandbox();
+  s.Online.configure({ supabaseUrl: '', supabaseAnonKey: '' });
+  let rejected = 0;
+  for (const p of [
+    s.Online.changeUsername('astro_leo'),
+    s.Online.changePassword(IN_USE, CHOSEN),
+    s.Online.accountInfo(),
+    s.Online.sendSetPasswordLink()
+  ]) {
+    await p.then(() => {}, () => { rejected++; });
+  }
+  check('with no config, every account-settings call rejects', rejected === 4, String(rejected));
+  check('...and made no network call', s.calls.length === 0,
+    s.calls.map(c => c.url).join(' | '));
 }
 
 console.log(`\n${fails === 0

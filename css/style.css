@@ -187,6 +187,22 @@ body {
   color: rgba(150, 190, 220, 0.85);
 }
 
+/* The two account actions live directly under the "Signed in as X" line and
+   read as a continuation of it, so they are centred under that sentence
+   rather than pushed to the edges the way .ol-links spaces the form links. */
+.ol-account-links {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: -8px 0 10px;
+}
+.ol-account-links .ol-link {
+  padding: 9px 2px;
+  min-height: 40px;
+  font-size: 12px;
+}
+
 /* ---- the board ---- */
 .ol-list {
   list-style: none;
