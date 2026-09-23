@@ -288,6 +288,18 @@
     this.muteHit   = { x: W - 66, y: 6,  w: 60, h: 60 };          // 48.7 CSS px @390w
     this.retryRect = { x: W / 2 - 130, y: 640, w: 260, h: 64 };   // 211x52 CSS px
 
+    /* ---- customise ----------------------------------------------------
+       Unlike the leaderboard buttons below, this one does NOT depend on a
+       backend: painting your ship is a local, offline feature, so the button
+       is on the title screen of every build. It sits directly under the TAP
+       TO START copy rather than in the crowded bottom band, because the one
+       thing it has to be is FOUND - the feature existed for a day in a build
+       where the only way to reach it was to know it was there, which is the
+       same as it not existing. 232x42 logical is 188x34 CSS px on a 390-wide
+       phone, comfortably over the 44 px tap-target guidance once the 2.2x
+       hit-slop below is counted. */
+    this.shipRect = { x: W / 2 - 116, y: 574, w: 232, h: 42 };
+
     /* ---- online (accounts + global leaderboard) -----------------------
        The game does not know what Supabase is and never will. It owns two
        things: a flag saying whether an account layer exists at all, and two
@@ -814,6 +826,17 @@
     var onCanvas = lx >= 0 && lx <= W && ly >= 0 && ly <= H;
 
     if (onCanvas && inRect(this.muteHit, lx, ly)) { this.toggleMute(); return; }
+
+    /* Customise. Title screen only - during a run the screen belongs to the
+       run, and on the results screen RETRY must not have a neighbour. Gated on
+       `onUi` rather than on `online.ready`: the customiser is offline-capable,
+       so the only thing it needs is a UI layer listening. Without one the
+       button is not drawn either, so this branch cannot swallow a tap. */
+    if (onCanvas && this.state === 'title' && typeof this.onUi === 'function' &&
+        inRect(this.shipRect, lx, ly)) {
+      this._ui('openShip', null);
+      return;
+    }
 
     /* The leaderboard buttons exist only when a backend does. Hit-tested
        before the generic tap-anywhere action, so opening the board can never
@@ -1664,7 +1687,7 @@
      either screen. Retry is deliberately NOT refactored onto this - it is
      proven code on the hottest screen in the game, and a shared helper would
      put a new bug one edit away from it. */
-  Game.prototype._drawPanelButton = function (ctx, r, label, alpha) {
+  Game.prototype._drawPanelButton = function (ctx, r, label, alpha, swatch) {
     var a = clamp(alpha === undefined ? 1 : alpha, 0, 1);
     ctx.save();
     ctx.fillStyle = 'rgba(53,230,255,' + (0.07 * a).toFixed(3) + ')';
@@ -1676,7 +1699,26 @@
     ctx.fill();
     ctx.stroke();
     ctx.restore();
-    txt(ctx, label, r.x + r.w / 2, r.y + r.h / 2 + 6, 16,
+
+    /* A filled dot in the ship's current colour, inset at the left. It is the
+       button's second job: a label alone says a customiser EXISTS, a live
+       swatch says what it is currently set to and that tapping it will change
+       something visible. It is also the cheapest possible confirmation that a
+       tap in the panel landed - close the panel and the dot has moved on. */
+    var pad = 0;
+    if (swatch) {
+      var cx = r.x + 22, cy = r.y + r.h / 2;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = swatch;
+      ctx.beginPath(); ctx.arc(cx, cy, 8, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.restore();
+      pad = 12;          // keep the label optically centred in what is left
+    }
+    txt(ctx, label, r.x + pad + (r.w - pad) / 2, r.y + r.h / 2 + 6, 16,
       'rgba(200,235,255,' + (0.92 * a).toFixed(2) + ')', 'center', 700);
   };
 
@@ -1762,7 +1804,19 @@
     txt(ctx, 'Tap, click or SPACE fires the thruster and lets go.', W / 2, 540, 13, 'rgba(150,190,220,0.72)', 'center', 500);
     txt(ctx, 'The next hook connects itself.   M mutes.', W / 2, 560, 13, 'rgba(150,190,220,0.55)', 'center', 500);
 
-    this._drawLegend(ctx, 638);
+    /* Drawn before the legend so the legend's glows are never occluded by a
+       flat panel, and outside the online/offline branch below: the customiser
+       is the same button on both layouts. */
+    if (typeof this.onUi === 'function') {
+      this._drawPanelButton(ctx, this.shipRect, 'CUSTOMISE SHIP', 1,
+        SK.Ship ? SK.Ship.current() : null);
+    }
+
+    /* 638 before the customise button existed. Moved down so the button has
+       air under the TAP TO START copy without crowding PLANET / STAR /
+       METEOROID; everything from BEST downwards is untouched, which is what
+       keeps the leaderboard button where test/leaderboard_ui.mjs clicks it. */
+    this._drawLegend(ctx, 650);
 
     /* Two layouts for the bottom band. Without a backend it is exactly the
        one that shipped before accounts existed - same y values, same copy,
