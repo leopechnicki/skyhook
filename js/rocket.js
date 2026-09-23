@@ -36,11 +36,13 @@
  *
  * WHERE THE COLOURS COME FROM
  * ---------------------------
- * They used to be six module-level constants. They are now DERIVED from one
- * hex that js/ship.js owns - SK.Ship.current() - which is the player's chosen
- * colour, or gold while they are #1 on the board. This file still decides how
- * a colour is USED (which part is lit, which is shaded, what the plume fades
- * to); it no longer decides what the colour IS.
+ * They used to be six module-level constants. They are now DERIVED from the
+ * paint js/ship.js owns - SK.Ship.current() - which is the player's chosen
+ * nose / window / body / fire, or gold on all four while they are #1 on the
+ * board. This file still decides how a colour is USED (which surface is lit,
+ * which is shaded, what the plume fades to); it no longer decides what the
+ * colour IS, and it does not decide whether a combination reads - that is
+ * SK.Ship.readable(), which judges what this file would paint.
  *
  * resolve() is the whole derivation and it is tuned so that resolve('#35e6ff')
  * reproduces the six constants it replaced. test/ship.mjs asserts that against
@@ -48,7 +50,7 @@
  * quietly restyled the default ship turns the build red instead.
  *
  * That turns both sprite caches from "one entry, forever" into "one entry per
- * colour", which is the one way this refactor could have undone the whole
+ * paint" (the hull keyed on body+nose+window, the plume on fire), which is the one way this refactor could have undone the whole
  * argument of js/celestial.js. So both are bounded LRUs (HULL_CACHE_MAX /
  * FLAME_CACHE_MAX) and cacheStats() reports the ceilings, which test/ship.mjs
  * asserts against after walking far more colours than a player could produce.
@@ -99,9 +101,9 @@
 
   /* THE DERIVATION.
    *
-   * One hex in, five painted colours out. The constants below are the mix
-   * weights that make resolve('#35e6ff') land on the six values this file
-   * used to hardcode:
+   * One colour per part in, six painted colours out. The constants below are
+   * the mix weights that make resolve('#35e6ff') - cyan on every part - land
+   * on the six values this file used to hardcode:
    *
    *     HULL   [236,246,255]  <- mix(cyan, WHITE, HULL_W)  -> [231,252,255]
    *     HULL_D [104,132,158]  <- shade(hull)                -> [104,132,158]
@@ -157,24 +159,54 @@
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   }
 
-  /* Resolves a hex (or `undefined`, meaning "whatever the player is flying
-     right now") into painted colours plus the cache key they are stored
-     under. Never throws and never returns a bad channel: an unreadable colour
-     falls back to the shipped default, which is the same rule
-     SK.Ship.normalise enforces one layer up. */
-  function resolve(hex) {
-    var src = hex || (SK.Ship ? SK.Ship.current() : FALLBACK);
-    var base = hex2rgb(src);
-    if (!base) { src = FALLBACK; base = hex2rgb(FALLBACK); }
-    var hull = mix(base, WHITE, HULL_W);
+  /* One part's colour as [r, g, b] plus the hex it came from, falling back to
+     the shipped default for anything unreadable. */
+  function partOf(src, part) {
+    var h = src && typeof src === 'object' ? src[part] : src;
+    var c = hex2rgb(h);
+    return c ? { hex: String(h).trim().toLowerCase(), rgb: c }
+             : { hex: FALLBACK, rgb: hex2rgb(FALLBACK) };
+  }
+
+  /* Resolves a paint - { nose, window, body, fire }, a single hex meaning
+     "that colour on every part" (the crown, and old callers), or `undefined`
+     meaning "whatever the player is flying right now" - into painted colours
+     plus the cache keys they are stored under.
+
+     Each part drives its own surfaces and nothing else:
+       body    the plating (pulled most of the way to white, see HULL_W), its
+               shaded flank, the collar, the fins and the neon rim
+       nose    the nose cone
+       window  the porthole glass
+       fire    the plume
+
+     With all four parts the same hex this is, colour for colour, the
+     single-colour derivation it replaced - which is what keeps the default
+     ship and the gold ship exactly as they were.
+
+     Never throws and never returns a bad channel: an unreadable colour falls
+     back to the shipped default. Whether a COMBINATION reads is not decided
+     here - SK.Ship.readable() asks this function what would be painted and
+     judges that. */
+  function resolve(paint) {
+    var src = paint || (SK.Ship ? SK.Ship.current() : FALLBACK);
+    var body = partOf(src, 'body'), nose = partOf(src, 'nose'),
+        win = partOf(src, 'window'), fire = partOf(src, 'fire');
+    var hull = mix(body.rgb, WHITE, HULL_W);
     return {
-      key: String(src).toLowerCase(),
+      /* The hull sprite depends on three parts, the plume on one. Keyed
+         separately so repainting the fire does not rebake the hull, and the
+         other way round. */
+      key: body.hex + '|' + nose.hex + '|' + win.hex + '|' + fire.hex,
+      hullKey: body.hex + '|' + nose.hex + '|' + win.hex,
+      fireKey: fire.hex,
       hull: hull,
       hullD: shade(hull),
-      trim: base,
-      glass: mix(base, WHITE, GLASS_W),
-      fire: mix(base, WHITE, FIRE_W),
-      fireCool: mix(base, NIGHT, COOL_W)
+      trim: body.rgb,
+      nose: nose.rgb,
+      glass: mix(win.rgb, WHITE, GLASS_W),
+      fire: mix(fire.rgb, WHITE, FIRE_W),
+      fireCool: mix(fire.rgb, NIGHT, COOL_W)
     };
   }
 
@@ -260,7 +292,7 @@
     g.closePath();
     var nose = g.createLinearGradient(cx, cy - L, cx, noseEnd);
     nose.addColorStop(0, rgba([255, 255, 255], 0.98));
-    nose.addColorStop(1, rgba(col.trim, 0.92));
+    nose.addColorStop(1, rgba(col.nose, 0.92));
     g.fillStyle = nose;
     g.fill();
 
@@ -302,7 +334,7 @@
   }
 
   function hullSprite(col) {
-    var k = col.key;
+    var k = col.hullKey;
     if (hullCache[k]) { touch(hullCache, hullOrder, k, HULL_CACHE_MAX); return hullCache[k]; }
     var pad = 1.6;                       // room for fins + outline
     var size = Math.ceil(SPRITE_L * pad * 2);
@@ -389,7 +421,7 @@
      point at y=FSPR_H. drawFlame stretches this rectangle to the length and
      width the current drive asks for. */
   function flameSprite(b, col) {
-    var k = col.key + '|' + b;
+    var k = col.fireKey + '|' + b;
     if (flameCache[k]) { touch(flameCache, flameOrder, k, FLAME_CACHE_MAX); return flameCache[k]; }
     var burn = b / FLAME_BUCKETS;
     var hot = mix(col.fire, FLAME_BURN, burn);
@@ -486,9 +518,10 @@
        is exactly what would happen if each looked SK.Ship.current() up for
        itself and the crown changed hands between the two calls.
 
-       `opts.colour` is the customiser's preview hook: a specific hex to paint
-       instead of the live one. It is never persisted by drawing it. */
-    var col = resolve(o.colour);
+       `opts.paint` is the customiser's preview hook: a specific paint (or
+       single hex) to draw instead of the live one. `opts.colour` is its old
+       name, still honoured. Neither is ever persisted by drawing it. */
+    var col = resolve(o.paint || o.colour);
 
     drawFlame(ctx, x, y, ang, L, burn, thrust, t, col);
 

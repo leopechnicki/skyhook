@@ -455,6 +455,40 @@ body {
   color: #ffd75e;
 }
 
+/* ---- the part tabs ----
+   Nose / window / body / fire, one row of four. Each tab carries a dot in
+   that part's current colour, so the whole paint job reads at a glance
+   without opening each part. Same cell language as the swatches below, at a
+   smaller size - they are the same kind of control one level up. */
+.sh-parts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.sh-part {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 2px;
+  min-height: 44px;
+  font: inherit;
+  color: rgba(190, 220, 240, 0.75);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(53, 230, 255, 0.16);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.sh-part:hover { background: rgba(53, 230, 255, 0.10); }
+.sh-part .sh-dot { width: 14px; height: 14px; }
+.sh-part.is-on {
+  background: rgba(53, 230, 255, 0.14);
+  border-color: rgba(53, 230, 255, 0.85);
+  color: #eaf6ff;
+}
+
 /* ---- the swatch grid ----
    Four across. On a 390px phone the panel is 358px wide inside its padding,
    so a cell is ~80px - a 44px-plus tap target with its label under it, and
@@ -510,6 +544,20 @@ body {
   border-color: rgba(53, 230, 255, 0.85);
   color: #eaf6ff;
   box-shadow: 0 0 16px rgba(53, 230, 255, 0.22);
+}
+
+/* A colour this part cannot take ON THIS SHIP - a pale window on a pale
+   hull, say. Dimmed and crossed rather than hidden: the grid keeps its shape
+   when the body changes, and the reason is one tap (or one hover) away.
+   The refusal itself lives in SK.Ship.set(); this is only its explanation. */
+.sh-swatch.is-blocked {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+.sh-swatch.is-blocked:hover { background: rgba(255, 255, 255, 0.03); }
+.sh-swatch.is-blocked .sh-dot {
+  background-image: linear-gradient(135deg, transparent 45%, rgba(6, 7, 19, 0.9) 45%,
+    rgba(6, 7, 19, 0.9) 55%, transparent 55%) !important;
 }
 
 /* The champion's hull: shown to everybody, takeable by nobody. Dashed border
