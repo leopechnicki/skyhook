@@ -413,8 +413,28 @@ async function main() {
     check('configured build: still signed out on first load', snap.online.signedIn === false);
     check('configured build: the overlay stays closed until asked for',
       (await page.locator('#ol').isVisible()) === false);
-    check('configured build: nothing was requested from the API before the player asked',
-      api.length === 0, api.map(c => c.url).join(' | '));
+    /* ONE request is allowed here, and exactly one: the champion probe.
+     *
+     * This assertion used to read `api.length === 0`. The golden-hull feature
+     * made that false on purpose - js/ui_ship.js asks the board who is #1 at
+     * boot, because the answer decides what colour the ship on the TITLE
+     * SCREEN is painted, and that is drawn before the player asks for
+     * anything. Relaxing it to "no calls" would have deleted the check; what
+     * the check is actually for is that the game does not pull the
+     * leaderboard PAGE, the player's rank, or any session-bearing request
+     * until it is asked. So pin the shape instead of the count: every call
+     * made before the player touches anything must be the top-row probe,
+     * anonymous and limit=1. A second row, a rank call or an auth call here
+     * is still a failure. */
+    const early = api.filter(c => !/[?&]limit=1(&|$)/.test(c.url) ||
+                                  !/\/rest\/v1\/leaderboard\?/.test(c.url) ||
+                                  c.method !== 'GET');
+    check('configured build: nothing but the #1 probe was requested before the player asked',
+      early.length === 0, early.map(c => c.method + ' ' + c.url).join(' | '));
+    check('the #1 probe is a single anonymous top-row read, not a board pull',
+      api.length <= 1 && api.every(c => !c.headers || !c.headers.authorization ||
+        c.headers.authorization === 'Bearer anon-test-key'),
+      api.map(c => c.url).join(' | '));
 
     /* ---- open the board from the title screen ---- */
     await tapLogical(page, 240, 816);
@@ -424,8 +444,8 @@ async function main() {
       (await page.locator('#ol').isVisible()) === true &&
       (await page.evaluate('window.__SKYHOOK.game.state')) === 'title');
     check('the board panel is a real dialog',
-      (await page.locator('.ol-panel').getAttribute('role')) === 'dialog' &&
-      (await page.locator('.ol-panel').getAttribute('aria-modal')) === 'true');
+      (await page.locator('#ol .ol-panel').getAttribute('role')) === 'dialog' &&
+      (await page.locator('#ol .ol-panel').getAttribute('aria-modal')) === 'true');
 
     const rows = page.locator('#ol-list .ol-row');
     check('the top scores render', (await rows.count()) === 3, `rows=${await rows.count()}`);
@@ -651,7 +671,7 @@ async function main() {
        that simply did nothing. */
     const msgInView = await page.evaluate(`(() => {
       const m = document.getElementById('ol-auth-msg');
-      const p = document.querySelector('.ol-panel');
+      const p = document.querySelector('#ol .ol-panel');
       const mr = m.getBoundingClientRect(), pr = p.getBoundingClientRect();
       return {
         inPanel: mr.top >= pr.top - 1 && mr.bottom <= pr.bottom + 1,
@@ -937,7 +957,7 @@ async function main() {
       await wait(200);
       const linkBox = await rpage.evaluate(`(() => {
         const b = document.getElementById('ol-forgot');
-        const row = b.parentElement, panel = document.querySelector('.ol-panel');
+        const row = b.parentElement, panel = document.querySelector('#ol .ol-panel');
         const br = b.getBoundingClientRect(), pr = panel.getBoundingClientRect();
         return {
           clipped: b.scrollWidth > b.clientWidth + 1,
