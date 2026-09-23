@@ -1369,6 +1369,46 @@
       });
     },
 
+    /* ------------------------------------------------- the ship's paint ---
+     * The colour follows the ACCOUNT, so a player who paints their ship on a
+     * laptop finds it painted on their phone. Both halves are OPTIONAL in the
+     * strongest sense - js/ui_ship.js treats a rejection, a missing column and
+     * a signed-out player as the same non-event - because the colour is
+     * already saved in localStorage and already on screen before either of
+     * these is called. The network is a convenience here, never a dependency.
+     *
+     * A project whose SQL predates supabase/schema.sql section 8 has no
+     * ship_colour column at all. PostgREST answers that with a 400, which
+     * arrives here as a rejected promise and is swallowed exactly like a dead
+     * connection. That is deliberate: the feature must not appear broken on a
+     * backend that simply has not been migrated yet.
+     */
+    loadShipColour: function () {
+      if (!cfg || !session) return Promise.resolve('');
+      return withToken(function (token) {
+        return request('/rest/v1/profiles?select=ship_colour&id=eq.' +
+          encodeURIComponent(session.user.id) + '&limit=1', { token: token });
+      }).then(function (rows) {
+        return String((rows && rows[0] && rows[0].ship_colour) || '');
+      }, function () { return ''; });
+    },
+
+    /* Through an RPC rather than a PATCH on profiles, and that is the whole
+       security argument: there is still no UPDATE policy on public.profiles,
+       so the anon key cannot write that table at all. The function is the one
+       narrow door, it writes only auth.uid()'s own row, and the column's CHECK
+       constraint holds the SAME allow-list the client shows - so the server
+       rejects an off-menu colour (champion gold included) even when the
+       request did not come from this file. */
+    saveShipColour: function (hex) {
+      if (!cfg || !session) return Promise.resolve(false);
+      return withToken(function (token) {
+        return request('/rest/v1/rpc/set_ship_colour', {
+          method: 'POST', token: token, body: { colour: String(hex || '') }
+        });
+      }).then(function () { return true; }, function () { return false; });
+    },
+
     myRank: function () {
       if (!cfg || !session) return Promise.resolve(null);
       return withToken(function (token) {

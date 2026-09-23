@@ -95,17 +95,27 @@ jobs:
       # purpose: what it protects is Leo's real leaderboard, so it has to run
       # on every PR rather than only on the ones that reach a deploy.
       #
-      # skyhook-staging shares the production Supabase project - there is no
-      # second project to point it at, see staging/config.staging.js - so the
-      # only thing between a test run and the live board is readOnlyScores and
-      # the lines in js/online.js that honour it. This asserts the flag is
-      # there, that submitRun refuses on it WITHOUT queueing the run for a
-      # later session that could write, that reads still work (or the staging
-      # site could not test the feature it exists for), that production is
-      # untouched by any of it, and that main and a feature branch cannot
-      # reach each other's deploy job.
+      # skyhook-staging now has its OWN Supabase project (see
+      # staging/config.staging.js), so the guarantee under test is no longer
+      # "one flag stops the write" but "staging's URL and staging's anon key
+      # both name a project that is not production's". readOnlyScores is kept
+      # as declared machinery and still proved to work, against a fixture that
+      # forces it on. Also asserts that production is untouched by any of it,
+      # and that main and a feature branch cannot reach each other's deploy job.
       - name: Staging isolation (scores cannot reach the real board)
         run: node test/staging.mjs
+
+      # The ship's paint. Three things that break quietly: the DEFAULT ship
+      # must be byte-for-byte the one that shipped before the colour was
+      # configurable (a player who never opens the customiser must not be
+      # restyled), no colour on the menu may be dark enough to hide the ship
+      # against the starfield, and champion gold must stay un-pickable and
+      # un-storable - worn only while the board says you are #1, and every way
+      # of not knowing that must degrade to the player's own colour. Also
+      # walks 64 colours through the sprite caches to prove that making the
+      # paint configurable did not make them unbounded. Pure Node, no browser.
+      - name: Ship paint (default unchanged + gold is earned)
+        run: node test/ship.mjs
 
       # The Android wrapper's two pure-logic modules: the interstitial cadence
       # gate and the AdMob consent/targeting path. Both are dependency-free
