@@ -49,6 +49,40 @@ mean the leaderboard could never be tested end to end.
 | Change username / password | Yes - against a staging profile |
 | **Write a score** | **Yes - to staging's board** |
 
+### The half that is not in this repo
+
+Applying `supabase/schema.sql` gives staging the right tables, policies and
+triggers. It does not give it the right **auth settings**, because those live
+in the Supabase project and in no file here - and a project created from the
+dashboard defaults gets these:
+
+| Setting | New-project default | What it does to a tester |
+|---|---|---|
+| `MAILER_AUTOCONFIRM` | `false` | Sign-up returns no session. The player is told to check an inbox for a mail the built-in SMTP (2/hour) will probably never deliver. |
+| `SITE_URL` | `http://localhost:3000` | Every confirmation and recovery link points at a port on the tester's own machine. |
+| `URI_ALLOW_LIST` | empty | `redirect_to` is ignored, so the game cannot even send them back to the page they started on. |
+
+Production hit the first of these on 2026-09-17 and turned autoconfirm ON.
+Staging was created on 2026-09-23, after that lesson, and inherited the
+default anyway - so on the day it went up the schema was right, the image was
+right, the deploy was green, and signing up did nothing. Sign-in, the account
+panel, the ship colour and the leaderboard all sit behind sign-up, so all four
+were unreachable while every gate in this repo was passing.
+
+Staging now matches production, with staging's own URL:
+
+```
+MAILER_AUTOCONFIRM = true
+SITE_URL           = https://skyhook-staging.fly.dev/
+URI_ALLOW_LIST     = https://skyhook-staging.fly.dev/**
+```
+
+`deploy.yml` re-checks the first and the sign-up switch against the LIVE
+project on every staging deploy, using the anon key out of the served config -
+public by design, so no secret is needed and the gate works on a fork. A
+staging project that quietly goes back to wanting confirmations is a red build
+now, not a confused tester.
+
 ### The guard is off, not gone
 
 `js/online.js` still reads and honours `readOnlyScores`, and `test/staging.mjs`

@@ -514,6 +514,36 @@ jobs:
           if grep -q "$prod_ref" /tmp/live.js; then
             echo "FAIL: production's project ref appears in the live staging config"; exit 1
           fi
+          # The staging PROJECT, not the staging build.
+          #
+          # Everything above this line reads a file that is in this repo.
+          # This does not, and that is the point: a Supabase project created
+          # from the dashboard defaults has MAILER_AUTOCONFIRM off and
+          # SITE_URL http://localhost:3000, and neither setting appears in
+          # any file here. So staging can be green, isolated, correctly built
+          # and completely unusable at the same time, with nothing in a diff
+          # to show for it.
+          #
+          # That is not hypothetical. On 2026-09-23 staging had its schema
+          # applied, its own project, a correct image and a passing deploy -
+          # and a tester who signed up got no session back, because the new
+          # project still wanted an email confirmation that the built-in SMTP
+          # (2 messages an hour) was never going to deliver. Production had
+          # already learned this on 2026-09-17 and turned autoconfirm ON;
+          # staging was created afterwards and inherited the default anyway.
+          #
+          # Probed with the anon key out of the live config - public by
+          # design, so no secret is needed and this works on a fork.
+          live_key=$(sed -n "s#.*supabaseAnonKey: '\([^']*\)'.*#\1#p" /tmp/live.js | head -1)
+          [ -n "$live_key" ] || { echo "FAIL: no anon key in the live staging config"; exit 1; }
+          curl -sf "https://$live_ref.supabase.co/auth/v1/settings" -H "apikey: $live_key" > /tmp/auth.json \
+            || { echo "FAIL: the staging Supabase project did not answer /auth/v1/settings"; exit 1; }
+          grep -q '"mailer_autoconfirm":true' /tmp/auth.json \
+            || { echo "FAIL: staging still requires email confirmation - anyone who signs up to test is stranded"; exit 1; }
+          grep -q '"disable_signup":false' /tmp/auth.json \
+            || { echo "FAIL: staging has sign-ups switched off - nobody can get an account to test with"; exit 1; }
+          echo "OK: a sign-up on staging produces a session immediately"
+
           curl -sf "$base/robots.txt" | grep -q '^Disallow: /' \
             || { echo "FAIL: staging robots.txt"; exit 1; }
           curl -sfI "$base/" | grep -qi '^x-robots-tag: noindex' \
