@@ -90,6 +90,18 @@ jobs:
       - name: Canonical origin + Pages redirect stub
         run: node test/pages_stub.mjs
 
+      # The ship's paint. Three things that break quietly: the DEFAULT ship
+      # must be byte-for-byte the one that shipped before the colour was
+      # configurable (a player who never opens the customiser must not be
+      # restyled), no colour on the menu may be dark enough to hide the ship
+      # against the starfield, and champion gold must stay un-pickable and
+      # un-storable - worn only while the board says you are #1, and every way
+      # of not knowing that must degrade to the player's own colour. Also
+      # walks 64 colours through the sprite caches to prove that making the
+      # paint configurable did not make them unbounded. Pure Node, no browser.
+      - name: Ship paint (default unchanged + gold is earned)
+        run: node test/ship.mjs
+
       # The Android wrapper's two pure-logic modules: the interstitial cadence
       # gate and the AdMob consent/targeting path. Both are dependency-free
       # (node: builtins + relative imports only), so they run here with no
@@ -144,6 +156,14 @@ jobs:
       # run) and - the regression worth having CI for - a CONFIGURED build
       # whose backend is refusing connections: the game must still start, still
       # record a local high score, and never throw.
+      - name: Ship customiser (per-part paint, refusals, reload, gold preview)
+        run: node test/ship_ui.mjs
+      # Leo: "user is not able to change spaceship after start playing". Real
+      # clicks on the canvas: HUD pause -> CUSTOMISE -> repaint -> the run has
+      # not moved a tick and the frozen ship shows the paint; same from game
+      # over -> RETRY flies it; space/Esc never resume under the panel.
+      - name: Customise mid-session (pause + game over doors)
+        run: node test/ship_access.mjs
       - name: Leaderboard UI (incl. dead-backend fallback)
         run: node test/leaderboard_ui.mjs
 
