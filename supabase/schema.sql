@@ -321,7 +321,7 @@ grant execute on function public.my_rank() to anon, authenticated;
 --      shows. The client is attacker-controlled, so "that colour is not on the
 --      menu" has to be a constraint, not a UI affordance. The list is written
 --      ONCE, in ship_colour_allowed() below, and all four CHECKs call it - four
---      copies of a twelve-item list is how one of them drifts.
+--      copies of an eleven-item list is how one of them drifts.
 --
 --   2. Champion gold (#ffc21a) is deliberately NOT on the list. Gold is a
 --      rank, not a choice: the game paints it while the leaderboard says you
@@ -352,17 +352,16 @@ immutable
 as $$
   select c is null or c in (
     '#35e6ff',  -- Signal Cyan (the default)
-    '#8af4ff',  -- Ice
-    '#ecf6ff',  -- Hull White
-    '#9db4d6',  -- Gunmetal
-    '#7c8cff',  -- Ion Blue
-    '#b98cff',  -- Nebula
-    '#ff7edb',  -- Magenta
-    '#ff6b7d',  -- Warning Red
-    '#ff9d4d',  -- Ember
-    '#ffd166',  -- Solar
-    '#b6ff6a',  -- Acid
-    '#4dffb4'   -- Mint
+    '#1a9dff',  -- Azure
+    '#8a72ff',  -- Ion Blue
+    '#c957ff',  -- Nebula
+    '#ff2bd6',  -- Magenta
+    '#ff4d94',  -- Hot Pink
+    '#ff3b30',  -- Warning Red
+    '#ff7a1a',  -- Ember
+    '#a8ff1f',  -- Acid
+    '#1affb0',  -- Mint
+    '#ffffff'   -- Nova White
   );
 $$;
 
@@ -376,11 +375,6 @@ alter table public.profiles drop constraint if exists profiles_ship_nose_allowed
 alter table public.profiles drop constraint if exists profiles_ship_window_allowed;
 alter table public.profiles drop constraint if exists profiles_ship_body_allowed;
 alter table public.profiles drop constraint if exists profiles_ship_fire_allowed;
-alter table public.profiles
-  add constraint profiles_ship_nose_allowed   check (public.ship_colour_allowed(ship_nose)),
-  add constraint profiles_ship_window_allowed check (public.ship_colour_allowed(ship_window)),
-  add constraint profiles_ship_body_allowed   check (public.ship_colour_allowed(ship_body)),
-  add constraint profiles_ship_fire_allowed   check (public.ship_colour_allowed(ship_fire));
 
 -- The single-colour build stored one hex in ship_colour. Anybody who painted
 -- a ship with it keeps that ship: the colour is copied onto all four parts
@@ -403,6 +397,51 @@ begin
 end;
 $$;
 drop function if exists public.set_ship_colour(text);
+
+-- 2026-09-23: the menu went from pastel to saturated (the measurements are
+-- above SWATCHES in js/ship.js). A row painted with the first menu is carried
+-- to the same family on the new one rather than failing the CHECKs below.
+-- ONE list, in one function, and it is the same map as SK.Ship.RENAMED -
+-- test/ship.mjs holds the two to each other. It runs AFTER the single-colour
+-- migration above (whose values are first-menu hexes too) and BEFORE the
+-- constraints come back, so both paths land on the new list. Anything not in
+-- the map comes back unchanged, so a re-run is a no-op.
+create or replace function public.ship_colour_renamed(c text)
+returns text
+language sql
+immutable
+as $$
+  select case c
+    when '#8af4ff' then '#35e6ff'  -- Ice        -> Signal Cyan
+    when '#ecf6ff' then '#ffffff'  -- Hull White -> Nova White
+    when '#9db4d6' then '#1a9dff'  -- Gunmetal   -> Azure
+    when '#7c8cff' then '#8a72ff'  -- Ion Blue
+    when '#b98cff' then '#c957ff'  -- Nebula
+    when '#ff7edb' then '#ff2bd6'  -- Magenta
+    when '#ff6b7d' then '#ff3b30'  -- Warning Red
+    when '#ff9d4d' then '#ff7a1a'  -- Ember
+    when '#ffd166' then '#ff7a1a'  -- Solar      -> Ember
+    when '#b6ff6a' then '#a8ff1f'  -- Acid
+    when '#4dffb4' then '#1affb0'  -- Mint
+    else c
+  end;
+$$;
+
+update public.profiles
+   set ship_nose   = public.ship_colour_renamed(ship_nose),
+       ship_window = public.ship_colour_renamed(ship_window),
+       ship_body   = public.ship_colour_renamed(ship_body),
+       ship_fire   = public.ship_colour_renamed(ship_fire)
+ where ship_nose   is distinct from public.ship_colour_renamed(ship_nose)
+    or ship_window is distinct from public.ship_colour_renamed(ship_window)
+    or ship_body   is distinct from public.ship_colour_renamed(ship_body)
+    or ship_fire   is distinct from public.ship_colour_renamed(ship_fire);
+
+alter table public.profiles
+  add constraint profiles_ship_nose_allowed   check (public.ship_colour_allowed(ship_nose)),
+  add constraint profiles_ship_window_allowed check (public.ship_colour_allowed(ship_window)),
+  add constraint profiles_ship_body_allowed   check (public.ship_colour_allowed(ship_body)),
+  add constraint profiles_ship_fire_allowed   check (public.ship_colour_allowed(ship_fire));
 
 create or replace function public.set_ship_paint(
   p_nose text, p_window text, p_body text, p_fire text)

@@ -153,7 +153,7 @@ try {
   userId = (sql('select id from auth.users where email = %s', [email])[0] || [])[0] || '';
   check('...and exists in auth.users', !!userId, userId);
 
-  const want = { nose: '#ffd166', window: '#ff6b7d', body: '#7c8cff', fire: '#4dffb4' };
+  const want = { nose: '#ff7a1a', window: '#ff3b30', body: '#8a72ff', fire: '#1affb0' };
   for (const k of A.Ship.PARTS) A.Ship.set(k, want[k]);
   check('device A painted four parts', same(plain(A.Ship.saved()), want), JSON.stringify(A.Ship.saved()));
   check('device A saves them through set_ship_paint', (await A.Online.saveShipPaint(A.Ship.saved())) === true);

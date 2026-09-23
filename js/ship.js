@@ -26,8 +26,9 @@
  * starfield was a complete answer. With four, it is not: every swatch is
  * individually visible, but the nose cone and the porthole are drawn ON the
  * pale plating, not on the sky, so a pale nose or a pale window on a pale
- * hull vanishes even though each colour is "legal". 32 of the 144
- * (body, window) and (body, nose) pairs on the menu do exactly that.
+ * hull vanishes even though each colour is "legal". On the first (pastel)
+ * menu 32 of the 288 (body, window) and (body, nose) pairs did exactly that;
+ * on today's saturated one only a Nova White mark does - 22 of 242.
  *
  * So the rule is now a property of the COMBINATION, measured on the colours
  * the renderer actually paints (SK.Rocket.resolve), and enforced twice:
@@ -79,23 +80,75 @@
    *
    * Every entry below clears LUMA_FLOOR against the background - asserted in
    * test/ship.mjs, so adding a fashionable near-black here fails the build
-   * rather than shipping. Same twelve for every part: one menu to learn, and
+   * rather than shipping. Same menu for every part: one menu to learn, and
    * one allow-list for the database to hold (supabase/schema.sql section 8).
-   */
+   *
+   * WHY THESE ELEVEN (2026-09-23, Leo: "make sure have strong colors")
+   * ---------------------------------------------------------------
+   * The first menu was measured before it was replaced
+   * (test/palette_metrics.mjs), and "washed out" turned out to be exactly the
+   * right word - and NOT a contrast problem. Every old swatch already stood
+   * 6.7:1 or more off the sky; what they lacked was SATURATION. Mean OKLCH
+   * chroma was 0.139, two entries were practically grey (Hull White 0.016,
+   * Gunmetal 0.055), two pairs were near-twins (Signal Cyan / Ice at OKLab
+   * distance 0.069, Ion Blue / Nebula 0.088), and Solar sat 0.048 from the
+   * champion's gold - close enough to pass for the prize.
+   *
+   * So brightening the old colours would have been the wrong fix: most were
+   * already pastel, i.e. too close to white, and pushing them further only
+   * greys them out more. The menu is instead one colour per hue family at
+   * the most saturated sRGB point that still clears LUMA_FLOOR:
+   *
+   *                  before   after
+   *   mean chroma    0.139    0.193   (0.212 without the one neutral)
+   *   closest pair   0.069    0.111   (Warning Red / Ember)
+   *   nearest gold   0.048    0.166   (Ember - there is no yellow any more)
+   *   min contrast   6.73:1   5.65:1  (still over WCAG AA's 4.5:1 for text)
+   *
+   * The contrast floor dropping is the honest cost, not an oversight: a
+   * saturated red is darker than a pastel one by definition. It stays above
+   * the floor the old menu was designed around, and the colour now reads as
+   * colour instead of as off-white.
+   *
+   * Signal Cyan is untouched because it is the DEFAULT and the default ship
+   * must stay the ship that shipped. Nova White is the one neutral, kept on
+   * purpose: pure white is the strongest thing on a black sky, it just is not
+   * a hue. There is no yellow at all - that part of the wheel belongs to the
+   * #1 hull. Colours from the old menu are carried onto the new one by
+   * RENAMED below, so nobody's ship is reset by this change. */
   var SWATCHES = [
-    { hex: '#35e6ff', name: 'Signal Cyan' },   // the game's own accent
-    { hex: '#8af4ff', name: 'Ice' },
-    { hex: '#ecf6ff', name: 'Hull White' },
-    { hex: '#9db4d6', name: 'Gunmetal' },
-    { hex: '#7c8cff', name: 'Ion Blue' },
-    { hex: '#b98cff', name: 'Nebula' },
-    { hex: '#ff7edb', name: 'Magenta' },
-    { hex: '#ff6b7d', name: 'Warning Red' },
-    { hex: '#ff9d4d', name: 'Ember' },
-    { hex: '#ffd166', name: 'Solar' },
-    { hex: '#b6ff6a', name: 'Acid' },
-    { hex: '#4dffb4', name: 'Mint' }
+    { hex: '#35e6ff', name: 'Signal Cyan' },   // the game's own accent - the default
+    { hex: '#1a9dff', name: 'Azure' },
+    { hex: '#8a72ff', name: 'Ion Blue' },
+    { hex: '#c957ff', name: 'Nebula' },
+    { hex: '#ff2bd6', name: 'Magenta' },
+    { hex: '#ff4d94', name: 'Hot Pink' },
+    { hex: '#ff3b30', name: 'Warning Red' },
+    { hex: '#ff7a1a', name: 'Ember' },
+    { hex: '#a8ff1f', name: 'Acid' },
+    { hex: '#1affb0', name: 'Mint' },
+    { hex: '#ffffff', name: 'Nova White' }
   ];
+
+  /* The first menu, old hex -> the swatch that replaced it. A paint saved
+     with the pastel palette - in localStorage or on the account - arrives
+     here, not at the default: same family, stronger colour. Solar has no
+     yellow to go to (see above) and goes to the nearest warm one. The
+     database runs the same mapping over stored rows (supabase/schema.sql
+     section 8), and test/ship.mjs asserts the two lists agree. */
+  var RENAMED = {
+    '#8af4ff': '#35e6ff',   // Ice        -> Signal Cyan
+    '#ecf6ff': '#ffffff',   // Hull White -> Nova White
+    '#9db4d6': '#1a9dff',   // Gunmetal   -> Azure
+    '#7c8cff': '#8a72ff',   // Ion Blue
+    '#b98cff': '#c957ff',   // Nebula
+    '#ff7edb': '#ff2bd6',   // Magenta
+    '#ff6b7d': '#ff3b30',   // Warning Red
+    '#ff9d4d': '#ff7a1a',   // Ember
+    '#ffd166': '#ff7a1a',   // Solar      -> Ember
+    '#b6ff6a': '#a8ff1f',   // Acid
+    '#4dffb4': '#1affb0'    // Mint
+  };
 
   /* The four surfaces, in the order the customiser shows them. `on` is what
      the part is painted against, which is what decides how it can fail:
@@ -124,11 +177,11 @@
 
      SKY_DE    what the rim and the plume need against the starfield. Every
                swatch clears it by a mile (the dimmest, Ion Blue, sits at
-               0.56); it is here for input that did NOT come from the menu.
+               0.54); it is here for input that did NOT come from the menu.
      MARK_DE   what the nose cone and the porthole need against the plating.
                Calibrated on the real menu rather than guessed: every pair
-               the eye loses sits at or under 0.080 (Ice window 0.052, Hull
-               White nose 0.016), and the default ship's faintest marking -
+               the eye loses sits at or under 0.080 (on the first menu: Ice
+               window 0.052, Hull White nose 0.016), and the default ship's faintest marking -
                its own porthole - is 0.106. 0.08 is the gap between them. */
   var SKY_DE = 0.40;
   var MARK_DE = 0.08;
@@ -227,6 +280,7 @@
      cannot be stored, only worn. */
   function normaliseColour(raw) {
     var h = str(raw);
+    if (RENAMED.hasOwnProperty(h)) h = RENAMED[h];
     return isSwatch(h) ? h : DEFAULT;
   }
 
@@ -397,6 +451,7 @@
     LUMA_FLOOR: LUMA_FLOOR,
     SKY_DE: SKY_DE,
     MARK_DE: MARK_DE,
+    RENAMED: RENAMED,
     STORE_KEY: STORE_KEY,
     LEGACY_KEY: LEGACY_KEY,
 

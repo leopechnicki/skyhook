@@ -91,7 +91,9 @@ async function main() {
       JSON.stringify(labels));
     check('Body is the part selected on open',
       (await tab(page, 'body').getAttribute('aria-selected')) === 'true');
-    check('twelve colours plus the locked gold', (await page.locator('#sh-swatches .sh-swatch').count()) === 13);
+    const menuSize = await page.evaluate(() => window.SK.Ship.SWATCHES.length);
+    check('every menu colour plus the locked gold', (await page.locator('#sh-swatches .sh-swatch').count()) === menuSize + 1,
+      String(menuSize));
 
     /* --- the refusal, through a real click --- */
     await tab(page, 'window').click();
@@ -99,11 +101,11 @@ async function main() {
       (await tab(page, 'window').getAttribute('aria-selected')) === 'true' &&
       (await page.getAttribute('#sh-swatches', 'aria-label')) === 'Window colour');
     const blocked = await page.$$eval('#sh-swatches .sh-swatch.is-blocked', ns => ns.map(n => n.getAttribute('data-hex')));
-    check('on the default hull, Ice and Hull White windows are greyed out',
-      blocked.includes('#8af4ff') && blocked.includes('#ecf6ff'), JSON.stringify(blocked));
+    check('on the default hull, the Nova White window - and only it - is greyed out',
+      JSON.stringify(blocked) === '["#ffffff"]', JSON.stringify(blocked));
     check('a greyed colour tells a screen reader why',
-      /unavailable: .*vanish/i.test(await cell(page, '#ecf6ff').getAttribute('aria-label') || ''),
-      await cell(page, '#ecf6ff').getAttribute('aria-label'));
+      /unavailable: .*vanish/i.test(await cell(page, '#ffffff').getAttribute('aria-label') || ''),
+      await cell(page, '#ffffff').getAttribute('aria-label'));
 
     const before = await saved(page);
     const pic0 = await preview(page);
@@ -111,27 +113,27 @@ async function main() {
        player's finger will - aria-disabled is an explanation, not a wall -
        and what happens when it does is exactly what is being tested. Still a
        real mouse event at the element's position. */
-    await cell(page, '#ecf6ff').click({ force: true });
+    await cell(page, '#ffffff').click({ force: true });
     check('a real click on a refused colour changes nothing',
       JSON.stringify(await saved(page)) === JSON.stringify(before));
     check('...and says why', /vanish/i.test(await page.textContent('#sh-msg')), await page.textContent('#sh-msg'));
     check('...and the preview did not move', (await preview(page)) === pic0);
 
     /* --- a legal click, per part, live --- */
-    await cell(page, '#ff7edb').click();
+    await cell(page, '#ff2bd6').click();
     const pic1 = await preview(page);
-    check('a legal window colour is painted', (await saved(page)).window === '#ff7edb');
+    check('a legal window colour is painted', (await saved(page)).window === '#ff2bd6');
     check('the preview repainted live', pic1 !== pic0);
     check('the Window tab dot shows the new colour',
-      (await tab(page, 'window').locator('.sh-dot').evaluate(n => getComputedStyle(n).backgroundColor)) === 'rgb(255, 126, 219)');
+      (await tab(page, 'window').locator('.sh-dot').evaluate(n => getComputedStyle(n).backgroundColor)) === 'rgb(255, 43, 214)');
 
     await tab(page, 'nose').click();
-    await cell(page, '#ff9d4d').click();
+    await cell(page, '#ff7a1a').click();
     await tab(page, 'fire').click();
-    await cell(page, '#b6ff6a').click();
+    await cell(page, '#a8ff1f').click();
     await tab(page, 'body').click();
-    await cell(page, '#ff6b7d').click();
-    const want = { nose: '#ff9d4d', window: '#ff7edb', body: '#ff6b7d', fire: '#b6ff6a' };
+    await cell(page, '#ff3b30').click();
+    const want = { nose: '#ff7a1a', window: '#ff2bd6', body: '#ff3b30', fire: '#a8ff1f' };
     check('each part took its own colour, independently',
       JSON.stringify(await saved(page)) === JSON.stringify(want), JSON.stringify(await saved(page)));
     await page.screenshot({ path: path.join(SHOTS, 'ship_panel_parts.png') });
@@ -141,9 +143,17 @@ async function main() {
     await tab(page, 'window').click();
     await cell(page, '#35e6ff').focus();
     await page.keyboard.press('ArrowRight');
-    const landed = await page.evaluate(() => document.activeElement.getAttribute('data-hex'));
-    check('ArrowRight from Signal Cyan skips the refused Ice and Hull White',
-      landed === '#9db4d6' && (await saved(page)).window === '#9db4d6', landed);
+    let landed = await page.evaluate(() => document.activeElement.getAttribute('data-hex'));
+    check('ArrowRight from Signal Cyan paints the next colour, Azure',
+      landed === '#1a9dff' && (await saved(page)).window === '#1a9dff', landed);
+    /* Signal Cyan is first in the grid, so ArrowLeft wraps round the end of
+       it: past the locked gold AND the refused Nova White, onto Mint. */
+    await cell(page, '#35e6ff').click();
+    await cell(page, '#35e6ff').focus();
+    await page.keyboard.press('ArrowLeft');
+    landed = await page.evaluate(() => document.activeElement.getAttribute('data-hex'));
+    check('ArrowLeft from Signal Cyan wraps past the locked gold and the refused Nova White',
+      landed === '#1affb0' && (await saved(page)).window === '#1affb0', landed);
 
     /* --- persistence across a reload --- */
     for (const k of Object.keys(want)) {

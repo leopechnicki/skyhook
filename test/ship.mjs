@@ -12,7 +12,7 @@
  *   2. NO COMBINATION CAN MAKE THE SHIP UNREADABLE. With one colour, a menu of
  *      individually-visible colours was enough. With four it is not - a pale
  *      window on a pale hull vanishes - so the rule is on the COMBINATION, and
- *      every one of the 12^4 menu combinations is walked through both the
+ *      every one of the N^4 menu combinations is walked through both the
  *      gate (normalise) and the tap path (set).
  *
  *   3. THE CROWN IS EARNED, NOT STORED, AND IT GIVES THE PAINT BACK. Gold
@@ -148,17 +148,17 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
     check(`set('${part}') refuses an off-menu colour`, S.set(part, '#000000') === false);
     check(`set('${part}') refuses gold`, S.set(part, S.GOLD) === false);
   }
-  check('set() refuses a part that does not exist', S.set('wings', '#ff7edb') === false);
+  check('set() refuses a part that does not exist', S.set('wings', '#ff2bd6') === false);
   check('...and none of those refusals changed the ship', S.isDefault());
 
   check('set() accepts a menu colour on one part and reports the change',
-    S.set('fire', '#ff7edb') === true);
+    S.set('fire', '#ff2bd6') === true);
   check('...only that part changed',
-    same(plain(S.saved()), { nose: S.DEFAULT, window: S.DEFAULT, body: S.DEFAULT, fire: '#ff7edb' }),
+    same(plain(S.saved()), { nose: S.DEFAULT, window: S.DEFAULT, body: S.DEFAULT, fire: '#ff2bd6' }),
     JSON.stringify(S.saved()));
-  check('setting the same colour twice is a no-op', S.set('fire', '#ff7edb') === false);
+  check('setting the same colour twice is a no-op', S.set('fire', '#ff2bd6') === false);
   check('the choice is written to local storage, not just held in memory',
-    JSON.parse(storage.get(S.STORE_KEY) || '{}').fire === '#ff7edb', String(storage.get(S.STORE_KEY)));
+    JSON.parse(storage.get(S.STORE_KEY) || '{}').fire === '#ff2bd6', String(storage.get(S.STORE_KEY)));
 
   check('reset() puts the shipped ship back on every part', S.reset() === true && S.isDefault());
 }
@@ -182,11 +182,11 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
   const gold = { nose: S.GOLD, window: S.GOLD, body: S.GOLD, fire: S.GOLD };
   check('the gold crown reads', S.readable(gold).length === 0, JSON.stringify(S.readable(gold)));
 
-  const pale = { ...plain(S.DEFAULTS), window: '#ecf6ff' };
-  check('a Hull White window on the default hull is refused by the rule',
+  const pale = { ...plain(S.DEFAULTS), window: '#ffffff' };
+  check('a Nova White window on the default hull is refused by the rule',
     S.readable(pale).some(b => b.part === 'window'), JSON.stringify(S.readable(pale)));
-  const blunt = { ...plain(S.DEFAULTS), nose: '#ecf6ff' };
-  check('a Hull White nose - the ship loses its front - is refused by the rule',
+  const blunt = { ...plain(S.DEFAULTS), nose: '#ffffff' };
+  check('a Nova White nose - the ship loses its front - is refused by the rule',
     S.readable(blunt).some(b => b.part === 'nose'), JSON.stringify(S.readable(blunt)));
 
   /* Input that did not come from the menu: the rule has to catch a colour
@@ -206,7 +206,7 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
     dW >= S.MARK_DE * 1.2, dW.toFixed(3));
   check('the default nose cone clears MARK_DE with margin', dN >= S.MARK_DE * 1.2, dN.toFixed(3));
 
-  /* --- all 12^4 = 20736 menu combinations --- */
+  /* --- every N^4 menu combination (11^4 = 14641 today) --- */
   let total = 0, failing = 0, gateBroken = [], gateChangedGood = [],
     gateUnstable = [], gateNotIdem = [], offMenu = [];
   const failingParts = { nose: 0, window: 0, body: 0, fire: 0 };
@@ -239,9 +239,9 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
 
   /* The correction is the documented one: the failing part goes back to its
      default, and nothing else moves. */
-  const fixed = plain(S.normalise({ nose: '#ff6b7d', window: '#ecf6ff', body: '#7c8cff', fire: '#b6ff6a' }));
+  const fixed = plain(S.normalise({ nose: '#ff3b30', window: '#ffffff', body: '#8a72ff', fire: '#a8ff1f' }));
   check('a vanishing window is corrected to the default window, the rest untouched',
-    same(fixed, { nose: '#ff6b7d', window: S.DEFAULT, body: '#7c8cff', fire: '#b6ff6a' }),
+    same(fixed, { nose: '#ff3b30', window: S.DEFAULT, body: '#8a72ff', fire: '#a8ff1f' }),
     JSON.stringify(fixed));
 
   /* Garbage from storage or the network, part by part. */
@@ -287,15 +287,31 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
   check('a refused tap changes nothing', refusalMoved === null, JSON.stringify(refusalMoved));
   check('every refusal comes with a reason the player can read', silent === null, JSON.stringify(silent));
 
-  /* The ordering trap, explicitly: a body change that would strand the
-     current window is refused, and says it is the WINDOW that would go. */
+  /* The ordering trap. On the first, pastel menu a BODY change could strand
+     the current window (an Ice window on a Warning Red body, then the body
+     to Signal Cyan: the window vanished, so the body change was refused).
+     The saturated menu has no such pair - every chromatic mark reads on
+     every body - and the one refused mark, Nova White, is refused on EVERY
+     body. Both halves are asserted, so a future pastel that brings the trap
+     back fails here instead of in a player's hands. why() is still asked
+     against the current paint every time; this only pins what it answers. */
   S.reset();
-  S.set('body', '#ff6b7d');                 // Warning Red body: Ice window reads on it...
-  const iceOk = S.set('window', '#8af4ff');
-  const why = S.why('body', '#35e6ff');      // ...but not on Signal Cyan
-  check('Ice window is legal on a Warning Red body', iceOk === true);
-  check('switching that body to Signal Cyan would hide the window, so it is refused with the reason',
-    S.set('body', '#35e6ff') === false && /window/i.test(why) && S.saved().body === '#ff6b7d', why);
+  const chroma = hexes.filter(h => h !== '#ffffff');
+  let stranded = null, whiteOk = null;
+  for (const body of hexes) for (const mark of chroma) {
+    const bad = S.readable({ nose: mark, window: mark, body, fire: body });
+    if (bad.length) { stranded = { body, mark, bad: plain(bad) }; break; }
+  }
+  for (const body of hexes) {
+    if (!S.readable({ ...plain(S.DEFAULTS), body, window: '#ffffff' }).some(b => b.part === 'window')) whiteOk = body;
+  }
+  check('every chromatic nose and window reads on every body on the menu', stranded === null,
+    JSON.stringify(stranded));
+  check('a Nova White window is refused on every body, not just some', whiteOk === null, String(whiteOk));
+  S.set('body', '#ff3b30');
+  const why = S.why('window', '#ffffff');
+  check('...and the refusal names the window and leaves the paint alone',
+    S.set('window', '#ffffff') === false && /window/i.test(why) && S.saved().window === S.DEFAULT, why);
 }
 
 /* ==========================================================================
@@ -305,7 +321,7 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
   const { SK, storage } = load();
   const S = SK.Ship;
   const R = SK.Rocket;
-  const mine = { nose: '#ff6b7d', window: '#7c8cff', body: '#4dffb4', fire: '#ff7edb' };
+  const mine = { nose: '#ff3b30', window: '#8a72ff', body: '#1affb0', fire: '#ff2bd6' };
   for (const k of S.PARTS) S.set(k, mine[k]);
   check('a four-part custom paint is set', same(plain(S.saved()), mine), JSON.stringify(S.saved()));
   const GOLDP = { nose: S.GOLD, window: S.GOLD, body: S.GOLD, fire: S.GOLD };
@@ -346,13 +362,13 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
     !String(storage.get(S.STORE_KEY)).includes(S.GOLD), String(storage.get(S.STORE_KEY)));
 
   /* A pick made while crowned is saved and waits under the crown. */
-  S.set('fire', '#b6ff6a');
+  S.set('fire', '#a8ff1f');
   check('a pick made while crowned is saved but the ship stays gold',
-    S.saved().fire === '#b6ff6a' && S.current().fire === S.GOLD);
+    S.saved().fire === '#a8ff1f' && S.current().fire === S.GOLD);
 
   /* Losing the top spot mid-session gives every part straight back. */
   S.setChampionName('klaudia');
-  const back = { ...mine, fire: '#b6ff6a' };
+  const back = { ...mine, fire: '#a8ff1f' };
   check('losing #1 restores all four parts exactly', same(plain(S.current()), back),
     JSON.stringify(S.current()));
   const after = R.resolve();
@@ -370,22 +386,22 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
   let beats = 0;
   S.onChange(() => { beats++; });
   S.setChampionName('someone-else');
-  S.set('nose', '#ffd166');
+  S.set('nose', '#ff7a1a');
   check('onChange fires for both a lost crown and a new colour', beats === 2, String(beats));
 
   S.onChange(() => { throw new Error('bad listener'); });
   let survived = true;
-  try { S.set('nose', '#ff9d4d'); } catch (e) { survived = false; }
+  try { S.set('nose', '#ff7a1a'); } catch (e) { survived = false; }
   check('a broken listener cannot break the ship', survived);
 
   /* forceChampion is the local preview hook (?gold=1). Cosmetic: visible,
      never written down. */
   const { SK: SK3, storage: st3 } = load();
-  SK3.Ship.set('body', '#b6ff6a');
+  SK3.Ship.set('body', '#a8ff1f');
   SK3.Ship.forceChampion(true);
   check('a previewed crown paints gold', SK3.Ship.current().body === SK3.Ship.GOLD);
   check('...but is not a real crown', SK3.Ship.isChampion() && !SK3.Ship.isCrowned());
-  check('...and is never persisted', JSON.parse(st3.get(SK3.Ship.STORE_KEY)).body === '#b6ff6a');
+  check('...and is never persisted', JSON.parse(st3.get(SK3.Ship.STORE_KEY)).body === '#a8ff1f');
 }
 
 /* ==========================================================================
@@ -394,7 +410,7 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
 {
   const storage = new Map();
   const { SK } = load({ storage });
-  const want = { nose: '#ffd166', window: '#ff6b7d', body: '#b98cff', fire: '#4dffb4' };
+  const want = { nose: '#ff7a1a', window: '#ff3b30', body: '#c957ff', fire: '#1affb0' };
   for (const k of SK.Ship.PARTS) SK.Ship.set(k, want[k]);
   const { SK: again } = load({ storage });
   check('a four-part paint survives a page reload', same(plain(again.Ship.saved()), want),
@@ -409,17 +425,34 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
 {
   /* A hand-edited storage entry cannot mint gold, nor an unreadable ship. */
   const storage = new Map();
-  storage.set('skyhook.shipPaint', JSON.stringify({ nose: '#ffc21a', window: '#ecf6ff', body: '#35e6ff', fire: '#000000' }));
+  storage.set('skyhook.shipPaint', JSON.stringify({ nose: '#ffc21a', window: '#ffffff', body: '#35e6ff', fire: '#000000' }));
   const { SK } = load({ storage });
   check('a forged stored paint loads corrected: no gold, window readable, fire on the menu',
     same(plain(SK.Ship.saved()), plain(SK.Ship.DEFAULTS)), JSON.stringify(SK.Ship.saved()));
 }
 {
   /* Somebody who painted a ship with the single-colour build keeps it. */
+  /* (Stored with the first menu's Magenta, so it also crosses RENAMED.) */
   const storage = new Map([['skyhook.shipColour', '#ff7edb']]);
   const { SK } = load({ storage });
-  check('the old single-colour choice migrates onto all four parts',
-    SK.Ship.PARTS.every(k => SK.Ship.saved()[k] === '#ff7edb'), JSON.stringify(SK.Ship.saved()));
+  check('the old single-colour choice migrates onto all four parts, in the new Magenta',
+    SK.Ship.PARTS.every(k => SK.Ship.saved()[k] === '#ff2bd6'), JSON.stringify(SK.Ship.saved()));
+}
+{
+  /* The palette swap must not reset anybody. A paint saved with the first
+     (pastel) menu loads as the same family on the saturated one. */
+  const S0 = load().SK.Ship;
+  const targets = Object.values(plain(S0.RENAMED));
+  check('every renamed colour lands on the current menu', targets.every(h => S0.isSwatch(h)),
+    JSON.stringify(targets.filter(h => !S0.isSwatch(h))));
+  check('no current swatch is also an old name (the map cannot loop)',
+    Object.keys(plain(S0.RENAMED)).every(h => !S0.isSwatch(h)));
+  const storage = new Map([['skyhook.shipPaint',
+    JSON.stringify({ nose: '#ff9d4d', window: '#7c8cff', body: '#b98cff', fire: '#ffd166' })]]);
+  const { SK } = load({ storage });
+  check('a first-menu paint loads as its saturated equivalent, part by part',
+    same(plain(SK.Ship.saved()), { nose: '#ff7a1a', window: '#8a72ff', body: '#c957ff', fire: '#ff7a1a' }),
+    JSON.stringify(SK.Ship.saved()));
 }
 
 /* ==========================================================================
@@ -456,7 +489,7 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
   const SURF = { nose: ['nose'], window: ['glass'], body: ['hull', 'hullD', 'trim'], fire: ['fire', 'fireCool'] };
   const ALL = ['hull', 'hullD', 'trim', 'nose', 'glass', 'fire', 'fireCool'];
   for (const part of SK.Ship.PARTS) {
-    const p = { ...plain(SK.Ship.DEFAULTS), [part]: '#ff6b7d' };
+    const p = { ...plain(SK.Ship.DEFAULTS), [part]: '#ff3b30' };
     const r = R.resolve(p);
     const moved = ALL.filter(k => !same(r[k], c[k]));
     check(`changing only the ${part} changes only the ${part}'s surfaces`,
@@ -494,8 +527,9 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
   /* 96 distinct paints, each at several burn levels - far past what a player
      browsing the customiser produces. */
   for (let i = 0; i < 96; i++) {
-    const paint = { nose: hexes[i % 12], window: hexes[(i * 5) % 12],
-      body: hexes[(i * 7) % 12], fire: hexes[(i * 11 + 3) % 12] };
+    const n = hexes.length;
+    const paint = { nose: hexes[i % n], window: hexes[(i * 5) % n],
+      body: hexes[(i * 7) % n], fire: hexes[(i * 11 + 3) % n] };
     for (const burn of [0, 0.25, 0.5, 0.75, 1]) {
       R.draw(g, 100, 100, 0, 14, i * 0.1, { burn, thrust: 0.4, paint });
     }
@@ -560,6 +594,23 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
     same(listed.map(h => h.toLowerCase()).sort(), menu), JSON.stringify(listed));
   check('champion gold cannot be stored on an account either',
     !listed.map(h => h.toLowerCase()).includes(SK.Ship.GOLD));
+
+  /* The palette swap, in the database: the SQL old -> new map is the client's
+     RENAMED, pair for pair, and it runs before the CHECKs are put back. */
+  const ren = /create or replace function public\.ship_colour_renamed[\s\S]*?\$\$([\s\S]*?)\$\$/i.exec(code);
+  const sqlMap = {};
+  for (const m of ((ren && ren[1]) || '').matchAll(/when '(#[0-9a-f]{6})' then '(#[0-9a-f]{6})'/gi)) {
+    sqlMap[m[1].toLowerCase()] = m[2].toLowerCase();
+  }
+  const sortObj = o => JSON.stringify(Object.keys(o).sort().map(k => [k, o[k]]));
+  check('the database remaps first-menu colours exactly as SK.Ship.RENAMED does',
+    sortObj(sqlMap) === sortObj(plain(SK.Ship.RENAMED)), JSON.stringify(sqlMap));
+  const at = s => norm.indexOf(s);
+  check('...on every part, after the single-colour migration and before the CHECKs return',
+    SK.Ship.PARTS.every(p => norm.includes(`ship_${p} = public.ship_colour_renamed(ship_${p})`)) &&
+    at('drop column ship_colour') < at('ship_nose = public.ship_colour_renamed(ship_nose)') &&
+    at('ship_nose = public.ship_colour_renamed(ship_nose)') <
+      at('add constraint profiles_ship_nose_allowed'));
 
   for (const part of SK.Ship.PARTS) {
     check(`ship_${part} is added idempotently and checked against that one list`,
@@ -653,7 +704,7 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
   };
 
   const A = device();
-  const want = { nose: '#ff9d4d', window: '#7c8cff', body: '#9db4d6', fire: '#b6ff6a' };
+  const want = { nose: '#ff7a1a', window: '#8a72ff', body: '#1a9dff', fire: '#a8ff1f' };
   for (const k of A.Ship.PARTS) A.Ship.set(k, want[k]);
   check('device A painted all four parts', same(plain(A.Ship.saved()), want));
   check('device A saves the paint to the account', (await A.Online.saveShipPaint(A.Ship.saved())) === true,
@@ -675,7 +726,7 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
 
   /* A row somebody wrote by hand that is on the menu but does not read. It
      must be corrected on the way IN, before a pixel of it is drawn. */
-  Object.assign(db[UID], { ship_window: '#ecf6ff', ship_body: '#35e6ff' });
+  Object.assign(db[UID], { ship_window: '#ffffff', ship_body: '#35e6ff' });
   const C = device();
   C.Ship.setPaint(await C.Online.loadShipPaint());
   check('an unreadable stored combination is corrected on load, not painted',
