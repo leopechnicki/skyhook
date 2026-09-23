@@ -326,7 +326,7 @@
        it a thing a player can choose (P / Esc do the same), placed beside
        mute so the top-right corner stays the one place for game controls. */
     this.pauseRect = { x: W - 108, y: 16, w: 40, h: 40 };          // drawn size
-    this.pauseHit  = { x: W - 122, y: 6,  w: 56, h: 60 };          // stops where muteHit starts
+    this.pauseHit  = { x: W - 122, y: 6,  w: 55, h: 60 };          // ends 1 unit short of muteHit: no shared edge
     this.shipRectPause = { x: W / 2 - 116, y: 492, w: 232, h: 44 };
     /* Two rows, like the bottom band on the title: with a backend it sits
        under LEADERBOARD, without one it takes LEADERBOARD's row. */
