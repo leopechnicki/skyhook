@@ -171,6 +171,8 @@ jobs:
       # run) and - the regression worth having CI for - a CONFIGURED build
       # whose backend is refusing connections: the game must still start, still
       # record a local high score, and never throw.
+      - name: Ship customiser (per-part paint, refusals, reload, gold preview)
+        run: node test/ship_ui.mjs
       - name: Leaderboard UI (incl. dead-backend fallback)
         run: node test/leaderboard_ui.mjs
 

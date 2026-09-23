@@ -15,6 +15,8 @@
     "test:latency": "node test/latency.mjs",
     "test:sprites": "node test/sprites.mjs",
     "test:ship": "node test/ship.mjs",
+    "test:ship-ui": "node test/ship_ui.mjs",
+    "test:ship-live": "node test/ship_live.mjs",
     "test:perf": "node test/perf.mjs",
     "test:art": "node test/art_shots.mjs",
     "test:online": "node test/online.mjs",
@@ -23,7 +25,7 @@
     "test:leaderboard": "node test/leaderboard_ui.mjs",
     "test:rocket": "node test/rocket_shots.mjs",
     "shots": "node test/shipping_shots.mjs",
-    "test:ci": "node test/world.mjs && node test/balance.mjs --ci && node test/latency.mjs && node test/online.mjs && node test/pages_stub.mjs && node test/ship.mjs && node test/staging.mjs && node test/smoke.mjs && node test/sprites.mjs && node test/leaderboard_ui.mjs && node test/perf.mjs"
+    "test:ci": "node test/world.mjs && node test/balance.mjs --ci && node test/latency.mjs && node test/online.mjs && node test/pages_stub.mjs && node test/ship.mjs && node test/ship_ui.mjs && node test/staging.mjs && node test/smoke.mjs && node test/sprites.mjs && node test/leaderboard_ui.mjs && node test/perf.mjs"
   },
   "devDependencies": {
     "playwright": "^1.55.1"

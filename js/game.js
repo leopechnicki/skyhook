@@ -1704,7 +1704,8 @@
     ctx.stroke();
     ctx.restore();
 
-    /* A filled dot in the ship's current colour, inset at the left. It is the
+    /* A filled dot in the ship's current body colour (the rim and fins - the
+       part that reads as "the ship's colour" at a glance), inset at the left. It is the
        button's second job: a label alone says a customiser EXISTS, a live
        swatch says what it is currently set to and that tapping it will change
        something visible. It is also the cheapest possible confirmation that a
@@ -1813,7 +1814,7 @@
        is the same button on both layouts. */
     if (typeof this.onUi === 'function') {
       this._drawPanelButton(ctx, this.shipRect, 'CUSTOMISE SHIP', 1,
-        SK.Ship ? SK.Ship.current() : null);
+        SK.Ship ? SK.Ship.current().body : null);
     }
 
     /* 638 before the customise button existed. Moved down so the button has

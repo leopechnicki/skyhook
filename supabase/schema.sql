@@ -426,47 +426,60 @@ $$;
 grant execute on function public.my_rank() to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 8. ship_colour - the hull the player painted
+-- 8. ship paint - the ship the player painted, one colour per part
 -- ---------------------------------------------------------------------------
 -- Cosmetic, and the only thing in this file that is. It lives on profiles
 -- because it belongs to the ACCOUNT rather than to a run: the point of storing
 -- it at all is that a ship painted on a laptop is painted on the phone too.
--- The game works with this column absent - js/ui_ship.js keeps the colour in
+-- The game works with these columns absent - js/ui_ship.js keeps the paint in
 -- localStorage and treats every server answer as optional - so an unmigrated
 -- project loses cross-device sync and nothing else.
 --
--- TWO RULES, BOTH ENFORCED HERE RATHER THAN IN THE CLIENT
+-- Four parts, four columns: ship_nose, ship_window, ship_body, ship_fire.
+-- NULL means "never chosen", i.e. the game's shipped default for that part:
+-- the default is a property of the game, and writing today's default into
+-- every row would freeze it there.
 --
---   1. The menu is an ALLOW-LIST, and it is the same list js/ship.js shows.
---      The client is attacker-controlled, so "you cannot paint yourself
---      invisible" has to be a constraint, not a UI affordance. A colour off
---      this list is rejected by Postgres.
+-- THREE RULES, TWO ENFORCED HERE
+--
+--   1. Every column holds an ALLOW-LIST, and it is the same list js/ship.js
+--      shows. The client is attacker-controlled, so "that colour is not on the
+--      menu" has to be a constraint, not a UI affordance. The list is written
+--      ONCE, in ship_colour_allowed() below, and all four CHECKs call it - four
+--      copies of a twelve-item list is how one of them drifts.
 --
 --   2. Champion gold (#ffc21a) is deliberately NOT on the list. Gold is a
 --      rank, not a choice: the game paints it while the leaderboard says you
 --      are #1 and never stores it, so there is nothing to forge. Writing gold
---      into your own row fails this constraint.
+--      into your own row fails the constraint, on any part.
+--
+--   3. The COMBINATION must leave the ship readable (a pale window on a pale
+--      hull vanishes even though both colours are on the menu). That rule is
+--      NOT restated here, on purpose: it is measured on the colours the
+--      renderer paints, and a second copy in SQL would be a second derivation
+--      to keep in step with js/rocket.js. It does not need one. Every paint
+--      that comes out of this table passes SK.Ship.normalise() before it is
+--      drawn, which corrects a combination that does not read - and the only
+--      ship a row can ever affect is its own author's, on their own screen.
 --
 -- Note what is still true after this section, and what is NOT. Section 6 does
 -- grant a player UPDATE on their own profile row - profiles_update_own plus
 -- `grant update (username)` - because renaming yourself is a feature. That
--- grant is COLUMN-SCOPED and ship_colour is not in it, which is the whole
--- point: a player holding nothing but the anon key and their own session
--- still cannot write this column directly, because the grant that would let
--- them names only `username`. The only way to write ship_colour is the
+-- grant is COLUMN-SCOPED and none of the ship_* columns is in it, which is
+-- the whole point: a player holding nothing but the anon key and their own
+-- session still cannot write these columns directly, because the grant that
+-- would let them names only `username`. The only way to write them is the
 -- security-definer function below, which writes auth.uid()'s row and no
 -- other, and touches no other column - so it cannot be used to rename
 -- anybody, including yourself, and the rename path cannot be used to repaint
 -- anybody, including yourself. The two writes stay disjoint.
 
-alter table public.profiles
-  add column if not exists ship_colour text;
-
-alter table public.profiles
-  drop constraint if exists profiles_ship_colour_allowed;
-alter table public.profiles
-  add constraint profiles_ship_colour_allowed
-  check (ship_colour is null or ship_colour in (
+create or replace function public.ship_colour_allowed(c text)
+returns boolean
+language sql
+immutable
+as $$
+  select c is null or c in (
     '#35e6ff',  -- Signal Cyan (the default)
     '#8af4ff',  -- Ice
     '#ecf6ff',  -- Hull White
@@ -479,40 +492,74 @@ alter table public.profiles
     '#ffd166',  -- Solar
     '#b6ff6a',  -- Acid
     '#4dffb4'   -- Mint
-  ));
+  );
+$$;
 
-create or replace function public.set_ship_colour(colour text)
-returns text
+alter table public.profiles
+  add column if not exists ship_nose   text,
+  add column if not exists ship_window text,
+  add column if not exists ship_body   text,
+  add column if not exists ship_fire   text;
+
+alter table public.profiles drop constraint if exists profiles_ship_nose_allowed;
+alter table public.profiles drop constraint if exists profiles_ship_window_allowed;
+alter table public.profiles drop constraint if exists profiles_ship_body_allowed;
+alter table public.profiles drop constraint if exists profiles_ship_fire_allowed;
+alter table public.profiles
+  add constraint profiles_ship_nose_allowed   check (public.ship_colour_allowed(ship_nose)),
+  add constraint profiles_ship_window_allowed check (public.ship_colour_allowed(ship_window)),
+  add constraint profiles_ship_body_allowed   check (public.ship_colour_allowed(ship_body)),
+  add constraint profiles_ship_fire_allowed   check (public.ship_colour_allowed(ship_fire));
+
+-- The single-colour build stored one hex in ship_colour. Anybody who painted
+-- a ship with it keeps that ship: the colour is copied onto all four parts
+-- (exactly how that build drew it), and only then is the old column dropped.
+-- A no-op on a project that never had it.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'profiles'
+                and column_name = 'ship_colour') then
+    update public.profiles
+       set ship_nose   = coalesce(ship_nose,   ship_colour),
+           ship_window = coalesce(ship_window, ship_colour),
+           ship_body   = coalesce(ship_body,   ship_colour),
+           ship_fire   = coalesce(ship_fire,   ship_colour)
+     where ship_colour is not null;
+    alter table public.profiles drop constraint if exists profiles_ship_colour_allowed;
+    alter table public.profiles drop column ship_colour;
+  end if;
+end;
+$$;
+drop function if exists public.set_ship_colour(text);
+
+create or replace function public.set_ship_paint(
+  p_nose text, p_window text, p_body text, p_fire text)
+returns void
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
-declare
-  want text;
 begin
   if auth.uid() is null then
     raise exception 'not signed in' using errcode = '42501';
   end if;
 
-  want := lower(btrim(coalesce(colour, '')));
-
-  -- An empty string means "back to the shipped default", which is stored as
-  -- NULL rather than as a hex: the default is a property of the game, and
-  -- writing today's default into every row would freeze it there.
-  if want = '' then
-    update public.profiles set ship_colour = null where id = auth.uid();
-    return '';
-  end if;
-
-  -- No validation here on purpose. The CHECK constraint above is the rule,
-  -- and duplicating it in this function is how the two drift apart.
-  update public.profiles set ship_colour = want where id = auth.uid();
-  return want;
+  -- An empty string means "back to the shipped default" and is stored as
+  -- NULL. No other validation here on purpose: the CHECK constraints above
+  -- are the rule, and duplicating them in this function is how the two drift
+  -- apart. One statement, so a half-saved ship cannot exist.
+  update public.profiles
+     set ship_nose   = nullif(lower(btrim(coalesce(p_nose,   ''))), ''),
+         ship_window = nullif(lower(btrim(coalesce(p_window, ''))), ''),
+         ship_body   = nullif(lower(btrim(coalesce(p_body,   ''))), ''),
+         ship_fire   = nullif(lower(btrim(coalesce(p_fire,   ''))), '')
+   where id = auth.uid();
 end;
 $$;
 
-revoke execute on function public.set_ship_colour(text) from anon, public;
-grant  execute on function public.set_ship_colour(text) to authenticated;
+revoke execute on function public.set_ship_paint(text, text, text, text) from anon, public;
+grant  execute on function public.set_ship_paint(text, text, text, text) to authenticated;
 
 -- ===========================================================================
 -- Verification - run these after the script and read the answers.
