@@ -371,6 +371,75 @@ const near = (a, b, tol) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
     css.includes('.sh-swatch') && css.includes('.sh-preview'));
 }
 
+/* ==========================================================================
+ * 8. The colour follows the account - without becoming a dependency
+ * ======================================================================
+ * Two claims, and they pull in opposite directions, so both are asserted:
+ *
+ *   - the menu the client shows and the allow-list the DATABASE enforces are
+ *     the same list. The client is attacker-controlled; if the server does
+ *     not hold the same rule, "you cannot paint yourself invisible" and "gold
+ *     cannot be stored" are decorations rather than rules.
+ *
+ *   - and none of it is load-bearing. Signed out, unconfigured or offline,
+ *     both calls have to answer quietly rather than reject, because the
+ *     colour is already saved locally and already on screen.
+ */
+{
+  const { SK } = load();
+  const sql = fs.readFileSync(path.join(ROOT, 'supabase/schema.sql'), 'utf8');
+  const norm = sql.replace(/\s+/g, ' ').toLowerCase();
+
+  check('the column exists and is added idempotently',
+    norm.includes('add column if not exists ship_colour text'));
+
+  const listed = ((/check \(ship_colour is null or ship_colour in \(([^)]*)\)/i
+    .exec(sql.replace(/--.*/g, '')) || [, ''])[1]
+    .match(/#[0-9a-f]{6}/gi) || []).map(h => h.toLowerCase());
+  const menu = SK.Ship.SWATCHES.map(s => s.hex).slice().sort();
+  check('the database allow-list is exactly the menu the client shows',
+    JSON.stringify(listed.slice().sort()) === JSON.stringify(menu),
+    JSON.stringify(listed));
+  check('champion gold cannot be stored on an account either',
+    !listed.includes(SK.Ship.GOLD));
+
+  /* Why a cosmetic column did not cost the schema its central rule. */
+  check('there is still NO update policy on profiles',
+    !/create policy[^;]*for update[^;]*on public\.profiles/.test(norm));
+  check('the only write path is a security-definer function scoped to auth.uid()',
+    norm.includes('create or replace function public.set_ship_colour') &&
+    norm.includes('security definer') &&
+    norm.includes('update public.profiles set ship_colour = want where id = auth.uid()'));
+  check('...and that function is not callable with the anon key',
+    norm.includes('revoke execute on function public.set_ship_colour(text) from anon, public') &&
+    norm.includes('grant execute on function public.set_ship_colour(text) to authenticated'));
+  check('the rename path is untouched - the function writes ship_colour and nothing else',
+    !/set_ship_colour[\s\S]*?\$\$;/i.exec(sql)[0].toLowerCase().includes('username'));
+}
+
+{
+  /* Offline, both calls must be non-events rather than errors. No fetch at
+     all in this sandbox: the harshest version of "there is no network". */
+  const sandbox = { Math, Date, console, JSON, Promise, setTimeout, clearTimeout };
+  vm.createContext(sandbox);
+  sandbox.window = sandbox;
+  sandbox.self = sandbox;
+  sandbox.location = { href: 'https://skyhookplay.com/', origin: 'https://skyhookplay.com', pathname: '/', search: '', hash: '' };
+  sandbox.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  sandbox.document = { createElement: () => fakeCanvas() };
+  for (const f of ['js/utils.js', 'js/online.js']) {
+    vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), sandbox);
+  }
+  const O = sandbox.SK.Online;
+  check('js/online.js exposes both halves of the account sync',
+    typeof O.saveShipColour === 'function' && typeof O.loadShipColour === 'function');
+
+  const saved = await O.saveShipColour('#ff7edb');
+  const loaded = await O.loadShipColour();
+  check('saving with no backend resolves false rather than rejecting', saved === false, String(saved));
+  check('loading with no backend resolves empty rather than rejecting', loaded === '', JSON.stringify(loaded));
+}
+
 console.log(`\n${fails === 0
   ? 'ship paint holds: the default ship is unchanged, no colour hides the ship, and gold is worn not picked'
   : fails + ' FAILURE(S)'}`);

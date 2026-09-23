@@ -300,6 +300,89 @@ $$;
 
 grant execute on function public.my_rank() to anon, authenticated;
 
+-- ---------------------------------------------------------------------------
+-- 8. ship_colour - the hull the player painted
+-- ---------------------------------------------------------------------------
+-- Cosmetic, and the only thing in this file that is. It lives on profiles
+-- because it belongs to the ACCOUNT rather than to a run: the point of storing
+-- it at all is that a ship painted on a laptop is painted on the phone too.
+-- The game works with this column absent - js/ui_ship.js keeps the colour in
+-- localStorage and treats every server answer as optional - so an unmigrated
+-- project loses cross-device sync and nothing else.
+--
+-- TWO RULES, BOTH ENFORCED HERE RATHER THAN IN THE CLIENT
+--
+--   1. The menu is an ALLOW-LIST, and it is the same list js/ship.js shows.
+--      The client is attacker-controlled, so "you cannot paint yourself
+--      invisible" has to be a constraint, not a UI affordance. A colour off
+--      this list is rejected by Postgres.
+--
+--   2. Champion gold (#ffc21a) is deliberately NOT on the list. Gold is a
+--      rank, not a choice: the game paints it while the leaderboard says you
+--      are #1 and never stores it, so there is nothing to forge. Writing gold
+--      into your own row fails this constraint.
+--
+-- Note what is still true after this section: there is NO update policy on
+-- public.profiles, and UPDATE is still revoked from anon and authenticated.
+-- The only way to write this column is the security-definer function below,
+-- which writes auth.uid()'s row and no other, and touches no other column -
+-- so it cannot be used to rename anybody, including yourself.
+
+alter table public.profiles
+  add column if not exists ship_colour text;
+
+alter table public.profiles
+  drop constraint if exists profiles_ship_colour_allowed;
+alter table public.profiles
+  add constraint profiles_ship_colour_allowed
+  check (ship_colour is null or ship_colour in (
+    '#35e6ff',  -- Signal Cyan (the default)
+    '#8af4ff',  -- Ice
+    '#ecf6ff',  -- Hull White
+    '#9db4d6',  -- Gunmetal
+    '#7c8cff',  -- Ion Blue
+    '#b98cff',  -- Nebula
+    '#ff7edb',  -- Magenta
+    '#ff6b7d',  -- Warning Red
+    '#ff9d4d',  -- Ember
+    '#ffd166',  -- Solar
+    '#b6ff6a',  -- Acid
+    '#4dffb4'   -- Mint
+  ));
+
+create or replace function public.set_ship_colour(colour text)
+returns text
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  want text;
+begin
+  if auth.uid() is null then
+    raise exception 'not signed in' using errcode = '42501';
+  end if;
+
+  want := lower(btrim(coalesce(colour, '')));
+
+  -- An empty string means "back to the shipped default", which is stored as
+  -- NULL rather than as a hex: the default is a property of the game, and
+  -- writing today's default into every row would freeze it there.
+  if want = '' then
+    update public.profiles set ship_colour = null where id = auth.uid();
+    return '';
+  end if;
+
+  -- No validation here on purpose. The CHECK constraint above is the rule,
+  -- and duplicating it in this function is how the two drift apart.
+  update public.profiles set ship_colour = want where id = auth.uid();
+  return want;
+end;
+$$;
+
+revoke execute on function public.set_ship_colour(text) from anon, public;
+grant  execute on function public.set_ship_colour(text) to authenticated;
+
 -- ===========================================================================
 -- Verification - run these after the script and read the answers.
 --
