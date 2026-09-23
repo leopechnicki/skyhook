@@ -570,7 +570,18 @@ const plain = o => JSON.parse(JSON.stringify(o));   // out of the vm realm
     /_drawPanelButton\([^)]*shipRect[^)]*CUSTOMISE SHIP/.test(game.replace(/\s+/g, ' ')));
   check('that button\'s dot is a colour, not the paint object',
     /SK\.Ship\.current\(\)\.body/.test(game));
-  check('that button is hit-tested on the title screen', /inRect\(this\.shipRect/.test(game));
+  /* One helper answers "where is the button on this screen" for BOTH the
+     hit test and the draw, and it has a door on each still screen. The
+     behaviour - open from pause, nothing moves, the paint lands - is proven
+     in a real browser by test/ship_access.mjs. */
+  const now = /_shipRectNow = function \(\) \{([\s\S]*?)\n  \};/.exec(game.replace(/\r\n/g, '\n'));
+  const body = now ? now[1] : '';
+  check('the customise button has a door on the title, PAUSED and game-over screens',
+    /'title'\) return this\.shipRect;/.test(body) && /'paused'\) return this\.shipRectPause;/.test(body) &&
+    /'over' && this\.overT > RETRY_LOCK/.test(body), body.trim().slice(0, 120));
+  check('...and the SAME answer is what gets hit-tested and what gets drawn',
+    /var ship = this\._shipRectNow\(\);\s*if \(onCanvas && ship && inRect\(ship, lx, ly\)\)/.test(game) &&
+    /_drawShipButton = function[\s\S]*?this\._shipRectNow\(\)/.test(game));
   check('the panel it opens is styled rather than shipped bare',
     css.includes('.sh-swatch') && css.includes('.sh-preview') && css.includes('.sh-part') &&
     css.includes('.sh-swatch.is-blocked'));

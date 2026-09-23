@@ -146,7 +146,10 @@
   <!-- =========================================================
        SHIP CUSTOMISER  -  HIDDEN BY DEFAULT
        ---------------------------------------------------------
-       Opened by the CUSTOMISE SHIP button on the title screen.
+       Opened by the CUSTOMISE SHIP button, which js/game.js draws
+       on every screen where the run is standing still: the title,
+       PAUSED and game over. One panel, three doors - the game only
+       emits 'openShip'; this markup is the only customiser there is.
        Unlike the leaderboard overlay above, this one has NO
        backend requirement: the colour lives in localStorage and
        the feature works on a file:// open with no network at

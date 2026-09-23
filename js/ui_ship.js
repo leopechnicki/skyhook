@@ -32,6 +32,18 @@
  * If ships ever become visible to other players, the crown must move to a
  * signed claim from the server and this note is the place that says so.
  *
+ * ONE PANEL, THREE DOORS
+ * ----------------------
+ * js/game.js emits 'openShip' from the title, the PAUSED screen and game
+ * over; this file answers all three with the same panel. Nothing here knows
+ * or cares which screen asked, and that is the point: opening it never
+ * touches the game's state, so a paused run is still paused, to the tick,
+ * when the panel closes, and the new paint is on the frozen rocket already
+ * (js/rocket.js asks SK.Ship.current() on every draw). While it is open,
+ * js/main.js keeps the keyboard away from the game - on PAUSED, space
+ * would otherwise mean "resume" - and Esc closes the panel without
+ * resuming anything.
+ *
  * ?gold=1 is deliberate, not an oversight: it is how the gold hull can be
  * LOOKED at - in review, in a screenshot, on staging - without first climbing
  * to the top of a live board. It says "Preview" on screen so it can never be

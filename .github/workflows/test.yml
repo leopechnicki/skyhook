@@ -158,6 +158,12 @@ jobs:
       # record a local high score, and never throw.
       - name: Ship customiser (per-part paint, refusals, reload, gold preview)
         run: node test/ship_ui.mjs
+      # Leo: "user is not able to change spaceship after start playing". Real
+      # clicks on the canvas: HUD pause -> CUSTOMISE -> repaint -> the run has
+      # not moved a tick and the frozen ship shows the paint; same from game
+      # over -> RETRY flies it; space/Esc never resume under the panel.
+      - name: Customise mid-session (pause + game over doors)
+        run: node test/ship_access.mjs
       - name: Leaderboard UI (incl. dead-backend fallback)
         run: node test/leaderboard_ui.mjs
 
