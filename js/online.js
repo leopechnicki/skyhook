@@ -134,7 +134,12 @@
     /* A password GoTrue refuses because it is the one already on the account.
        Silently accepting it would be worse: the player would think they had
        changed something. */
-    same_password: 'That is already your password. Choose a different one.'
+    same_password: 'That is already your password. Choose a different one.',
+
+    /* The per-account DAILY cap in supabase/schema.sql (scores_rate_limit),
+       raised with its own SQLSTATE precisely so this line can differ from the
+       per-minute one: "wait a minute" would be the wrong advice here. */
+    SKDAY: 'Daily score limit reached for this account. Your best is saved on this device - try again tomorrow.'
   };
 
   /* Some codes mean different things depending on what the player just asked
@@ -573,12 +578,64 @@
   }
 
   function payloadFor(run) {
-    return {
+    var out = {
       score: Math.floor(run.score),
       hooks: Math.floor(run.hooks),
       altitude: Math.floor(run.altitude || 0),
       duration_ms: Math.floor(run.durationMs)
     };
+    var tel = cleanTelemetry(run.telemetry);
+    if (tel) out.telemetry = tel;
+    return out;
+  }
+
+  /* ------------------------------------------------------- bot review */
+
+  /* The run telemetry js/game.js records, reduced to exactly the fields the
+     server reads and nothing else - integers only, offsets capped - so a
+     future field on the game side cannot start shipping by accident. A run
+     without telemetry (a pending run parked by an older build) is sent
+     without it; the server holds such a run for review, it does not refuse
+     it. */
+  var TELE_MAX = 400;
+  function cleanTelemetry(t) {
+    if (!t || typeof t !== 'object') return null;
+    function int(v) { v = Math.floor(Number(v)); return isFinite(v) && v >= 0 ? v : 0; }
+    var off = [];
+    if (t.off && t.off.length) {
+      for (var i = 0; i < t.off.length && off.length < TELE_MAX; i++) {
+        var o = Math.round(Number(t.off[i]));
+        if (isFinite(o)) off.push(o);
+      }
+    }
+    return {
+      v: int(t.v) || 1, hz: int(t.hz), n: int(t.n), syn: int(t.syn),
+      rel: int(t.rel), miss: int(t.miss), forced: int(t.forced), off: off
+    };
+  }
+
+  /* The client mirror of scores_review() in supabase/schema.sql, the same
+     way validateRun mirrors the CHECK constraints: the server decides, this
+     copy exists so test/botdef.mjs can pin the thresholds against the public
+     bot and a modelled human without a database. Keep the two in step -
+     test/online.mjs greps the SQL for these numbers. Returns the reasons a
+     run would be held for review; [] means it goes straight on the board. */
+  var REVIEW = { minGraded: 25, window: 6, core: 1, ratio: 0.9 };
+  function reviewRun(run) {
+    var t = run && run.telemetry;
+    if (!t || typeof t !== 'object') return ['no_telemetry'];
+    t = cleanTelemetry(t);
+    var reasons = [];
+    var graded = 0, core = 0;
+    for (var i = 0; i < t.off.length; i++) {
+      var a = Math.abs(t.off[i]);
+      if (a <= REVIEW.window) graded++;
+      if (a <= REVIEW.core) core++;
+    }
+    if (t.syn > 0) reasons.push('synthetic_input');
+    if (Math.floor(run.hooks) > t.rel + t.forced + 1 || t.rel > t.n) reasons.push('telemetry_mismatch');
+    if (graded >= REVIEW.minGraded && core >= REVIEW.ratio * graded) reasons.push('superhuman_timing');
+    return reasons;
   }
 
   /* ------------------------------------------------------------ public API */
@@ -624,6 +681,8 @@
     state: publicState,
     validateRun: validateRun,
     payloadFor: payloadFor,
+    reviewRun: reviewRun,
+    REVIEW: REVIEW,
 
     on: function (evt, fn) {
       if (listeners[evt] && typeof fn === 'function') listeners[evt].push(fn);
@@ -980,14 +1039,21 @@
         return Promise.resolve({ submitted: false, queued: true, reason: 'not signed in' });
       }
       return withToken(function (token) {
-        return request('/rest/v1/scores', {
+        /* Ask for the one column the server decided, so a run held for bot
+           review can say so instead of reporting a rank that does not
+           include it. This hands a bot a yes/no on each run - but so does
+           simply reading the public board, so it gives away nothing new,
+           and a human caught by a false positive deserves to be told. */
+        return request('/rest/v1/scores?select=flagged', {
           method: 'POST',
           token: token,
-          headers: { Prefer: 'return=minimal' },
+          headers: { Prefer: 'return=representation' },
           body: payloadFor(run)
         });
-      }).then(function () {
-        return { submitted: true, queued: false, reason: '' };
+      }).then(function (rows) {
+        var row = rows && rows.length ? rows[0] : rows;
+        var held = !!(row && row.flagged === true);
+        return { submitted: true, queued: false, reason: '', flagged: held };
       }, function (err) {
         var status = err && err.status;
         /* 4xx other than auth means the server judged the run itself - a
@@ -1061,12 +1127,17 @@
   function queuePending(run) {
     var prev = readJSON(K_PENDING);
     if (prev && prev.score >= run.score) return;
-    writeJSON(K_PENDING, {
+    var parked = {
       score: Math.floor(run.score),
       hooks: Math.floor(run.hooks),
       altitude: Math.floor(run.altitude || 0),
       durationMs: Math.floor(run.durationMs)
-    });
+    };
+    /* The telemetry travels with the run it describes. Dropping it here
+       would send every parked run to the review queue as no_telemetry. */
+    var tel = cleanTelemetry(run.telemetry);
+    if (tel) parked.telemetry = tel;
+    writeJSON(K_PENDING, parked);
   }
 
   /* "This address already has an account" arrives under more than one code

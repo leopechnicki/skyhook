@@ -565,6 +565,12 @@
         setStatus(res.queued ? 'saved here - will upload later' : 'score not saved');
         return null;
       }
+      /* Saved, but held for bot review (supabase/schema.sql, section 3b).
+         Say so: a RANK line that silently excludes the run would be a lie. */
+      if (res.flagged) {
+        setStatus('saved - held for review, not on the board yet');
+        return null;
+      }
       return Online.myRank().then(function (mine) {
         if (mine && mine.rank) {
           if (game) game.online.rank = mine.rank;
