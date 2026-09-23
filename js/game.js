@@ -133,6 +133,18 @@
   var TUTOR_AIM    = 52;    // prompt "TAP NOW" once the guide is this close
   var TUTOR_RESET  = 0.25;  // an assisted miss rewinds this fast
 
+  /* Run telemetry for the leaderboard's bot review (supabase/schema.sql,
+     scores_review). TELE_WIN is how far either side of a release, in ticks,
+     the game looks for the frame-perfect release it is graded against;
+     TELE_MAX caps the offsets kept so a marathon run cannot grow the payload
+     without bound. Neither touches the simulation. */
+  var TELE_WIN     = 30;      // ticks (0.25 s) either side of a release
+  var TELE_MAX     = 400;     // release offsets kept per run
+
+  function newTelemetry() {
+    return { v: 1, hz: Math.round(1 / STEP), n: 0, syn: 0, rel: 0, miss: 0, forced: 0, off: [] };
+  }
+
   /* Only the entries something actually reads. `star` and `meteor` used to
      live here and had no call sites left once js/celestial.js took over body
      and hazard art - a dead colour table is a trap, because the next person
@@ -279,6 +291,12 @@
     this.queuedAction = false; // input is consumed on the next sim tick
     this.lastActionT = -99;
     this.wasPlaying = false;
+    /* Set by main.js from the DOM event's isTrusted immediately before it
+       calls into the game, and consumed (reset) by action(). Anything that
+       reaches action() without going through a real browser input event -
+       dispatchEvent(), __SKYHOOK.tap(), a harness - arrives untrusted. */
+    this.inputTrusted = false;
+    this.tele = newTelemetry();
 
     /* Tap targets. Hit-tested BEFORE the generic "tap anywhere" action, so a
        results screen that later grows a purchase button cannot be triggered
@@ -442,6 +460,7 @@
     this.nodeCount = 0;
     this.hooks = 0;
     this.score = 0;
+    this.tele = newTelemetry();
     this.combo = 1;
     this.altitude = 0;
     this.particles.clear();
@@ -755,7 +774,8 @@
       score: this.score,
       hooks: this.hooks,
       altitude: this.altitude,
-      durationMs: Math.round(this.time * 1000)
+      durationMs: Math.round(this.time * 1000),
+      telemetry: this.telemetry()
     });
   };
 
@@ -768,6 +788,8 @@
   };
 
   Game.prototype.action = function () {
+    var trusted = this.inputTrusted === true;
+    this.inputTrusted = false;
     if (this.state === 'title') { this.start(); return; }
     if (this.state === 'paused') { this.resume(); return; }
     if (this.state === 'over') { if (this.overT > RETRY_LOCK) this.start(); return; }
@@ -778,6 +800,9 @@
        harness, which plays 240 simulated seconds in a fraction of a second. */
     if (this.time - this.lastActionT < ACT_DEBOUNCE) return;
     this.lastActionT = this.time;
+
+    this.tele.n++;
+    if (!trusted) this.tele.syn++;
 
     /* Input is queued and consumed by the next fixed tick, so the same taps
        at the same timestamps produce the same run at any refresh rate. */
@@ -887,7 +912,56 @@
         p.vy * (0.25 + Math.random() * 0.35) + j * 90,
         0.25 + Math.random() * 0.25, 2.2, burstCol(n), 2.4, true);
     }
-    if (forced) SK.Audio.snap();
+    if (forced) { SK.Audio.snap(); this.tele.forced++; }
+  };
+
+  /* Grade a MANUAL release against the frame-perfect one, for the
+     leaderboard's bot review. Read-only: it reads the orbit and the current
+     prediction and never touches the simulation or either RNG, so the world
+     stream and every replay are unchanged.
+
+     The measure is the offset, in sim ticks, between this release and the
+     tick within +-TELE_WIN at which the launch ray would pass closest to the
+     body this release is actually going to latch. Negative = early. A human
+     aiming a rotating ship lands with tens of milliseconds of spread around
+     that optimum; test/bot.js - which is public, in this repo - lands within
+     one tick of it every single time, because that is its release rule.
+     Only the tick offset is kept: no positions, no wall-clock times. */
+  Game.prototype._teleRelease = function () {
+    var t = this.tele;
+    t.rel++;
+    var nd = this.predict.node;
+    if (!nd) { t.miss++; return; }
+    /* The tutorial freezes the orbit on "TAP NOW": there is no timing to
+       grade, and every player's release there is the same assisted one. */
+    if (this.tutHold || t.off.length >= TELE_MAX) return;
+
+    var p = this.player, n = p.node;
+    if (!n) return;
+    var w = this.angRate(p) * STEP;
+    if (!w) return;
+    var bestK = null, bestPerp = Infinity;
+    for (var k = -TELE_WIN; k <= TELE_WIN; k++) {
+      var a = p.ang + w * k;
+      var cs = Math.cos(a), sn = Math.sin(a);
+      var ux = -sn * p.dir, uy = cs * p.dir;
+      var ax = nd.x - (n.x + cs * p.r), ay = nd.y - (n.y + sn * p.r);
+      if (ax * ux + ay * uy <= 0) continue;
+      var perp = Math.abs(ax * uy - ay * ux);
+      if (perp < bestPerp) { bestPerp = perp; bestK = k; }
+    }
+    /* An optimum on the edge of the window is not an optimum, it is the
+       window running out. Nothing to grade. */
+    if (bestK === null || bestK === -TELE_WIN || bestK === TELE_WIN) return;
+    t.off.push(-bestK);
+  };
+
+  /* A fresh copy for the run that just ended, so the UI layer can never
+     hold a reference the next run mutates. */
+  Game.prototype.telemetry = function () {
+    var t = this.tele;
+    return { v: t.v, hz: t.hz, n: t.n, syn: t.syn, rel: t.rel, miss: t.miss,
+             forced: t.forced, off: t.off.slice() };
   };
 
   Game.prototype._hook = function (node, d) {
@@ -1177,6 +1251,7 @@
     if (this.queuedAction) {
       this.queuedAction = false;
       if (this.player.mode === 'orbit') {
+        this._teleRelease();
         this._release(false);
         this.hitstop = 0;
       }
