@@ -295,10 +295,14 @@
        TO START copy rather than in the crowded bottom band, because the one
        thing it has to be is FOUND - the feature existed for a day in a build
        where the only way to reach it was to know it was there, which is the
-       same as it not existing. 232x42 logical is 188x34 CSS px on a 390-wide
-       phone, comfortably over the 44 px tap-target guidance once the 2.2x
-       hit-slop below is counted. */
-    this.shipRect = { x: W / 2 - 116, y: 574, w: 232, h: 42 };
+       same as it not existing. Sized to the LEADERBOARD button below rather
+       than to a number of its own - 232x44 logical is 188x36 CSS px on a
+       390-wide phone. That is under the 44 CSS px tap-target guidance, and it
+       is the size every panel button in this game has always been; making
+       this one bigger than its neighbour would buy 8 px and cost the row its
+       alignment. If the guidance is to be met it has to be met by all three,
+       which is its own change. */
+    this.shipRect = { x: W / 2 - 116, y: 572, w: 232, h: 44 };
 
     /* ---- online (accounts + global leaderboard) -----------------------
        The game does not know what Supabase is and never will. It owns two

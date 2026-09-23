@@ -227,11 +227,17 @@ try {
 
   console.log('\n=== rocket proof ===');
   written.forEach(x => console.log('  ' + x + '  (' + fs.statSync(x).size + ' bytes)'));
-  console.log('  sprites baked: hull ' + out.cache.hull +
-              '   flame ' + out.cache.flame + '/' + out.cache.ceiling +
-              '   bloom ' + out.cache.bloom + '/' + out.cache.ceiling +
+  /* Three ceilings rather than one since the hull got a colour: the hull and
+     flame caches are keyed by colour now, so each carries its own bound. This
+     sheet only ever draws the live ship, so hull is still 1 in practice - but
+     what is asserted is the BOUND, because the bound is the thing that stops
+     a configurable paint job turning the art pass into a leak. */
+  console.log('  sprites baked: hull ' + out.cache.hull + '/' + out.cache.hullMax +
+              '   flame ' + out.cache.flame + '/' + out.cache.flameMax +
+              '   bloom ' + out.cache.bloom + '/' + out.cache.bloomMax +
               '   (nothing on the ship is repainted per frame)');
-  if (out.cache.hull !== 1 || out.cache.flame > out.cache.ceiling || out.cache.bloom > out.cache.ceiling) {
+  if (out.cache.hull > out.cache.hullMax || out.cache.flame > out.cache.flameMax ||
+      out.cache.bloom > out.cache.bloomMax) {
     console.log('  FAIL  the rocket sprite cache is not bounded');
     process.exitCode = 1;
   }
