@@ -869,8 +869,18 @@ const WRONG = 'the-one-somebody-else-guessed';
   check('the public view selects no email column',
     !/create or replace view public\.leaderboard[\s\S]*?;/i.test(sql) ||
     !/create or replace view public\.leaderboard[\s\S]*?;/i.exec(sql)[0].toLowerCase().includes('email'));
-  check('no view or function anywhere exposes auth.users columns to the client',
-    !norm.includes('from auth.users'));
+  /* The one statement allowed to name auth.users is the admin account delete
+     (section 11): it removes a row and returns nothing, so it exposes no
+     column. Comments are stripped first, and it must be exactly that one
+     statement - any other SELECT, JOIN or second delete still fails this. */
+  {
+    const ADMIN_DELETE = 'delete from auth.users where id = target;';
+    const code = sql.replace(/--[^\n]*/g, '').replace(/\s+/g, ' ').toLowerCase();
+    const deletes = code.split(ADMIN_DELETE).length - 1;
+    check('no view or function anywhere exposes auth.users columns to the client',
+      deletes === 1 && !/(from|join) auth\.users/.test(code.split(ADMIN_DELETE).join('')),
+      'admin deletes: ' + deletes);
+  }
   check('the username shape is enforced in the database, not only in the form',
     norm.includes("username ~ '^[a-za-z0-9_]{3,16}$'"));
   check('usernames are unique case-insensitively',
