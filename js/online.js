@@ -366,7 +366,17 @@
     return {
       url: url,
       key: key,
-      boardLimit: (isFinite(limit) && limit > 0) ? Math.min(limit, 200) : 50
+      boardLimit: (isFinite(limit) && limit > 0) ? Math.min(limit, 200) : 50,
+      /* Read-only mode. Kept as a guard for any build that ever has to share
+         the production Supabase project: such a build must be able to READ
+         the board while being structurally unable to WRITE a score into it.
+         Staging no longer is one - since 2026-09-23 it has its own project
+         and sets this false - but test/staging.mjs still proves the guard
+         works, against a fixture that forces it on.
+         Strictly `=== true`: a truthy typo like the string "false" must not
+         silently arm it in production, and the default for every config that
+         has never heard of this flag is false. */
+      readOnlyScores: raw.readOnlyScores === true
     };
   }
 
@@ -717,7 +727,10 @@
       username: (session && session.user.username) || '',
       email: (session && session.user.email) || '',
       hasPending: !!readJSON(K_PENDING),
-      recovering: recovering
+      recovering: recovering,
+      /* Surfaced so the UI can tell the player why their score did not go up,
+         instead of leaving them to conclude the leaderboard is broken. */
+      readOnlyScores: !!(cfg && cfg.readOnlyScores)
     };
   }
 
@@ -1270,6 +1283,24 @@
       var bad = validateRun(run);
       if (bad) return Promise.resolve({ submitted: false, queued: false, reason: bad });
       if (!cfg) return Promise.resolve({ submitted: false, queued: false, reason: 'offline' });
+      /* The staging gate, and the reason it is HERE rather than in the UI.
+         Every score that has ever reached the production board went through
+         this one function; a check anywhere higher up is a check a future
+         call site can forget to make.
+
+         `queued: false` is the load-bearing half. The obvious implementation
+         parks the run in localStorage like every other failure does, and that
+         would be exactly wrong: a queued run is a run waiting for a session
+         that CAN write, and the entire purpose of this branch is that no such
+         moment must ever arrive for a score rolled on staging. It is dropped,
+         deliberately and visibly, and the player is told. */
+      if (cfg.readOnlyScores) {
+        return Promise.resolve({
+          submitted: false,
+          queued: false,
+          reason: 'Staging build - scores are not saved to the leaderboard.'
+        });
+      }
       if (!session) {
         queuePending(run);
         return Promise.resolve({ submitted: false, queued: true, reason: 'not signed in' });
@@ -1299,6 +1330,12 @@
     flushPending: function () {
       var pending = readJSON(K_PENDING);
       if (!pending || !cfg || !session) return Promise.resolve(false);
+      /* Returning early WITHOUT clearing the key. submitRun would refuse the
+         run anyway, but this function wipes the pending slot before it asks -
+         so falling through would silently destroy a run the player is still
+         owed, for no gain. Read-only means "change nothing", including the
+         contents of localStorage. */
+      if (cfg.readOnlyScores) return Promise.resolve(false);
       clearKey(K_PENDING);
       return this.submitRun(pending).then(function (res) {
         emit('pending', res);

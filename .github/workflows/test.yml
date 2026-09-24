@@ -91,6 +91,21 @@ jobs:
       - name: Canonical origin + Pages redirect stub
         run: node test/pages_stub.mjs
 
+      # The staging pipeline's isolation, and it is in the CHEAP job on
+      # purpose: what it protects is Leo's real leaderboard, so it has to run
+      # on every PR rather than only on the ones that reach a deploy.
+      #
+      # skyhook-staging now has its OWN Supabase project (see
+      # staging/config.staging.js), so the guarantee under test is no longer
+      # "one flag stops the write" but "staging's URL and staging's anon key
+      # both name a project that is not production's". readOnlyScores is kept
+      # as declared machinery and still proved to work, against a fixture that
+      # forces it on. Also asserts that production is untouched by any of it,
+      # that production deploys only from main, and that staging deploys only
+      # when somebody runs staging.yml by hand.
+      - name: Staging isolation (scores cannot reach the real board)
+        run: node test/staging.mjs
+
       # The ship's paint. Three things that break quietly: the DEFAULT ship
       # must be byte-for-byte the one that shipped before the colour was
       # configurable (a player who never opens the customiser must not be

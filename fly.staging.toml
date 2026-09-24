@@ -1,0 +1,72 @@
+# SKYHOOK on Fly.io - STAGING.
+#
+# A SECOND file rather than an [env] override or a --app flag on fly.toml.
+# fly.toml names `skyhook-game`, the app that serves skyhookplay.com, and
+# `flyctl deploy --app something-else` still reads every other setting out of
+# it - so a staging deploy driven from fly.toml is one dropped flag away from
+# being a production deploy. Two files means the production app name and the
+# staging app name are never in the same command line.
+#
+# Nothing in this file may be copied into fly.toml and nothing in fly.toml
+# needs to know this file exists. Production (.github/workflows/deploy.yml,
+# gated on `refs/heads/main`) uses fly.toml and never names this file; only
+# the manual .github/workflows/staging.yml uses this one.
+
+app = 'skyhook-staging'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+  [build.args]
+    # THE line that makes this a staging image. The Dockerfile's stage-one
+    # overlay copies staging/config.staging.js over js/config.js on this value
+    # and on no other; the default is 'production', and any third value fails
+    # the build rather than being ignored.
+    #
+    # Consequence: the staging container talks to staging's OWN Supabase
+    # project, not production's. Sign up, sign in, password recovery, profile
+    # edits and scores are all real and all fully exercisable - they simply
+    # land in a different database, which starts empty. Before 2026-09-23 the
+    # two shared a project and safety came from readOnlyScores refusing every
+    # submission; that flag is now off, because the database boundary does the
+    # job the flag was standing in for.
+    SKYHOOK_ENV = 'staging'
+
+[env]
+  # NOT skyhookplay.com. conf/site.conf.template rewrites <link rel=canonical>,
+  # og:url and og:image to this value, so the staging page points every crawler
+  # and every link preview at ITSELF rather than claiming to be the real game.
+  # Getting this wrong is how a staging box ends up outranking production for
+  # its own name.
+  SITE_ORIGIN = 'https://skyhook-staging.fly.dev'
+
+  # Overrides the Dockerfile's "all". The header goes out on the page and on
+  # every asset that does not set its own; staging/robots.txt and the meta tag
+  # injected by staging/config.staging.js are the other two layers.
+  ROBOTS_TAG = 'noindex, nofollow'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Same economics as production, and they matter more here: staging is idle
+  # almost all of the time by definition. min_machines_running = 0 with
+  # auto_start means a machine exists only while Leo has the tab open, and the
+  # cost of the whole pipeline when nobody is testing is the disk the image
+  # sits on.
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = '5s'
+    interval = '30s'
+    method = 'GET'
+    path = '/health'
+    timeout = '5s'
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1

@@ -1,6 +1,16 @@
 # GitGuardian configuration for SKYHOOK.
 #
-# ONE ignore rule, for ONE string: the Supabase *anon* key in js/config.js.
+# TWO ignore rules, for TWO strings: the Supabase *anon* key of each project.
+# js/config.js carries production's and staging/config.staging.js carries
+# staging's, and since 2026-09-23 those are two different Supabase projects and
+# therefore two different keys. Until then there was one rule, because the two
+# files held the same string.
+#
+# That is the one cost of ignoring a MATCH rather than a PATH, and it is the
+# cost worth paying - see "Why this ignores a MATCH" below. A path ignore would
+# have needed no edit here, and would have bought that convenience by going
+# blind to every future secret in both files.
+#
 # Nothing else is suppressed, and the scanner is not disabled anywhere.
 #
 # ---------------------------------------------------------------------------
@@ -17,7 +27,8 @@
 # the page, and it identifies the project - not a person and not a privilege.
 # Decoded, its payload is:
 #
-#     {"iss":"supabase","ref":"ievfcqnyrekdixxbsite","role":"anon",...}
+#     {"iss":"supabase","ref":"ievfcqnyrekdixxbsite","role":"anon",...}   <- production
+#     {"iss":"supabase","ref":"qlaenczyhzjkmqkraiup","role":"anon",...}   <- staging
 #
 # `role: anon` is the whole story. Every byte of authority it carries is
 # granted by Row Level Security in supabase/schema.sql, which is why that file
@@ -47,6 +58,18 @@
 # service_role key into the slot right next to this one. Ignoring the specific
 # string keeps js/config.js scanned: any other secret in it still fires.
 #
+# The trade-off, stated honestly: a new project means a new string means a new
+# entry below. That is a real edit a path ignore would not have needed. What it
+# buys is that both config files stay fully scanned - if somebody pastes the
+# service_role key into either one, GitGuardian still fires, and a path ignore
+# is exactly the rule that would have swallowed it.
+#
+# test/staging.mjs decodes the staging key and fails the build unless its role
+# claim is literally "anon", exactly as test/online.mjs does for production's.
+# Since the split it also fails the build if the staging key's `ref` claim is
+# production's project, which is the mistake a role check cannot see: a
+# production key under a staging URL is still a role-"anon" key.
+#
 # ---------------------------------------------------------------------------
 # Scope: what this file is known to affect, and what it may not
 # ---------------------------------------------------------------------------
@@ -74,14 +97,33 @@
 # green. If the check goes red again on a future PR for this same key, that is
 # the second explanation winning, and the fix is one click in the dashboard:
 # close incident 37342244 as a false positive. Nothing needs rotating.
+#
+# EXPECT EXACTLY THAT ON THE PR THAT ADDS THE STAGING KEY BELOW. Whichever of
+# the two explanations is true, a brand-new string has never been scanned and
+# has no incident yet, so the GitHub App will raise a NEW one. The entry below
+# cannot prevent it: the App scans server-side, and on the evidence above it
+# may not read this file at all. This is not a rotation and not a leak - it is
+# a second public anon key doing what the first one did. Leo closes the new
+# incident as a false positive in the dashboard; that is a click nobody else
+# can make for him.
 
 version: 2
 
 secret:
   ignored_matches:
-    # Supabase anon (public) key for project ievfcqnyrekdixxbsite - see above.
+    # PRODUCTION - Supabase anon (public) key for project ievfcqnyrekdixxbsite.
     # Listed as the literal value rather than an ignore-sha so the rule stays
     # readable and stays pinned to this exact key: rotate the project and this
     # entry stops matching, which is the correct behaviour.
     - name: 'SKYHOOK Supabase anon (public) key - constrained by RLS, see supabase/schema.sql'
       match: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldmZjcW55cmVrZGl4eGJzaXRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1NzQ0MjYsImV4cCI6MjEwNTE1MDQyNn0.DPaeAv6WFnAQMomXQzlMWZulkM12jqicrymSInQygOM
+
+    # STAGING - Supabase anon (public) key for project qlaenczyhzjkmqkraiup.
+    # A different project from production since 2026-09-23, so a different key
+    # and its own entry; see the header for why that is not a reason to switch
+    # to a path ignore. Same reasoning applies to it in full: role "anon",
+    # public by design, shipped to every browser that loads the staging page,
+    # and constrained entirely by the RLS in supabase/schema.sql - the same
+    # schema file, applied to the staging project.
+    - name: 'SKYHOOK STAGING Supabase anon (public) key - constrained by RLS, see supabase/schema.sql'
+      match: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFsYWVuY3p5aHpqa21xa3JhaXVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAxMTI2MzEsImV4cCI6MjEwNTY4ODYzMX0.L_DGdRS9H5ru49J4Jda5XFsAw1GljB3sAn5Q1qfC75I
