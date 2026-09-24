@@ -53,6 +53,9 @@ The relations are the real ones; only the constants are tuned. Consequences you 
 | Tap / click anywhere | Release the tether (and start / restart a run) |
 | `Space`, `Enter`, `W`, `↑` | Release the tether |
 | `M` | Toggle mute |
+| Pause button (top right, beside mute) / `P` | Pause mid-run; `P` or a tap resumes |
+| `Esc` | Pause (never resumes - it also closes the customiser) |
+| CUSTOMISE SHIP | Paint nose / window / body / fire. On the title, the PAUSED screen and game over; a paint chosen mid-run is on the ship immediately |
 
 Add `?seed=123` to the URL to replay a deterministic layout.
 
@@ -122,7 +125,15 @@ nothing else. Sign-in is email/password, and a forgotten password is not a dead
 end: **Forgot password?** on the sign-in form mails a one-time link that brings
 the player back into the game on a SET A NEW PASSWORD form. That flow needs the
 origin allow-listed in Supabase (**Authentication -> URL Configuration**), which
-is step 3.5 of the setup doc below. The "Continue with Google" button is
+is step 3.5 of the setup doc below. A signed-in player can also change either
+credential from the "Signed in as X" line on the board: **Change username**
+renames them everywhere at once, because the board is a view that joins
+`profiles` and nothing copies the name onto a score row, and **Change password**
+asks for the current one and checks it against the server before it sets
+anything -- a session left open on a shared machine is not a way to take the
+account. An account that signs in with Google has no password to change and is
+told so, with the emailed set-a-password link offered instead of a form it
+could never fill in. The "Continue with Google" button is
 drawn only when `googleSignIn: true` in `js/config.js`, which you should set
 only after actually enabling Google as a provider -- a button pointing at a
 disabled provider navigates the player out of the game onto a raw GoTrue JSON
@@ -144,9 +155,11 @@ Setting up your own project is five steps:
 All the security lives in `supabase/schema.sql`, because the anon key is public by
 design and the client is therefore entirely attacker-controlled. Row Level Security
 is on for every table; a player may insert only rows carrying their own `auth.uid()`
-and may never update or delete a score, not even their own; the public board is a
-view exposing username, score and run stats only, and no email address is reachable
-from the game at all. Impossible scores and submission flooding are rejected by
+and may never update or delete a score, not even their own; the ONE update anybody
+is allowed is their own display name, fenced by a policy (`id = auth.uid()`, both
+halves) and a column grant that covers `username` and nothing else, with a trigger
+capping it at five changes a day; the public board is a view exposing username,
+score and run stats only, and no email address is reachable from the game at all. Impossible scores and submission flooding are rejected by
 CHECK constraints and a BEFORE INSERT trigger -- under every write path, not in an
 RPC that could be stepped around.
 
@@ -158,23 +171,31 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 
 | File | Lines | Purpose |
 |---|---|---|
-| `index.html` | 162 | Shell: canvas, ad slot, script loading |
-| `css/style.css` | 415 | Layout only (all game visuals are canvas-drawn) |
+| `index.html` | 246 | Shell: canvas, ad slot, script loading |
+| `css/style.css` | 609 | Layout only (all game visuals are canvas-drawn) |
 | `js/utils.js` | 145 | Math helpers, PRNG, localStorage wrapper, particle system, glow sprites |
 | `js/audio.js` | 159 | Fully synthesized audio via Web Audio API (no sample files) |
 | `js/celestial.js` | 955 | Body ART only: planet formation classes, spectral star colours, meteoroid rocks. Sprite-cached, zero physics |
-| `js/rocket.js` | 398 | Player ART only: hull sprite, heading, thruster plume. Sprite-cached, zero physics |
-| `js/game.js` | ~1910 | Core game: celestial bodies, gravity, orbiting, flying, latching, meteoroids, shards, rendering |
-| `js/main.js` | 187 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
+| `js/rocket.js` | 592 | Player ART only: hull sprite, heading, thruster plume. Sprite-cached, zero physics |
+| `js/game.js` | 2157 | Core game: celestial bodies, gravity, orbiting, flying, latching, meteoroids, shards, rendering, screen flow (title / playing / paused / game over) |
+| `js/main.js` | 202 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
 | `js/config.js` | 45 | Supabase project URL + **anon** (public) key. Committed on purpose -- GitHub Pages serves the repo, so an uncommitted config does not exist on the live site. Blank both strings to go offline |
-| `js/online.js` | 1099 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
-| `js/ui_online.js` | 731 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
-| `supabase/schema.sql` | 313 | Tables, RLS policies, plausibility CHECKs, rate-limit trigger, public board view |
-| `test/smoke.mjs` | 388 | Playwright end-to-end smoke test |
+| `js/online.js` | 1491 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
+| `js/ui_online.js` | 975 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
+| `js/ship.js` | 572 | Ship paint model: the swatch menu, the per-part readability rule, the #1 gold crown. No DOM, no network |
+| `js/ui_ship.js` | 574 | The customiser panel - one component, opened from the title, PAUSED and game-over screens |
+| `supabase/schema.sql` | 628 | Tables, RLS policies, plausibility CHECKs, rate-limit and rename triggers, public board view, ship-paint allow-list (+ first-palette remap) |
+| `test/smoke.mjs` | 408 | Playwright end-to-end smoke test |
 | `test/balance.mjs` | 572 | Headless difficulty/balance harness (no browser) |
 | `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |
-| `test/online.mjs` | 1175 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
-| `test/leaderboard_ui.mjs` | 1342 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
+| `test/online.mjs` | 1717 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
+| `test/leaderboard_ui.mjs` | 1635 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
+| `test/ship.mjs` | 751 | Ship paint model: every menu combination readable, gold never stored, the DB allow-list and palette remap match the client |
+| `test/ship_ui.mjs` | 193 | The customiser panel in a real browser |
+| `test/ship_live.mjs` | 223 | The account round trip against a REAL staging Supabase (sign up, paint, second device, gold/off-menu refused, teardown). Not in CI - needs `SKYHOOK_LIVE_URL`, `SKYHOOK_LIVE_ANON_KEY`, `SKYHOOK_LIVE_DB_URL`; refuses to run against production |
+| `test/staging.mjs` | 507 | Staging isolation (its own Supabase project, never production's) and the deploy rules: production only from `main`, staging only on a manual run of `staging.yml` |
+| `test/ship_access.mjs` | 245 | Customise mid-session: pause and game-over doors, the run frozen to the tick, the paint visible at once |
+| `test/palette_metrics.mjs` | 113 | Measures the palette (chroma, contrast vs sky, pairwise and gold distance) - how the colours were chosen |
 
 Runtime dependencies: none. The only dev dependency is Playwright, and only for the smoke test.
 

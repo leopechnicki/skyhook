@@ -306,6 +306,51 @@
     this.muteHit   = { x: W - 66, y: 6,  w: 60, h: 60 };          // 48.7 CSS px @390w
     this.retryRect = { x: W / 2 - 130, y: 640, w: 260, h: 64 };   // 211x52 CSS px
 
+    /* ---- customise ----------------------------------------------------
+       Unlike the leaderboard buttons below, this one does NOT depend on a
+       backend: painting your ship is a local, offline feature, so the button
+       is on the title screen of every build. It sits directly under the TAP
+       TO START copy rather than in the crowded bottom band, because the one
+       thing it has to be is FOUND - the feature existed for a day in a build
+       where the only way to reach it was to know it was there, which is the
+       same as it not existing. Sized to the LEADERBOARD button below rather
+       than to a number of its own - 232x44 logical is 188x36 CSS px on a
+       390-wide phone. That is under the 44 CSS px tap-target guidance, and it
+       is the size every panel button in this game has always been; making
+       this one bigger than its neighbour would buy 8 px and cost the row its
+       alignment. If the guidance is to be met it has to be met by all three,
+       which is its own change. */
+    this.shipRect = { x: W / 2 - 116, y: 572, w: 232, h: 44 };
+
+    /* ---- customise, mid-session (2026-09-23) ----------------------------
+       Leo: "user is not able to change spaceship after start playing". The
+       title screen was the only door, and the title screen is only ever seen
+       once per page load - after the first tap the loop is play -> die ->
+       retry and never passes it again. So the SAME panel (js/ui_ship.js,
+       one component, one 'openShip' event) now has two more doors, on the
+       two screens where the run is not moving:
+
+         PAUSED     under TAP TO RESUME. Pausing already freezes the sim
+                    clock and the accumulator (update() returns before
+                    anything advances), so the panel can sit open for as
+                    long as the player likes and the run comes back exactly
+                    where it stopped. Closing the panel leaves the game
+                    PAUSED - resuming is still the player's own tap.
+         GAME OVER  under the retry block, after RETRY_LOCK like its
+                    neighbours. The next run flies the new paint.
+
+       Neither screen was reachable on purpose before: PAUSED only happened
+       when the tab was backgrounded. pauseRect is the HUD button that makes
+       it a thing a player can choose (P / Esc do the same), placed beside
+       mute so the top-right corner stays the one place for game controls. */
+    this.pauseRect = { x: W - 108, y: 16, w: 40, h: 40 };          // drawn size
+    this.pauseHit  = { x: W - 122, y: 6,  w: 55, h: 60 };          // ends 1 unit short of muteHit: no shared edge
+    this.shipRectPause = { x: W / 2 - 116, y: 492, w: 232, h: 44 };
+    /* Two rows, like the bottom band on the title: with a backend it sits
+       under LEADERBOARD, without one it takes LEADERBOARD's row. */
+    this.shipRectOver     = { x: W / 2 - 110, y: 782, w: 220, h: 46 };
+    this.shipRectOverSolo = { x: W / 2 - 110, y: 720, w: 220, h: 46 };
+
     /* ---- online (accounts + global leaderboard) -----------------------
        The game does not know what Supabase is and never will. It owns two
        things: a flag saying whether an account layer exists at all, and two
@@ -830,6 +875,19 @@
     return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   }
 
+  /* Where the CUSTOMISE SHIP button is on the screen showing right now, or
+     null where there is none. One answer for both the hit test and the
+     draw, so the button cannot be drawn in one place and tapped in another. */
+  Game.prototype._shipRectNow = function () {
+    if (typeof this.onUi !== 'function') return null;
+    if (this.state === 'title') return this.shipRect;
+    if (this.state === 'paused') return this.shipRectPause;
+    if (this.state === 'over' && this.overT > RETRY_LOCK) {
+      return this.online.ready ? this.shipRectOver : this.shipRectOverSolo;
+    }
+    return null;
+  };
+
   /* Explicit hitboxes are dispatched BEFORE the generic tap-anywhere action.
      Today that only protects Retry; it is the mechanism that makes it safe to
      put a revive or purchase button on this screen later. */
@@ -839,6 +897,25 @@
     var onCanvas = lx >= 0 && lx <= W && ly >= 0 && ly <= H;
 
     if (onCanvas && inRect(this.muteHit, lx, ly)) { this.toggleMute(); return; }
+
+    /* Pause. Only while flying - on every other screen the run is already
+       still, and a paused game's own "tap anywhere" is what resumes it. */
+    if (onCanvas && this.state === 'playing' && inRect(this.pauseHit, lx, ly)) {
+      this.pause();
+      return;
+    }
+
+    /* Customise: title, paused, and game over - the three screens where the
+       run is not moving (see shipRectPause). Never while flying: a panel
+       over a live orbit is a stolen run. Gated on `onUi` rather than on
+       `online.ready`: the customiser is offline-capable, so the only thing it
+       needs is a UI layer listening. Without one the button is not drawn
+       either, so this branch cannot swallow a tap. */
+    var ship = this._shipRectNow();
+    if (onCanvas && ship && inRect(ship, lx, ly)) {
+      this._ui('openShip', null);
+      return;
+    }
 
     /* The leaderboard buttons exist only when a backend does. Hit-tested
        before the generic tap-anywhere action, so opening the board can never
@@ -1687,21 +1764,28 @@
        readable off the ship itself.
        All of the art lives in js/rocket.js; PLAYER_R (collision) is unchanged
        and the hull is simply drawn larger than it. */
-    if (this.state === 'playing') {
-      /* The ring used to be a charge meter counting down FLIGHT_MAX. There is
-         no flight timer any more, so it reports the thing that CAN kill you:
-         how close the rocket is to dropping out of the bottom of the view. */
-      var fallGap = (this.camY + H) - p.y;
-      SK.drawGlow(ctx, this.glowPlayer, p.x, p.y,
-        0.42 + 0.08 * Math.sin(this.time * 7) + p.burn * 0.22, 0.55 + p.burn * 0.25);
-      SK.Rocket.draw(ctx, p.x, p.y, p.aim, PLAYER_R, this.time, {
-        burn: p.burn,
-        /* Steady plume tracks the speed this body actually gives you, so a
-           star hook visibly runs the engine harder than a planet hook. */
-        thrust: clamp(this._vTan(p) / THRUST_REF, 0, 1),
-        warn: fallGap < 150 ? 1 : 0
-      });
-    }
+    if (this.state === 'playing') this._drawPlayer(ctx);
+  };
+
+  /* In world space (the caller has applied the camera). Split out so the
+     PAUSED screen can draw the same rocket ABOVE its scrim: that is where a
+     paint chosen from the pause menu has to show up, and it must be the
+     live renderer with the live paint rather than a picture of it. */
+  Game.prototype._drawPlayer = function (ctx) {
+    var p = this.player;
+    /* The ring used to be a charge meter counting down FLIGHT_MAX. There is
+       no flight timer any more, so it reports the thing that CAN kill you:
+       how close the rocket is to dropping out of the bottom of the view. */
+    var fallGap = (this.camY + H) - p.y;
+    SK.drawGlow(ctx, this.glowPlayer, p.x, p.y,
+      0.42 + 0.08 * Math.sin(this.time * 7) + p.burn * 0.22, 0.55 + p.burn * 0.25);
+    SK.Rocket.draw(ctx, p.x, p.y, p.aim, PLAYER_R, this.time, {
+      burn: p.burn,
+      /* Steady plume tracks the speed this body actually gives you, so a
+         star hook visibly runs the engine harder than a planet hook. */
+      thrust: clamp(this._vTan(p) / THRUST_REF, 0, 1),
+      warn: fallGap < 150 ? 1 : 0
+    });
   };
 
   Game.prototype._drawMute = function (ctx) {
@@ -1739,7 +1823,7 @@
      either screen. Retry is deliberately NOT refactored onto this - it is
      proven code on the hottest screen in the game, and a shared helper would
      put a new bug one edit away from it. */
-  Game.prototype._drawPanelButton = function (ctx, r, label, alpha) {
+  Game.prototype._drawPanelButton = function (ctx, r, label, alpha, swatch) {
     var a = clamp(alpha === undefined ? 1 : alpha, 0, 1);
     ctx.save();
     ctx.fillStyle = 'rgba(53,230,255,' + (0.07 * a).toFixed(3) + ')';
@@ -1751,7 +1835,27 @@
     ctx.fill();
     ctx.stroke();
     ctx.restore();
-    txt(ctx, label, r.x + r.w / 2, r.y + r.h / 2 + 6, 16,
+
+    /* A filled dot in the ship's current body colour (the rim and fins - the
+       part that reads as "the ship's colour" at a glance), inset at the left. It is the
+       button's second job: a label alone says a customiser EXISTS, a live
+       swatch says what it is currently set to and that tapping it will change
+       something visible. It is also the cheapest possible confirmation that a
+       tap in the panel landed - close the panel and the dot has moved on. */
+    var pad = 0;
+    if (swatch) {
+      var cx = r.x + 22, cy = r.y + r.h / 2;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = swatch;
+      ctx.beginPath(); ctx.arc(cx, cy, 8, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.restore();
+      pad = 12;          // keep the label optically centred in what is left
+    }
+    txt(ctx, label, r.x + pad + (r.w - pad) / 2, r.y + r.h / 2 + 6, 16,
       'rgba(200,235,255,' + (0.92 * a).toFixed(2) + ')', 'center', 700);
   };
 
@@ -1780,7 +1884,32 @@
 
     txt(ctx, 'BEST ' + this.best, 20, 38, 15, 'rgba(160,200,230,0.7)', 'left', 600);
     txt(ctx, this.altitude + ' m', 20, 60, 15, 'rgba(160,200,230,0.45)', 'left', 600);
+    if (this.state === 'playing') this._drawPause(ctx);
     this._drawMute(ctx);
+  };
+
+  /* The pause button: mute's twin - same ring, same alpha - so the corner
+     reads as one row of controls rather than two unrelated widgets. */
+  Game.prototype._drawPause = function (ctx) {
+    var m = this.pauseRect, cx = m.x + m.w / 2, cy = m.y + m.h / 2;
+    ctx.globalAlpha = 0.75;
+    ctx.strokeStyle = 'rgba(150,200,235,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 17, 0, TAU);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(200,235,255,0.9)';
+    ctx.fillRect(cx - 6, cy - 7, 4, 14);
+    ctx.fillRect(cx + 2, cy - 7, 4, 14);
+    ctx.globalAlpha = 1;
+  };
+
+  /* The CUSTOMISE SHIP button, wherever the current screen has one. The dot
+     is the body colour the player is flying (gold while crowned). */
+  Game.prototype._drawShipButton = function (ctx, alpha) {
+    var r = this._shipRectNow();
+    if (!r) return;
+    this._drawPanelButton(ctx, r, 'CUSTOMISE SHIP', alpha, SK.Ship ? SK.Ship.current().body : null);
   };
 
   /* The first screen. It is the game's only advertisement, so everything on
@@ -1837,7 +1966,19 @@
     txt(ctx, 'Tap, click or SPACE fires the thruster and lets go.', W / 2, 540, 13, 'rgba(150,190,220,0.72)', 'center', 500);
     txt(ctx, 'The next hook connects itself.   M mutes.', W / 2, 560, 13, 'rgba(150,190,220,0.55)', 'center', 500);
 
-    this._drawLegend(ctx, 638);
+    /* Drawn before the legend so the legend's glows are never occluded by a
+       flat panel, and outside the online/offline branch below: the customiser
+       is the same button on both layouts. */
+    if (typeof this.onUi === 'function') {
+      this._drawPanelButton(ctx, this.shipRect, 'CUSTOMISE SHIP', 1,
+        SK.Ship ? SK.Ship.current().body : null);
+    }
+
+    /* 638 before the customise button existed. Moved down so the button has
+       air under the TAP TO START copy without crowding PLANET / STAR /
+       METEOROID; everything from BEST downwards is untouched, which is what
+       keeps the leaderboard button where test/leaderboard_ui.mjs clicks it. */
+    this._drawLegend(ctx, 650);
 
     /* Two layouts for the bottom band. Without a backend it is exactly the
        one that shipped before accounts existed - same y values, same copy,
@@ -1942,6 +2083,7 @@
         'rgba(255,255,255,' + pulse.toFixed(2) + ')', 'center', 800, 'rgba(53,230,255,0.6)', 16);
 
       if (this.online.ready) this._drawPanelButton(ctx, this.boardRectOver, 'LEADERBOARD', t);
+      this._drawShipButton(ctx, t);
     }
 
     /* One line about where this run landed globally. Drawn in the gap between
@@ -2017,6 +2159,15 @@
       ctx.fillRect(0, 0, W, H);
       txt(ctx, 'PAUSED', W / 2, 400, 40, '#ffffff', 'center', 800, 'rgba(53,230,255,0.7)', 22);
       txt(ctx, 'TAP TO RESUME', W / 2, 452, 20, 'rgba(255,255,255,0.85)', 'center', 700);
+      this._drawShipButton(ctx, 1);
+      /* The frozen rocket, over the scrim, where it stopped: a paint chosen
+         from the pause menu is on the ship the moment the panel closes, not
+         only after the resume tap. Reads this.time, which pause() froze, so
+         the plume is a still frame rather than a flicker. */
+      ctx.save();
+      ctx.translate(0, -this.camY);
+      this._drawPlayer(ctx);
+      ctx.restore();
     }
 
     ctx.restore();

@@ -33,6 +33,32 @@
  * The flame is baked too, in colour buckets - see the long note above
  * drawFlame for why, and for the measurement that forced it. A frame of
  * rocket is therefore exactly three drawImage calls and no gradients.
+ *
+ * WHERE THE COLOURS COME FROM
+ * ---------------------------
+ * They used to be six module-level constants. They are now DERIVED from the
+ * paint js/ship.js owns - SK.Ship.current() - which is the player's chosen
+ * nose / window / body / fire, or gold on all four while they are #1 on the
+ * board. This file still decides how a colour is USED (which surface is lit,
+ * which is shaded, what the plume fades to); it no longer decides what the
+ * colour IS, and it does not decide whether a combination reads - that is
+ * SK.Ship.readable(), which judges what this file would paint.
+ *
+ * resolve() is the whole derivation and it is tuned so that resolve('#35e6ff')
+ * reproduces the six constants it replaced. test/ship.mjs asserts that against
+ * the literal old values, so a "harmless" tweak in here that would have
+ * quietly restyled the default ship turns the build red instead.
+ *
+ * That turns both sprite caches from "one entry, forever" into "one entry per
+ * paint" (the hull keyed on body+nose+window, the plume on fire), which is the one way this refactor could have undone the whole
+ * argument of js/celestial.js. So both are bounded LRUs (HULL_CACHE_MAX /
+ * FLAME_CACHE_MAX) and cacheStats() reports the ceilings, which test/ship.mjs
+ * asserts against after walking far more colours than a player could produce.
+ * Repainting a hull sprite costs about a millisecond and happens on a swatch
+ * TAP, never in the frame loop.
+ *
+ * With js/ship.js absent the file falls back to the exact colour it used to
+ * hold, so rocket.js remains loadable on its own.
  */
 (function (global) {
   'use strict';
@@ -53,14 +79,16 @@
   var FLAME_BASE = 0.30;
   var FLAME_LEN  = 3.1;       // plume length at full burn, in hull half-lengths
 
-  var HULL   = [236, 246, 255];   // plating
-  var HULL_D = [104, 132, 158];   // shadowed flank
-  var TRIM   = [53, 230, 255];    // neon cyan - same signal colour as a latch ring
-  var GLASS  = [140, 240, 255];
+  /* The white core of the plume. Always white, whatever the ship is painted:
+     it is the part that says "engine lit", and it is the same white the bloom
+     sprite is made of. */
   var FLAME_HOT  = [255, 255, 255];
-  var FLAME_MID  = [120, 226, 255];
-  var FLAME_COOL = [86, 126, 255];
-  var FLAME_BURN = [255, 176, 58];   // the amber the exhaust flashes on a release
+
+  /* The amber the exhaust flashes on a release. Deliberately NOT derived from
+     the ship's colour: it is the game telling the player their tap landed, and
+     a signal the player can repaint is a signal they can switch off by
+     accident. js/game.js paints the release particles with it too. */
+  var FLAME_BURN = [255, 176, 58];
 
   function rgba(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
   function mix(a, b, t) {
@@ -69,9 +97,130 @@
             Math.round(a[2] + (b[2] - a[2]) * t)];
   }
 
+  /* ------------------------------------------------------------ palette */
+
+  /* THE DERIVATION.
+   *
+   * One colour per part in, six painted colours out. The constants below are
+   * the mix weights that make resolve('#35e6ff') - cyan on every part - land
+   * on the six values this file used to hardcode:
+   *
+   *     HULL   [236,246,255]  <- mix(cyan, WHITE, HULL_W)  -> [231,252,255]
+   *     HULL_D [104,132,158]  <- shade(hull)                -> [104,132,158]
+   *     TRIM   [ 53,230,255]  <- the colour itself          -> exact
+   *     GLASS  [140,240,255]  <- mix(cyan, WHITE, GLASS_W)  -> [140,241,255]
+   *     F_MID  [120,226,255]  <- mix(cyan, WHITE, FIRE_W)   -> [120,238,255]
+   *     F_COOL [ 86,126,255]  <- mix(cyan, NIGHT, COOL_W)   -> [ 31,100,143]
+   *
+   * The first four are the old ship to within a handful of channel steps and
+   * HULL_D is exact, which is what test/ship.mjs measures. F_COOL is the one
+   * deliberate departure: it is the tail of an ADDITIVE plume whose alpha
+   * reaches 0 at that stop, so its hue is barely visible, and deriving it from
+   * the ship rather than pinning it blue is what stops a gold rocket trailing
+   * a blue exhaust.
+   *
+   * WHY THE PLATING IS MOSTLY WHITE AT EVERY SETTING
+   * The SKYHOOK rocket has always been a white hull with a neon rim: the
+   * colour that identifies it lives in the outline, the fins, the nose cone,
+   * the glass and the plume, not in the barrel. Keeping HULL_W high preserves
+   * that - a fully saturated fuselage reads as painted plastic at 40 px and
+   * loses the axial highlight the shading depends on - while the five rim
+   * surfaces carry the player's choice at full strength. */
+  var FALLBACK = '#35e6ff';
+  var WHITE = [255, 255, 255];
+  var HULL_W  = 0.88;           // how far the lit plating is pulled to white
+  var GLASS_W = 0.43;
+  var FIRE_W  = 0.33;
+  var COOL_W  = 0.62;
+  var NIGHT = [18, 20, 74];     // deep indigo the plume tail fades into
+
+  /* The shadowed flank. Multiplicative darkening plus a small cool lift,
+     rather than a mix towards a fixed dark: a mix lets the dark colour's own
+     hue take over at high weights, which turned the shaded side of every
+     warm-coloured ship blue-grey. Scaling keeps the hull's hue and only the
+     LIFT is cool - that is the sky filling the shadow, and it is small enough
+     that a gold ship keeps a gold shadow.
+
+     Tuned so shade(mix(cyan, WHITE, HULL_W)) is exactly the [104,132,158] this
+     file used to hardcode. */
+  var SHADE_K = 0.45;
+  var SHADE_LIFT = [0, 19, 43];
+
+  function shade(c) {
+    return [Math.min(255, Math.round(c[0] * SHADE_K + SHADE_LIFT[0])),
+            Math.min(255, Math.round(c[1] * SHADE_K + SHADE_LIFT[1])),
+            Math.min(255, Math.round(c[2] * SHADE_K + SHADE_LIFT[2]))];
+  }
+
+  function hex2rgb(h) {
+    var m = /^#([0-9a-f]{6})$/i.exec(String(h === undefined || h === null ? '' : h).trim());
+    if (!m) return null;
+    var n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  /* One part's colour as [r, g, b] plus the hex it came from, falling back to
+     the shipped default for anything unreadable. */
+  function partOf(src, part) {
+    var h = src && typeof src === 'object' ? src[part] : src;
+    var c = hex2rgb(h);
+    return c ? { hex: String(h).trim().toLowerCase(), rgb: c }
+             : { hex: FALLBACK, rgb: hex2rgb(FALLBACK) };
+  }
+
+  /* Resolves a paint - { nose, window, body, fire }, a single hex meaning
+     "that colour on every part" (the crown, and old callers), or `undefined`
+     meaning "whatever the player is flying right now" - into painted colours
+     plus the cache keys they are stored under.
+
+     Each part drives its own surfaces and nothing else:
+       body    the plating (pulled most of the way to white, see HULL_W), its
+               shaded flank, the collar, the fins and the neon rim
+       nose    the nose cone
+       window  the porthole glass
+       fire    the plume
+
+     With all four parts the same hex this is, colour for colour, the
+     single-colour derivation it replaced - which is what keeps the default
+     ship and the gold ship exactly as they were.
+
+     Never throws and never returns a bad channel: an unreadable colour falls
+     back to the shipped default. Whether a COMBINATION reads is not decided
+     here - SK.Ship.readable() asks this function what would be painted and
+     judges that. */
+  function resolve(paint) {
+    var src = paint || (SK.Ship ? SK.Ship.current() : FALLBACK);
+    var body = partOf(src, 'body'), nose = partOf(src, 'nose'),
+        win = partOf(src, 'window'), fire = partOf(src, 'fire');
+    var hull = mix(body.rgb, WHITE, HULL_W);
+    return {
+      /* The hull sprite depends on three parts, the plume on one. Keyed
+         separately so repainting the fire does not rebake the hull, and the
+         other way round. */
+      key: body.hex + '|' + nose.hex + '|' + win.hex + '|' + fire.hex,
+      hullKey: body.hex + '|' + nose.hex + '|' + win.hex,
+      fireKey: fire.hex,
+      hull: hull,
+      hullD: shade(hull),
+      trim: body.rgb,
+      nose: nose.rgb,
+      glass: mix(win.rgb, WHITE, GLASS_W),
+      fire: mix(fire.rgb, WHITE, FIRE_W),
+      fireCool: mix(fire.rgb, NIGHT, COOL_W)
+    };
+  }
+
   /* ------------------------------------------------------------- sprite */
 
-  var hullSpr = null;
+  /* Bounded LRU, keyed by colour. One is the steady state (two while the
+     champion's crown is coming and going); the ceiling leaves room for the
+     customiser, which repaints on every swatch tap while the player browses.
+     Past the ceiling the coldest entry is dropped - never a flush, for the
+     same reason js/celestial.js stopped flushing: dropping everything at the
+     moment of pressure is how a cache turns into a repaint loop. */
+  var HULL_CACHE_MAX = 4;
+  var hullCache = {};
+  var hullOrder = [];          // least-recently-used first
 
   /* The fuselage silhouette: a nose cone running into a straight barrel and a
      flared engine skirt. Kept as its own function because the path is needed
@@ -96,11 +245,11 @@
 
   /* Painted nose-UP (towards -Y) in sprite space. draw() rotates by
      (heading + PI/2) so the nose ends up along the velocity vector. */
-  function paintHull(g, cx, cy, L) {
+  function paintHull(g, cx, cy, L, col) {
     var Wd = L * WIDTH_F;
 
     /* --- fins, behind the fuselage so the hull edge stays clean --- */
-    g.fillStyle = rgba(TRIM, 0.90);
+    g.fillStyle = rgba(col.trim, 0.90);
     var s;
     for (s = -1; s <= 1; s += 2) {
       g.beginPath();
@@ -117,10 +266,10 @@
        orbiting the ship. --- */
     hullPath(g, cx, cy, L, Wd);
     var lat = g.createLinearGradient(cx - Wd, cy, cx + Wd, cy);
-    lat.addColorStop(0.00, rgba(HULL_D, 1));
-    lat.addColorStop(0.28, rgba(HULL, 1));
-    lat.addColorStop(0.62, rgba(HULL, 1));
-    lat.addColorStop(1.00, rgba(HULL_D, 1));
+    lat.addColorStop(0.00, rgba(col.hullD, 1));
+    lat.addColorStop(0.28, rgba(col.hull, 1));
+    lat.addColorStop(0.62, rgba(col.hull, 1));
+    lat.addColorStop(1.00, rgba(col.hullD, 1));
     g.fillStyle = lat;
     g.fill();
 
@@ -143,12 +292,12 @@
     g.closePath();
     var nose = g.createLinearGradient(cx, cy - L, cx, noseEnd);
     nose.addColorStop(0, rgba([255, 255, 255], 0.98));
-    nose.addColorStop(1, rgba(TRIM, 0.92));
+    nose.addColorStop(1, rgba(col.nose, 0.92));
     g.fillStyle = nose;
     g.fill();
 
     /* Engine collar */
-    g.fillStyle = rgba(HULL_D, 0.9);
+    g.fillStyle = rgba(col.hullD, 0.9);
     g.fillRect(cx - Wd, cy + L * 0.58, Wd * 2, L * 0.16);
     g.restore();
 
@@ -156,7 +305,7 @@
        actually drawn the outline IS most of the readable shape, so it is
        stroked LAST, on a freshly rebuilt path. */
     hullPath(g, cx, cy, L, Wd);
-    g.strokeStyle = rgba(TRIM, 0.95);
+    g.strokeStyle = rgba(col.trim, 0.95);
     g.lineWidth = L * 0.075;
     g.lineJoin = 'round';
     g.stroke();
@@ -166,7 +315,7 @@
     g.arc(cx, cy - L * 0.14, Wd * 0.42, 0, TAU);
     var win = g.createRadialGradient(cx - Wd * 0.12, cy - L * 0.19, 0, cx, cy - L * 0.14, Wd * 0.42);
     win.addColorStop(0, rgba([255, 255, 255], 0.98));
-    win.addColorStop(1, rgba(GLASS, 0.75));
+    win.addColorStop(1, rgba(col.glass, 0.75));
     g.fillStyle = win;
     g.fill();
     g.strokeStyle = rgba([255, 255, 255], 0.9);
@@ -174,15 +323,27 @@
     g.stroke();
   }
 
-  function hullSprite() {
-    if (hullSpr) return hullSpr;
+  /* Moves `k` to the hot end of an LRU order list and evicts from the cold
+     end while the cache is over its ceiling. One function for both caches, so
+     the two cannot drift into two different eviction policies. */
+  function touch(cache, order, k, max) {
+    var at = order.indexOf(k);
+    if (at >= 0) order.splice(at, 1);
+    order.push(k);
+    while (order.length > max) delete cache[order.shift()];
+  }
+
+  function hullSprite(col) {
+    var k = col.hullKey;
+    if (hullCache[k]) { touch(hullCache, hullOrder, k, HULL_CACHE_MAX); return hullCache[k]; }
     var pad = 1.6;                       // room for fins + outline
     var size = Math.ceil(SPRITE_L * pad * 2);
     var c = global.document.createElement('canvas');
     c.width = c.height = size;
     var g = c.getContext('2d');
-    paintHull(g, size / 2, size / 2, SPRITE_L);
-    hullSpr = c;
+    paintHull(g, size / 2, size / 2, SPRITE_L, col);
+    hullCache[k] = c;
+    touch(hullCache, hullOrder, k, HULL_CACHE_MAX);
     return c;
   }
 
@@ -241,15 +402,29 @@
   var FLAME_BUCKETS = 5;                 // 0..5 inclusive => 6 colour steps
   var FSPR_W = 96, FSPR_H = 192;         // plume sprite, painted once per bucket
   var BLOOM_R = 48;                      // nozzle bloom sprite radius
-  var flameCache = [], bloomCache = [];
+
+  /* The plume is now keyed by COLOUR as well as bucket, so the cache is a map
+     under an LRU rather than a dense array. Two colours' worth of buckets is
+     the ceiling: the steady state is one (six entries), and the second set is
+     the head-room that lets the crown arrive, or a player browse the
+     customiser, without evicting the ship they are actually flying.
+
+     The bloom is NOT keyed by colour - it is made of FLAME_HOT, which is white
+     at every setting - so it stays a dense array of FLAME_BUCKETS + 1 and
+     keeps its original "built once, never rebuilt" property. */
+  var FLAME_CACHE_MAX = (FLAME_BUCKETS + 1) * 2;
+  var flameCache = {};
+  var flameOrder = [];
+  var bloomCache = [];
 
   /* The plume, painted nose-at-top: full width along y=0, converging to a
      point at y=FSPR_H. drawFlame stretches this rectangle to the length and
      width the current drive asks for. */
-  function flameSprite(b) {
-    if (flameCache[b]) return flameCache[b];
+  function flameSprite(b, col) {
+    var k = col.fireKey + '|' + b;
+    if (flameCache[k]) { touch(flameCache, flameOrder, k, FLAME_CACHE_MAX); return flameCache[k]; }
     var burn = b / FLAME_BUCKETS;
-    var hot = mix(FLAME_MID, FLAME_BURN, burn);
+    var hot = mix(col.fire, FLAME_BURN, burn);
     var c = global.document.createElement('canvas');
     c.width = FSPR_W; c.height = FSPR_H;
     var g = c.getContext('2d');
@@ -257,8 +432,8 @@
 
     var g1 = g.createLinearGradient(0, 0, 0, FSPR_H);
     g1.addColorStop(0.00, rgba(hot, 0.85));
-    g1.addColorStop(0.35, rgba(mix(hot, FLAME_COOL, 0.5), 0.42));
-    g1.addColorStop(1.00, rgba(FLAME_COOL, 0));
+    g1.addColorStop(0.35, rgba(mix(hot, col.fireCool, 0.5), 0.42));
+    g1.addColorStop(1.00, rgba(col.fireCool, 0));
     g.fillStyle = g1;
     g.beginPath();
     g.moveTo(cx - wid, 0);
@@ -280,7 +455,8 @@
     g.closePath();
     g.fill();
 
-    flameCache[b] = c;
+    flameCache[k] = c;
+    touch(flameCache, flameOrder, k, FLAME_CACHE_MAX);
     return c;
   }
 
@@ -295,7 +471,7 @@
      impulse, `thrust` the steady component (how fast this body is actually
      throwing you), so a star release produces a visibly longer plume than a
      planet one and the art reports the physics. Two blits, no gradients. */
-  function drawFlame(ctx, x, y, ang, L, burn, thrust, t) {
+  function drawFlame(ctx, x, y, ang, L, burn, thrust, t, col) {
     var drive = clamp(FLAME_BASE + thrust * 0.55 + burn * 0.95, 0, 2.0);
     if (drive <= 0.02) return;
 
@@ -313,7 +489,7 @@
     var prevOp = ctx.globalCompositeOperation;
     ctx.globalCompositeOperation = 'lighter';
 
-    ctx.drawImage(flameSprite(b), -wid, y0, wid * 2, len);
+    ctx.drawImage(flameSprite(b, col), -wid, y0, wid * 2, len);
 
     var br = wid * (1.15 + burn * 0.75);
     ctx.drawImage(bloomSprite(b), -br, y0 - br, br * 2, br * 2);
@@ -337,9 +513,19 @@
     var alpha = o.alpha === undefined ? 1 : o.alpha;
     var L = R * HULL_F;
 
-    drawFlame(ctx, x, y, ang, L, burn, thrust, t);
+    /* Resolved ONCE per draw and threaded through both halves, so the hull and
+       its own exhaust can never disagree about what colour the ship is - which
+       is exactly what would happen if each looked SK.Ship.current() up for
+       itself and the crown changed hands between the two calls.
 
-    var spr = hullSprite();
+       `opts.paint` is the customiser's preview hook: a specific paint (or
+       single hex) to draw instead of the live one. `opts.colour` is its old
+       name, still honoured. Neither is ever persisted by drawing it. */
+    var col = resolve(o.paint || o.colour);
+
+    drawFlame(ctx, x, y, ang, L, burn, thrust, t, col);
+
+    var spr = hullSprite(col);
     var half = (spr.width / 2) * (L / SPRITE_L);
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -376,22 +562,30 @@
 
   SK.Rocket = {
     HULL_F: HULL_F,
-    TRIM: TRIM,
     FLAME_BURN: FLAME_BURN,
+    /* The painted colours for a given hex, or for the live ship. Exposed for
+       the customiser's preview and for test/ship.mjs, which asserts the
+       derivation against the constants this file used to hold. */
+    resolve: resolve,
     heading: heading,
     turn: turn,
     draw: draw,
     nozzle: nozzle,
-    /* For the harness: proves every part of the ship is baked, not repainted.
-       `hull` must be 1 and `flame`/`bloom` must never exceed FLAME_BUCKETS+1,
-       which is what makes the cache bounded rather than merely small today. */
+    /* For the harness: proves every part of the ship is baked, not repainted,
+       and that making the paint configurable did not make the caches
+       unbounded. Each count must stay at or under its own ceiling no matter
+       how many colours have been walked. */
     cacheStats: function () {
-      var f = 0, b = 0, i;
-      for (i = 0; i <= FLAME_BUCKETS; i++) {
-        if (flameCache[i]) f++;
-        if (bloomCache[i]) b++;
-      }
-      return { hull: hullSpr ? 1 : 0, flame: f, bloom: b, ceiling: FLAME_BUCKETS + 1 };
+      var b = 0, i;
+      for (i = 0; i <= FLAME_BUCKETS; i++) { if (bloomCache[i]) b++; }
+      return {
+        hull: hullOrder.length,
+        flame: flameOrder.length,
+        bloom: b,
+        hullMax: HULL_CACHE_MAX,
+        flameMax: FLAME_CACHE_MAX,
+        bloomMax: FLAME_BUCKETS + 1
+      };
     }
   };
 

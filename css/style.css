@@ -187,6 +187,22 @@ body {
   color: rgba(150, 190, 220, 0.85);
 }
 
+/* The two account actions live directly under the "Signed in as X" line and
+   read as a continuation of it, so they are centred under that sentence
+   rather than pushed to the edges the way .ol-links spaces the form links. */
+.ol-account-links {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: -8px 0 10px;
+}
+.ol-account-links .ol-link {
+  padding: 9px 2px;
+  min-height: 40px;
+  font-size: 12px;
+}
+
 /* ---- the board ---- */
 .ol-list {
   list-style: none;
@@ -412,4 +428,182 @@ body {
 @media (max-height: 560px) {
   .ol-list { max-height: 32vh; }
   .ol-panel { padding: 16px 16px 14px; }
+}
+
+/* ===== Ship customiser =====
+   Scoped under .sh-*, but the panel itself is a .ol / .ol-panel, so the frame,
+   the backdrop, the title, the close button, the message line and the actions
+   are literally the same rules the leaderboard uses. Only the two things the
+   leaderboard has no equivalent of are new: the preview and the swatch grid.
+
+   Unlike the account overlay, NOTHING here is gated on a backend - the
+   customiser ships in every build, including a file:// open with no network,
+   so these rules are always live. */
+
+.sh-preview {
+  display: flex;
+  justify-content: center;
+  margin: 0 0 12px;
+}
+
+.sh-preview canvas {
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  /* The same neon frame the game canvas wears, at a smaller radius: the
+     preview is a little window onto the same screen, not an illustration. */
+  box-shadow:
+    0 0 0 1px rgba(53, 230, 255, 0.18),
+    0 0 26px rgba(53, 230, 255, 0.10),
+    0 10px 30px rgba(0, 0, 0, 0.55);
+}
+
+/* The crown line. Gold rather than cyan because it is the one sentence in the
+   panel that is about the gold hull, and it sits directly under a rocket that
+   is either wearing it or is not. Same gold as .ol-myrank and the BEST score
+   on the title screen, so "gold means top of the board" stays one idea. */
+.sh-crown {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  color: #ffd75e;
+}
+
+/* ---- the part tabs ----
+   Nose / window / body / fire, one row of four. Each tab carries a dot in
+   that part's current colour, so the whole paint job reads at a glance
+   without opening each part. Same cell language as the swatches below, at a
+   smaller size - they are the same kind of control one level up. */
+.sh-parts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.sh-part {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 2px;
+  min-height: 44px;
+  font: inherit;
+  color: rgba(190, 220, 240, 0.75);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(53, 230, 255, 0.16);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.sh-part:hover { background: rgba(53, 230, 255, 0.10); }
+.sh-part .sh-dot { width: 14px; height: 14px; }
+.sh-part.is-on {
+  background: rgba(53, 230, 255, 0.14);
+  border-color: rgba(53, 230, 255, 0.85);
+  color: #eaf6ff;
+}
+
+/* ---- the swatch grid ----
+   Four across. On a 390px phone the panel is 358px wide inside its padding,
+   so a cell is ~80px - a 44px-plus tap target with its label under it, and
+   the thirteen cells (twelve colours plus the locked gold) land as four rows
+   with no scroll. */
+.sh-swatches {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 0 0 4px;
+}
+
+.sh-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 2px 7px;
+  min-height: 62px;
+  font: inherit;
+  color: rgba(190, 220, 240, 0.8);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(53, 230, 255, 0.16);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.sh-swatch:hover { background: rgba(53, 230, 255, 0.10); }
+
+.sh-dot {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  /* A thin white rim, because four of the twelve colours are light enough to
+     lose their own edge against the panel and read as a smudge without it. */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+}
+
+.sh-cap {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.1;
+  text-align: center;
+}
+
+/* The selected cell. A ring plus a glow rather than a colour change: the cell
+   already carries a colour, and the one thing the selection must not do is
+   argue with it. */
+.sh-swatch.is-on {
+  background: rgba(53, 230, 255, 0.14);
+  border-color: rgba(53, 230, 255, 0.85);
+  color: #eaf6ff;
+  box-shadow: 0 0 16px rgba(53, 230, 255, 0.22);
+}
+
+/* A colour this part cannot take ON THIS SHIP - a pale window on a pale
+   hull, say. Dimmed and crossed rather than hidden: the grid keeps its shape
+   when the body changes, and the reason is one tap (or one hover) away.
+   The refusal itself lives in SK.Ship.set(); this is only its explanation. */
+.sh-swatch.is-blocked {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+.sh-swatch.is-blocked:hover { background: rgba(255, 255, 255, 0.03); }
+.sh-swatch.is-blocked .sh-dot {
+  background-image: linear-gradient(135deg, transparent 45%, rgba(6, 7, 19, 0.9) 45%,
+    rgba(6, 7, 19, 0.9) 55%, transparent 55%) !important;
+}
+
+/* The champion's hull: shown to everybody, takeable by nobody. Dashed border
+   and a padlock-ish dimming say "this is a state, not a choice" without
+   hiding what the colour looks like - which is the whole reason the cell is
+   on screen. Tapping it is not silently ignored: js/ui_ship.js answers with
+   the rule. */
+.sh-swatch.is-locked {
+  border-style: dashed;
+  border-color: rgba(255, 194, 26, 0.45);
+  color: rgba(255, 215, 94, 0.85);
+  cursor: not-allowed;
+}
+.sh-swatch.is-locked:hover { background: rgba(255, 194, 26, 0.08); }
+.sh-swatch.is-locked .sh-dot { opacity: 0.85; }
+
+/* Worn, not merely displayed: while the player really is #1 the gold cell is
+   the selected one, and it says so in gold rather than in the cyan every
+   other selection uses. */
+.sh-swatch.is-locked.is-on {
+  background: rgba(255, 194, 26, 0.16);
+  border-style: solid;
+  border-color: rgba(255, 194, 26, 0.9);
+  color: #ffe9a8;
+  box-shadow: 0 0 18px rgba(255, 194, 26, 0.28);
+}
+
+/* Short screens (landscape phones): the preview is the first thing that can
+   afford to shrink - the swatches are the controls, and they cannot. */
+@media (max-height: 560px) {
+  .sh-preview canvas { width: 150px; }
+  .sh-preview { margin-bottom: 8px; }
 }

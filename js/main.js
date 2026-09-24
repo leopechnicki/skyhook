@@ -122,8 +122,13 @@
        into; now there is, and an unguarded listener would start a run under
        the player mid-password - or worse, swallow the space so the password
        they typed is not the one they think they typed. Two guards: any open
-       overlay owns the keyboard, and so does any focused form control. */
+       overlay owns the keyboard, and so does any focused form control.
+       "Any" includes the ship customiser: it can now be opened from the
+       PAUSED screen, where SPACE means "resume" - so without this a player
+       arrowing through swatches who hits space would unpause the run under
+       the panel. */
     if (SK.UI && SK.UI.isOpen && SK.UI.isOpen()) return;
+    if (SK.UIShip && SK.UIShip.isOpen && SK.UIShip.isOpen()) return;
     var tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
 
@@ -136,6 +141,16 @@
     } else if (k === 'KeyM' || k === 'm') {
       armAudio();
       game.toggleMute();
+    } else if (k === 'KeyP' || k === 'p') {
+      /* P toggles, like the HUD button and a tap together. */
+      if (game.state === 'playing') game.pause();
+      else if (game.state === 'paused') game.resume();
+    } else if (k === 'Escape') {
+      /* Esc only ever PAUSES. It is also the key that closes the customiser,
+         and the panel's own listener closes it first - so if Esc could
+         resume, closing the panel from the pause menu would drop the player
+         straight back into a live orbit. */
+      if (game.state === 'playing') game.pause();
     }
   });
 
