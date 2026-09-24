@@ -188,7 +188,7 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 | `test/smoke.mjs` | 408 | Playwright end-to-end smoke test |
 | `test/balance.mjs` | 572 | Headless difficulty/balance harness (no browser) |
 | `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |
-| `test/online.mjs` | 1692 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
+| `test/online.mjs` | 1717 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
 | `test/leaderboard_ui.mjs` | 1635 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
 | `test/ship.mjs` | 751 | Ship paint model: every menu combination readable, gold never stored, the DB allow-list and palette remap match the client |
 | `test/ship_ui.mjs` | 193 | The customiser panel in a real browser |
