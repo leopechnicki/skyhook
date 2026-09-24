@@ -1711,6 +1711,133 @@ const WRONG = 'the-one-somebody-else-guessed';
     s.calls.map(c => c.url).join(' | '));
 }
 
+/* ==========================================================================
+ * 16. Bot review: telemetry on the wire, and the SQL rule in step with ours.
+ * ========================================================================
+ * The server holds a run for review from the telemetry the game attaches
+ * (supabase/schema.sql section 3b). The client half has three jobs: carry
+ * that telemetry - cleaned, capped, and nothing extra - carry it through the
+ * parked-run path too, and tell the player the truth when a run is held.
+ * test/botdef.mjs calibrates the thresholds against the public bot; this
+ * section makes sure the SQL uses the SAME thresholds. */
+{
+  const TEL = { v: 1, hz: 120, n: 40, syn: 0, rel: 38, miss: 2, forced: 1,
+                off: [-3, 0, 2, 5, -1], extra: 'must not ship', pos: [1, 2] };
+  const runT = { score: 2400, hooks: 30, altitude: 800, durationMs: 50000, telemetry: TEL };
+
+  const s = makeSandbox();
+  s.Online.configure(CONFIG);
+  s.route(call => {
+    if (call.url.includes('/auth/v1/signup')) return { status: 200, body: TOKEN_OK };
+    if (call.url.includes('/rest/v1/scores')) return { status: 201, body: [{ flagged: false }] };
+    if (call.url.includes('/rest/v1/profiles')) return { status: 200, body: [{ username: 'leo' }] };
+    return { status: 404, body: { message: 'unexpected' } };
+  });
+  await s.Online.signUp('leo', 'leo@example.com', 'hunter2hunter2');
+  const out = await s.Online.submitRun(runT);
+  const post = s.calls.find(c => c.url.includes('/rest/v1/scores'));
+
+  check('a run with telemetry sends it as `telemetry` next to the four stats',
+    JSON.stringify(Object.keys(post.body).sort()) === '["altitude","duration_ms","hooks","score","telemetry"]',
+    JSON.stringify(Object.keys(post.body)));
+  check('telemetry is cleaned to exactly the fields the server reads',
+    JSON.stringify(Object.keys(post.body.telemetry).sort()) ===
+      '["forced","hz","miss","n","off","rel","syn","v"]',
+    JSON.stringify(post.body.telemetry));
+  check('telemetry offsets arrive intact', JSON.stringify(post.body.telemetry.off) === '[-3,0,2,5,-1]');
+  check('the submission asks the server whether it held the run',
+    post.url.includes('select=flagged') && post.headers.Prefer === 'return=representation', post.url);
+  check('an unheld run reports submitted, not flagged', out.submitted === true && out.flagged === false);
+
+  const big = Object.assign({}, runT, { telemetry: Object.assign({}, TEL, { off: new Array(5000).fill(0) }) });
+  check('offsets are capped at 400 on the client too', s.Online.payloadFor(big).telemetry.off.length === 400);
+
+  /* Held for review: saved, told so, not counted as a failure. */
+  const h = makeSandbox();
+  h.Online.configure(CONFIG);
+  h.route(call => {
+    if (call.url.includes('/auth/v1/signup')) return { status: 200, body: TOKEN_OK };
+    if (call.url.includes('/rest/v1/scores')) return { status: 201, body: [{ flagged: true }] };
+    if (call.url.includes('/rest/v1/profiles')) return { status: 200, body: [{ username: 'leo' }] };
+    return { status: 404, body: { message: 'unexpected' } };
+  });
+  await h.Online.signUp('leo', 'leo@example.com', 'hunter2hunter2');
+  const held = await h.Online.submitRun(runT);
+  check('a run the server held comes back submitted AND flagged',
+    held.submitted === true && held.flagged === true, JSON.stringify(held));
+  check('a held run is not parked for a retry (it was saved)', h.Online.pendingRun() === null);
+
+  /* Parked while signed out: the telemetry has to survive the round trip
+     through localStorage, or every parked run lands as no_telemetry. */
+  const p = makeSandbox();
+  p.Online.configure(CONFIG);
+  await p.Online.submitRun(runT);
+  const parked = p.Online.pendingRun();
+  check('a parked run keeps its telemetry',
+    !!parked && !!parked.telemetry && parked.telemetry.rel === 38 && !('extra' in parked.telemetry),
+    JSON.stringify(parked));
+
+  /* The daily cap has its own code and its own sentence. */
+  const d = makeSandbox();
+  d.Online.configure(CONFIG);
+  d.route(call => {
+    if (call.url.includes('/auth/v1/signup')) return { status: 200, body: TOKEN_OK };
+    if (call.url.includes('/rest/v1/scores')) {
+      return { status: 400, body: { code: 'SKDAY', message: 'daily limit: too many scores submitted today, try again tomorrow' } };
+    }
+    if (call.url.includes('/rest/v1/profiles')) return { status: 200, body: [{ username: 'leo' }] };
+    return { status: 404, body: { message: 'unexpected' } };
+  });
+  await d.Online.signUp('leo', 'leo@example.com', 'hunter2hunter2');
+  const capped = await d.Online.submitRun(runT);
+  check('the daily cap is reported as such, and says tomorrow - not "wait a minute"',
+    capped.submitted === false && capped.queued === false && /tomorrow/i.test(capped.reason) &&
+      !/minute/i.test(capped.reason), capped.reason);
+
+  /* The mirror rule. */
+  const R = s.Online.reviewRun;
+  const withOff = (off, extra) => ({ score: 5000, hooks: 40,
+    telemetry: Object.assign({ v: 1, hz: 120, n: 45, syn: 0, rel: 42, miss: 1, forced: 0, off }, extra || {}) });
+  const humanOff = Array.from({ length: 40 }, (_, i) => [-4, -2, 0, 3, 1, -5, 2, -1, 4, -3][i % 10]);
+  const botOff = Array.from({ length: 40 }, (_, i) => (i % 3 === 0 ? -1 : 0));
+  check('reviewRun: human-shaped timing passes', R(withOff(humanOff)).length === 0);
+  check('reviewRun: bot-perfect timing is superhuman_timing', R(withOff(botOff)).includes('superhuman_timing'));
+  check('reviewRun: too few releases are never judged on timing', R(withOff(botOff.slice(0, 24))).length === 0);
+  check('reviewRun: synthetic input is flagged', R(withOff(humanOff, { syn: 3 })).includes('synthetic_input'));
+  check('reviewRun: hooks without releases is telemetry_mismatch',
+    R(withOff(humanOff, { rel: 10, n: 12 })).includes('telemetry_mismatch'));
+  check('reviewRun: no telemetry is no_telemetry', JSON.stringify(R({ score: 1, hooks: 1 })) === '["no_telemetry"]');
+
+  /* ...and the SQL says the same numbers. Blunt text assertions, like
+     section 11, because the SQL runs in Leo's project and not in CI. */
+  const sql = fs.readFileSync(path.join(ROOT, 'supabase/schema.sql'), 'utf8');
+  const norm = sql.replace(/\s+/g, ' ').toLowerCase();
+  const RV = s.Online.REVIEW;
+  check('SQL timing window matches the client (abs(v) <= ' + RV.window + ')',
+    norm.includes('filter (where abs(v) <= ' + RV.window + ')'));
+  check('SQL core window matches the client (abs(v) <= ' + RV.core + ')',
+    norm.includes('filter (where abs(v) <= ' + RV.core + ')'));
+  check('SQL sample floor and ratio match the client',
+    norm.includes('graded >= ' + RV.minGraded + ' and core >= ' + RV.ratio + ' * graded'));
+  check('SQL mismatch rule matches the client',
+    norm.includes('new.hooks > n_rel + n_force + 1 or n_rel > n_in'));
+  check('the review runs as a BEFORE INSERT trigger on scores',
+    /create trigger scores_review_trg before insert on public\.scores/.test(norm));
+  check('the trigger, not the client, decides flagged',
+    norm.includes('new.flagged := cardinality(reasons) > 0'));
+  check('the public board excludes flagged runs',
+    /create or replace view public\.leaderboard[\s\S]*?where not s\.flagged[\s\S]*?;/.test(sql.toLowerCase()));
+  check('the review queue is not served to the public roles',
+    norm.includes('revoke all on public.scores_review_queue from anon, authenticated'));
+  check('the daily cap exists and raises SKDAY',
+    norm.includes("interval '24 hours'") && norm.includes("errcode = 'skday'"));
+  check('the rate limits count the CALLER, not the user_id in the body',
+    !norm.includes('where user_id = new.user_id') &&
+      (norm.match(/where user_id = coalesce\(auth\.uid\(\), new\.user_id\)/g) || []).length === 2);
+  check('flagging never deletes: still no delete policy and no delete statement on scores',
+    !/create policy[^;]*for delete[^;]*on public\.scores/.test(norm) && !/delete from public\.scores/.test(norm));
+}
+
 console.log(`\n${fails === 0
   ? 'online layer holds: offline stays offline, payloads are right, the rules are in the database'
   : fails + ' FAILURE(S)'}`);

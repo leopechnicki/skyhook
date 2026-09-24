@@ -30,6 +30,11 @@
 --   * Plausibility and rate limiting run in a BEFORE INSERT trigger rather than
 --     in an RPC. An RPC-only rate limit is bypassable by calling the table
 --     directly; a trigger is not, because it sits under every write path.
+--   * Everything above stops a FORGED run. None of it stops a bot that
+--     actually plays the game and submits the genuine run it played - that
+--     run passes every constraint honestly. Section 3b answers that one, and
+--     answers it by FLAGGING, not rejecting: a flagged run stays in the
+--     ledger, drops off the public board, and waits for a human to look.
 --
 -- ===========================================================================
 
@@ -120,6 +125,19 @@ create index if not exists scores_user_best_idx
 create index if not exists scores_score_idx
   on public.scores (score desc, created_at asc);
 
+-- Bot review columns (section 3b). Added with IF NOT EXISTS so re-running the
+-- file on a live project migrates it in place; every run already on the board
+-- lands as flagged = false, because there is no telemetry to judge it by.
+alter table public.scores add column if not exists telemetry    jsonb;
+alter table public.scores add column if not exists flagged      boolean not null default false;
+alter table public.scores add column if not exists flag_reasons text[]  not null default '{}';
+
+-- The client sends at most 400 release offsets - a few KB. Anything much
+-- bigger did not come from the game and is not worth storing.
+alter table public.scores drop constraint if exists scores_telemetry_size;
+alter table public.scores add constraint scores_telemetry_size
+  check (telemetry is null or octet_length(telemetry::text) <= 16384);
+
 -- ---------------------------------------------------------------------------
 -- 3. Rate limit - in a trigger, so no write path can skip it
 -- ---------------------------------------------------------------------------
@@ -137,14 +155,32 @@ as $$
 declare
   recent integer;
 begin
+  -- Counted against the CALLER, not against whatever user_id the body
+  -- carries: that value is overwritten below, so counting it let a client
+  -- dodge this limit by naming somebody else's id in the POST.
   select count(*) into recent
     from public.scores
-   where user_id = new.user_id
+   where user_id = coalesce(auth.uid(), new.user_id)
      and created_at > now() - interval '60 seconds';
 
   if recent >= 10 then
     raise exception 'rate limit: too many scores submitted, try again in a minute'
       using errcode = '54000';
+  end if;
+
+  -- Daily cap. The per-minute limit still allows 14,400 runs a day, which is
+  -- a search budget: a bot can play thousands of runs and keep the best.
+  -- 500 a day is several hours of back-to-back human play, and cuts that
+  -- budget ~29x. Its own error code so the client can say the true thing
+  -- ("come back tomorrow") instead of "wait a minute".
+  select count(*) into recent
+    from public.scores
+   where user_id = coalesce(auth.uid(), new.user_id)
+     and created_at > now() - interval '24 hours';
+
+  if recent >= 500 then
+    raise exception 'daily limit: too many scores submitted today, try again tomorrow'
+      using errcode = 'SKDAY';
   end if;
 
   -- The client does not get to choose whose score this is, no matter what it
@@ -162,6 +198,107 @@ drop trigger if exists scores_rate_limit_trg on public.scores;
 create trigger scores_rate_limit_trg
   before insert on public.scores
   for each row execute function public.scores_rate_limit();
+
+-- ---------------------------------------------------------------------------
+-- 3b. Bot review - flag, never reject, never delete
+-- ---------------------------------------------------------------------------
+-- The game attaches a small telemetry object to every run (js/game.js
+-- _teleRelease, sent by js/online.js payloadFor):
+--
+--   { v, hz, n, syn, rel, miss, forced, off: [int, ...] }
+--     n       inputs that reached the game during the run
+--     syn     of those, how many were NOT real browser input events
+--             (dispatchEvent, __SKYHOOK.tap(), a script)
+--     rel     manual releases; miss = releases that were not going to latch
+--     forced  releases forced by a decay anchor
+--     off     per manual release: offset in sim ticks (1/120 s) from the
+--             frame-perfect release for the body it latched. Negative = early.
+--
+-- The rules, and why each one is safe for a human:
+--   synthetic_input     a person's finger or key is always isTrusted. Only a
+--                       script produces an untrusted event.
+--   telemetry_mismatch  every hook after the first needs a release, and every
+--                       release needs an input. hooks > rel + forced + 1, or
+--                       rel > n, cannot come out of the game.
+--   superhuman_timing   of the releases within +-6 ticks (50 ms) of optimal,
+--                       90%+ landed within +-1 tick (8 ms), over 25+ releases.
+--                       test/bot.js (public, in the repo) lands there on
+--                       98-100% of runs. A modelled human with 12 ms of timing
+--                       spread - already a ~10k-point player - tops out at
+--                       0.84; documented human coincidence-timing spread is
+--                       20-40 ms. test/botdef.mjs pins both numbers.
+--   no_telemetry        a run without it is either a client older than this
+--                       file or a hand-made POST. Held for review, not refused.
+--
+-- A flagged run is INSERTED, kept in the ledger, and simply not shown on the
+-- public board. The trigger overwrites whatever flagged / flag_reasons the
+-- client sent. Clearing a flag is a dashboard action (see the review queue
+-- at the end of this file) - no client can do it.
+--
+-- What this does NOT stop: all of the telemetry is produced by the client,
+-- so a bot author who reads this file can forge it. What forging it costs
+-- them is the point - to pass, the bot must release with human-sized timing
+-- error, and in this game timing error IS score (see test/botdef.mjs: the
+-- same player loses most of its points going from 8 ms to 20 ms of spread).
+
+create or replace function public.scores_review()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  tel     jsonb := new.telemetry;
+  reasons text[] := '{}';
+  n_in    numeric;
+  n_syn   numeric;
+  n_rel   numeric;
+  n_force numeric;
+  graded  integer := 0;
+  core    integer := 0;
+begin
+  if tel is null or jsonb_typeof(tel) <> 'object' then
+    reasons := array_append(reasons, 'no_telemetry');
+  else
+    begin
+      n_in    := coalesce((tel ->> 'n')::numeric, 0);
+      n_syn   := coalesce((tel ->> 'syn')::numeric, 0);
+      n_rel   := coalesce((tel ->> 'rel')::numeric, 0);
+      n_force := coalesce((tel ->> 'forced')::numeric, 0);
+
+      select count(*) filter (where abs(v) <= 6),
+             count(*) filter (where abs(v) <= 1)
+        into graded, core
+        from (select (e #>> '{}')::numeric as v
+                from jsonb_array_elements(coalesce(tel -> 'off', '[]'::jsonb)) e
+               limit 400) x;
+
+      if n_syn > 0 then
+        reasons := array_append(reasons, 'synthetic_input');
+      end if;
+      if new.hooks > n_rel + n_force + 1 or n_rel > n_in then
+        reasons := array_append(reasons, 'telemetry_mismatch');
+      end if;
+      if graded >= 25 and core >= 0.9 * graded then
+        reasons := array_append(reasons, 'superhuman_timing');
+      end if;
+    exception when others then
+      -- Wrong types, a non-array `off`, numbers too large to cast: the
+      -- telemetry did not come from the game. Flag, do not refuse the row.
+      reasons := array_append(reasons, 'telemetry_malformed');
+    end;
+  end if;
+
+  new.flag_reasons := reasons;
+  new.flagged := cardinality(reasons) > 0;
+  return new;
+end;
+$$;
+
+drop trigger if exists scores_review_trg on public.scores;
+create trigger scores_review_trg
+  before insert on public.scores
+  for each row execute function public.scores_review();
 
 -- ---------------------------------------------------------------------------
 -- 4. New account -> profile row
@@ -408,6 +545,9 @@ from (
   select distinct on (s.user_id)
          s.user_id, s.score, s.hooks, s.altitude, s.created_at
     from public.scores s
+   -- Flagged runs stay in the ledger and off the board. A player with a
+   -- flagged best still shows with their best UNflagged run, if any.
+   where not s.flagged
    order by s.user_id, s.score desc, s.created_at asc
 ) b
 join public.profiles p on p.id = b.user_id
@@ -607,6 +747,31 @@ $$;
 
 revoke execute on function public.set_ship_paint(text, text, text, text) from anon, public;
 grant  execute on function public.set_ship_paint(text, text, text, text) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 10. Review queue - dashboard only
+-- ---------------------------------------------------------------------------
+-- Every flagged run, newest first, with the reasons. For the SQL editor in
+-- the Supabase dashboard (which runs as the owner); revoked from the public
+-- roles so PostgREST does not serve it. No email: username only.
+--
+--   select * from public.scores_review_queue;
+--
+--   -- A flag that was wrong: put the run back on the board. The reasons are
+--   -- kept, so the record of why it was held survives the decision.
+--   update public.scores set flagged = false where id = <id>;
+
+create or replace view public.scores_review_queue
+with (security_invoker = on)
+as
+select s.id, p.username, s.score, s.hooks, s.altitude, s.duration_ms,
+       s.flag_reasons, s.telemetry, s.created_at
+  from public.scores s
+  join public.profiles p on p.id = s.user_id
+ where s.flagged
+ order by s.created_at desc;
+
+revoke all on public.scores_review_queue from anon, authenticated;
 
 -- ===========================================================================
 -- Verification - run these after the script and read the answers.

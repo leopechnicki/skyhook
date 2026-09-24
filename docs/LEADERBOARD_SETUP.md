@@ -189,8 +189,50 @@ match the callback Supabase gave you, character for character.
 **Somebody submitted an impossible score.** They did not - the database refuses
 it. `supabase/schema.sql` caps what a run can contain, checks the score against
 the hook count and the hook count against the clock, and allows no more than ten
-submissions a minute per account. Scores can only ever be added, never edited or
-deleted, by anyone using the public key.
+submissions a minute and 500 a day per account. Scores can only ever be added,
+never edited or deleted, by anyone using the public key.
+
+**Somebody submitted a score that is possible, but a bot played it.** That is a
+different problem, and the checks above cannot see it: a bot that really plays
+the game submits a real run. See *Bot review* below.
+
+## Bot review
+
+Every run carries a small telemetry record from the game (inputs, how many were
+synthetic, releases, and how far each release landed from the frame-perfect
+one). A database trigger reads it and either puts the run on the board or holds
+it for review. **A held run is never deleted and never refused** - it is saved,
+it just does not appear on the public board until you clear it. The player is
+told "saved - held for review, not on the board yet".
+
+A run is held when:
+
+| reason | meaning |
+|---|---|
+| `synthetic_input` | at least one input did not come from a real browser input event (a script's `dispatchEvent`, `__SKYHOOK.tap()`) |
+| `superhuman_timing` | over 25+ releases, 90%+ of the near-optimal ones landed within 8 ms of frame-perfect. The public `test/bot.js` does this on every run; humans do not (`test/botdef.mjs`) |
+| `telemetry_mismatch` | more hooks than releases, or more releases than inputs - not something the game can produce |
+| `no_telemetry` | an older cached copy of the game, or a hand-made POST |
+| `telemetry_malformed` | telemetry that did not come from the game |
+
+**Turning it on (existing project):** re-run `supabase/schema.sql` in the SQL
+Editor, exactly as in step 2. It is idempotent and migrates the table in place;
+every run already on the board stays on it.
+
+**Reviewing** - SQL Editor:
+
+```sql
+select * from public.scores_review_queue;                  -- held runs, newest first
+update public.scores set flagged = false where id = 123;   -- put one back on the board
+```
+
+**What it cannot do.** The telemetry is produced by the player's browser, so a
+bot author who reads the source can fake it. What faking it costs them is the
+point: to pass the timing rule a bot must miss by human-sized margins, and in
+this game timing *is* score (`test/botdef.mjs`: the same player drops from ~34k
+to ~2k going from 8 ms to 30 ms of spread). It raises the bar from "copy
+`test/bot.js`" to "write a bot that plays like a very good human" - it does not
+make cheating impossible, and nothing client-side can.
 
 ## What players can see about each other
 

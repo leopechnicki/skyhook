@@ -81,6 +81,15 @@ jobs:
       - name: Online layer (offline default + RLS rules)
         run: node test/online.mjs
 
+      # The leaderboard's bot review holds a run when its telemetry says a
+      # machine played it. That threshold only means something between two
+      # measured numbers: the public test/bot.js must be caught on (nearly)
+      # every run, and a modelled human with 12-30 ms of timing spread must
+      # never be. Both are played here on the real game logic. Pure Node,
+      # a few seconds. test/online.mjs asserts the SQL carries the same rule.
+      - name: Leaderboard bot review calibration
+        run: node test/botdef.mjs
+
       # The one canonical origin, both halves of it. index.html has to DECLARE
       # https://skyhookplay.com rather than have nginx correct it on the way
       # out, and pages/ has to redirect the retired GitHub Pages URL there

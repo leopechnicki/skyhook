@@ -79,6 +79,10 @@
     if (e.touches && e.touches.length) { cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
     else { cx = e.clientX; cy = e.clientY; }
     var p = toLogical(cx, cy);
+    /* Whether a real person's input device produced this event. Recorded by
+       the game for the leaderboard's bot review, never used to refuse input:
+       an untrusted tap still plays exactly like a trusted one. */
+    game.inputTrusted = e.isTrusted === true;
     /* A tap anywhere in the letterboxed stage counts; taps land on the
        mute button only when they are actually inside the canvas. */
     game.pointerDown(p.x, p.y);
@@ -132,6 +136,7 @@
     if (k === 'Space' || k === 'Enter' || k === 'ArrowUp' || k === 'KeyW' || k === ' ') {
       e.preventDefault();
       armAudio();
+      game.inputTrusted = e.isTrusted === true;
       game.action();
     } else if (k === 'KeyM' || k === 'm') {
       armAudio();
