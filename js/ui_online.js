@@ -317,6 +317,12 @@
   var modOpen = null;          // the strip <li> currently open, if any
 
   function closeMod() {
+    /* If focus is inside the strip, hand it back to the row's Manage button
+       before the strip goes - otherwise it falls to <body> and a keyboard or
+       screen-reader user is thrown to the top of the panel. */
+    try {
+      if (modOpen && modOpen.opener && modOpen.contains(doc.activeElement)) modOpen.opener.focus();
+    } catch (e) { /* ignore */ }
     if (modOpen && modOpen.parentNode) modOpen.parentNode.removeChild(modOpen);
     if (modOpen && modOpen.opener) modOpen.opener.setAttribute('aria-expanded', 'false');
     modOpen = null;
@@ -354,15 +360,17 @@
 
     function actions() {
       while (bar.firstChild) bar.removeChild(bar.firstChild);
+      /* The name is on the buttons so the one-tap action can never be read
+         as belonging to the row above or below the strip. */
       bar.appendChild(r.banned
-        ? modAction('Unban', '', function () {
+        ? modAction('Unban ' + r.username, '', function () {
           run(Online.unbanUser(r.userId), r.username + ' is back on the board.');
         })
-        : modAction('Ban', 'is-warn', function () {
+        : modAction('Ban ' + r.username, 'is-warn', function () {
           run(Online.banUser(r.userId, 'suspected bot'),
             r.username + ' is banned: off the board, and cannot submit. Unban from this list.');
         }));
-      bar.appendChild(modAction('Delete', 'is-danger', confirmDelete));
+      bar.appendChild(modAction('Delete ' + r.username, 'is-danger', confirmDelete));
       bar.appendChild(modAction('Cancel', '', closeMod));
     }
 
@@ -375,9 +383,18 @@
       var yes = modAction('Yes, delete', 'is-danger', function () {
         run(Online.deleteUser(r.userId), r.username + ' was deleted.');
       });
+      var keep = modAction('Keep', '', function () {
+        actions();
+        try { bar.querySelector('button').focus(); } catch (e) { /* ignore */ }
+      });
       bar.appendChild(yes);
-      bar.appendChild(modAction('Keep', '', actions));
-      try { yes.focus(); } catch (e) { /* ignore */ }
+      bar.appendChild(keep);
+      /* "Yes, delete" renders where "Delete" was just tapped. So a double tap
+         or a held Enter must not be able to answer the question: focus goes
+         to the safe choice, and the destructive one wakes up after a beat. */
+      yes.disabled = true;
+      setTimeout(function () { yes.disabled = false; }, 500);
+      try { keep.focus(); } catch (e) { /* ignore */ }
     }
 
     function run(p, done) {
@@ -1031,7 +1048,12 @@
 
     doc.addEventListener('keydown', function (e) {
       if (!open) return;
-      if (e.key === 'Escape') { closeOverlay(); return; }
+      if (e.key === 'Escape') {
+        /* An open moderation strip is the innermost thing - close that. */
+        if (modOpen) { closeMod(); return; }
+        closeOverlay();
+        return;
+      }
       trapTab(e);
     });
 

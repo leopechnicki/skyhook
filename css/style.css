@@ -222,7 +222,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .ol-row + .ol-row { margin-top: 2px; }
-.ol-row:nth-child(odd) { background: rgba(255, 255, 255, 0.022); }
+.ol-row:nth-child(odd of .ol-row) { background: rgba(255, 255, 255, 0.022); }
 
 /* Your own line, so you can find yourself without reading every row. */
 .ol-row.is-me {
@@ -259,7 +259,7 @@ body {
    None of these classes exist in the DOM for anybody else. */
 .ol-row.is-banned .ol-name,
 .ol-row.is-banned .ol-score {
-  color: rgba(223, 240, 255, 0.45);
+  color: rgba(223, 240, 255, 0.6);
   text-decoration: line-through;
 }
 .ol-tag {

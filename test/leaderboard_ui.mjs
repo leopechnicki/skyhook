@@ -1303,9 +1303,14 @@ async function main() {
         (await bar.count()) === 1 &&
         (await row('lucas').locator('.ol-mod').getAttribute('aria-expanded')) === 'true');
       check('the strip offers Ban, Delete and Cancel for an unbanned account',
-        JSON.stringify(await bar.locator('button').allTextContents()) === '["Ban","Delete","Cancel"]',
+        JSON.stringify(await bar.locator('button').allTextContents()) === '["Ban lucas","Delete lucas","Cancel"]',
         JSON.stringify(await bar.locator('button').allTextContents()));
-      await bar.getByRole('button', { name: 'Ban' }).click();
+      await mpage.keyboard.press('Escape');
+      check('Escape closes the strip, not the whole leaderboard',
+        (await bar.count()) === 0 && (await mpage.locator('#ol-list .ol-row').count()) > 0 &&
+        (await row('lucas').locator('.ol-mod').getAttribute('aria-expanded')) === 'false');
+      await row('lucas').locator('.ol-mod').click();
+      await bar.getByRole('button', { name: 'Ban lucas', exact: true }).click();
       await mpage.waitForFunction(() => /banned/.test(document.getElementById('ol-board-msg').textContent), null, { timeout: 8000 });
       const ban = calls().find(c => c.url.startsWith('/rest/v1/rpc/admin_ban_user'));
       check('Ban sends that account\'s id - and only that', !!ban && ban.body.target === 'u-lucas' &&
@@ -1321,8 +1326,8 @@ async function main() {
       /* ---- unban ---- */
       await row('lucas').locator('.ol-mod').click();
       check('a banned account is offered Unban instead of Ban',
-        JSON.stringify(await bar.locator('button').allTextContents()) === '["Unban","Delete","Cancel"]');
-      await bar.getByRole('button', { name: 'Unban' }).click();
+        JSON.stringify(await bar.locator('button').allTextContents()) === '["Unban lucas","Delete lucas","Cancel"]');
+      await bar.getByRole('button', { name: 'Unban lucas', exact: true }).click();
       await mpage.waitForFunction(() => /back on the board/.test(document.getElementById('ol-board-msg').textContent), null, { timeout: 8000 });
       const unban = calls().find(c => c.url.startsWith('/rest/v1/rpc/admin_unban_user'));
       check('Unban sends that account\'s id', !!unban && unban.body.target === 'u-lucas');
@@ -1332,7 +1337,10 @@ async function main() {
 
       /* ---- delete: nothing is sent until it is confirmed ---- */
       await row('grok_bot').locator('.ol-mod').click();
-      await bar.getByRole('button', { name: 'Delete' }).click();
+      await bar.getByRole('button', { name: 'Delete grok_bot', exact: true }).click();
+      check('the confirm puts focus on Keep, and "Yes, delete" cannot be hit by a double tap',
+        (await mpage.evaluate(() => document.activeElement && document.activeElement.textContent)) === 'Keep' &&
+        (await bar.getByRole('button', { name: 'Yes, delete' }).isDisabled()) === true);
       check('Delete asks first, naming the account and saying it cannot be undone',
         /delete grok_bot for good/i.test(await bar.locator('.ol-modq').textContent()) &&
         /cannot be undone/i.test(await bar.locator('.ol-modq').textContent()));
@@ -1343,8 +1351,10 @@ async function main() {
         !calls().some(c => c.url.startsWith('/rest/v1/rpc/admin_delete_user')));
       await bar.getByRole('button', { name: 'Cancel' }).click();
       check('Cancel closes the strip', (await bar.count()) === 0);
+      check('...and hands focus back to that row\'s Manage button',
+        (await mpage.evaluate(() => document.activeElement && document.activeElement.getAttribute('aria-label'))) === 'Manage grok_bot');
       await row('grok_bot').locator('.ol-mod').click();
-      await bar.getByRole('button', { name: 'Delete' }).click();
+      await bar.getByRole('button', { name: 'Delete grok_bot', exact: true }).click();
       await bar.getByRole('button', { name: 'Yes, delete' }).click();
       await mpage.waitForFunction(() => /was deleted/.test(document.getElementById('ol-board-msg').textContent), null, { timeout: 8000 });
       const del = calls().filter(c => c.url.startsWith('/rest/v1/rpc/admin_delete_user'));
@@ -1356,14 +1366,14 @@ async function main() {
       moderationArmed = true;
       moderationFailure = { status: 403, body: { code: '42501', message: 'not allowed: admins only' } };
       await row('klaudia').locator('.ol-mod').click();
-      await bar.getByRole('button', { name: 'Ban' }).click();
+      await bar.getByRole('button', { name: 'Ban klaudia', exact: true }).click();
       await mpage.waitForFunction(() => document.getElementById('ol-board-msg').classList.contains('is-error'), null, { timeout: 8000 });
       check('a refused action says so, in words, not a server message',
         (await mpage.locator('#ol-board-msg').textContent()) === 'Only an admin can do that.',
         await mpage.locator('#ol-board-msg').textContent());
       check('...and the account is untouched and the strip is usable again',
         (await row('klaudia').locator('.ol-tag').count()) === 0 &&
-        (await bar.getByRole('button', { name: 'Ban' }).isDisabled()) === false);
+        (await bar.getByRole('button', { name: 'Ban klaudia', exact: true }).isDisabled()) === false);
       moderationArmed = false;
 
       await mctx.close();
