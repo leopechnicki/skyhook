@@ -100,7 +100,8 @@ jobs:
       # both name a project that is not production's". readOnlyScores is kept
       # as declared machinery and still proved to work, against a fixture that
       # forces it on. Also asserts that production is untouched by any of it,
-      # and that main and a feature branch cannot reach each other's deploy job.
+      # that production deploys only from main, and that staging deploys only
+      # when somebody runs staging.yml by hand.
       - name: Staging isolation (scores cannot reach the real board)
         run: node test/staging.mjs
 

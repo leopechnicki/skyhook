@@ -8,8 +8,9 @@
 # staging app name are never in the same command line.
 #
 # Nothing in this file may be copied into fly.toml and nothing in fly.toml
-# needs to know this file exists. .github/workflows/deploy.yml picks between
-# them by job, and only the job gated on `refs/heads/main` uses fly.toml.
+# needs to know this file exists. Production (.github/workflows/deploy.yml,
+# gated on `refs/heads/main`) uses fly.toml and never names this file; only
+# the manual .github/workflows/staging.yml uses this one.
 
 app = 'skyhook-staging'
 primary_region = 'ams'

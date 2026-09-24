@@ -92,8 +92,8 @@ SITE_URL           = https://skyhook-staging.fly.dev/
 URI_ALLOW_LIST     = https://skyhook-staging.fly.dev/**
 ```
 
-`deploy.yml` re-checks the first and the sign-up switch against the LIVE
-project on every staging deploy, using the anon key out of the served config -
+`staging.yml` (the `up` job) re-checks the first and the sign-up switch against
+the LIVE project on every `up`, using the anon key out of the served config -
 public by design, so no secret is needed and the gate works on a fork. A
 staging project that quietly goes back to wanting confirmations is a red build
 now, not a confused tester.
@@ -113,9 +113,11 @@ staging is NOT production's project  =>  staging may write freely
 staging IS  production's project     =>  staging MUST be read-only
 ```
 
-`test/staging.mjs` pins that implication, and the deploy workflow re-checks it
-against the served artefact and again against the live site. Pointing staging
-back at production without turning the flag on is a red build, not a quiet
+`test/staging.mjs` pins that implication, and `deploy.yml`'s `image` job
+re-checks it against the built artefact on every PR. The live check in
+`staging.yml` is stricter still: it accepts no shared-project fallback at all,
+so a live staging site on production's project is a failure whatever the flag
+says. Pointing staging back at production is a red build, not a quiet
 accident. So is shipping a staging URL with production's anon key - the key's
 `ref` claim is decoded and compared, because a production key under a staging
 URL is still a `role: anon` key and a role check alone cannot see it.
@@ -126,6 +128,7 @@ Nothing here is a secret, and nothing here is a sandbox. The anon key is public
 by design and RLS in `supabase/schema.sql` decides what it may do, on staging
 exactly as on production. The separation is between two **databases**, not
 between a trusted and an untrusted client.
+
 ---
 
 ## How a branch becomes a URL (on demand)
@@ -176,7 +179,9 @@ history and this config. Coming back is the `up` action; nothing is recreated.
 
 Operations are serialised on the app (`concurrency: fly-skyhook-staging`,
 `cancel-in-progress: false`), so an `up` and a `down` pressed a moment apart
-queue rather than race.
+never race. GitHub holds one waiting run per group: press a third time while
+one runs and one waits, and the new press replaces the waiting one - the
+latest request is the one that happens.
 
 ---
 
@@ -230,8 +235,8 @@ which on Fly means bound to exactly one app:
 | `FLY_STAGING_API_TOKEN` | `skyhook-staging` | anything else |
 
 Reusing one token for both would have been one fewer secret and would also
-have meant every feature branch in the repo held a credential for the app
-serving skyhookplay.com.
+have meant every staging run held a credential for the app serving
+skyhookplay.com.
 
 Reproducing the staging half from scratch:
 
@@ -261,7 +266,7 @@ when the feature is tested.
 **The staging Supabase project** (`qlaenczyhzjkmqkraiup`, org `skyhook`) is on
 the **Free** plan: $0. It is deliberately left in place while the Fly app is
 down - deleting it would mean re-applying the schema and re-doing the auth
-settings below on every `up`. Supabase pauses a Free project after about a
+settings above on every `up`. Supabase pauses a Free project after about a
 week with no traffic. If `up` fails with "the staging Supabase project did not
 answer /auth/v1/settings", that is what happened: Supabase dashboard ->
 skyhook-staging -> **Restore project**, wait for it to report healthy, run `up`
@@ -314,13 +319,12 @@ What was done, in order:
    appear on production's. The probe account was then deleted, so staging's
    database is empty again.
 
-### Still outstanding
+### The auth settings
 
-`https://skyhook-staging.fly.dev` must be added to the **auth redirect
-allow-list** of the staging project (Dashboard -> Authentication -> URL
-Configuration). Without it, password-recovery links and any OAuth return leg
-will bounce on staging. This needs dashboard access and cannot be done from the
-repo. Email/password sign-up and sign-in work without it.
+Done on 2026-09-23 as well: autoconfirm on, `SITE_URL` and the redirect
+allow-list on `https://skyhook-staging.fly.dev` - see "The half that is not in
+this repo" above. The `up` job re-checks autoconfirm and sign-ups against the
+live project every time.
 
 ---
 

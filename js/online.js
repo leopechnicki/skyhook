@@ -329,10 +329,12 @@
       url: url,
       key: key,
       boardLimit: (isFinite(limit) && limit > 0) ? Math.min(limit, 200) : 50,
-      /* Read-only mode. The staging build sets this true and shares the
-         production Supabase project, so it must be able to READ the board -
-         that is the whole point of having a staging copy of a leaderboard
-         feature - while being structurally unable to WRITE a score into it.
+      /* Read-only mode. Kept as a guard for any build that ever has to share
+         the production Supabase project: such a build must be able to READ
+         the board while being structurally unable to WRITE a score into it.
+         Staging no longer is one - since 2026-09-23 it has its own project
+         and sets this false - but test/staging.mjs still proves the guard
+         works, against a fixture that forces it on.
          Strictly `=== true`: a truthy typo like the string "false" must not
          silently arm it in production, and the default for every config that
          has never heard of this flag is false. */

@@ -451,9 +451,11 @@ check('up runs only for action=up, down only for action=down',
   /if:\s*inputs\.action == 'up'/.test(upJob) && /if:\s*inputs\.action == 'down'/.test(downJob));
 check('staging uses fly.staging.toml, never the bare fly.toml',
   /--config fly\.staging\.toml/.test(upJob) && !/--config fly\.toml/.test(sw));
-const flyCmds = sw.match(/flyctl (deploy|scale|machines)[^\n]*/g) || [];
+/* `fly` and `flyctl` are the same binary, so both spellings are scanned. */
+const flyCmds = sw.match(/\bfly(ctl)? (deploy|scale|machines?|apps|secrets|status|releases)\b[^\n]*/g) || [];
 check('every fly command in staging.yml names skyhook-staging explicitly',
-  flyCmds.length >= 4 && flyCmds.every(l => /-a skyhook-staging/.test(l)), flyCmds.length);
+  flyCmds.length >= 4 && flyCmds.every(l => /-a skyhook-staging\b/.test(l)), flyCmds.join(' | '));
+check('nothing in staging.yml names the production app', !/skyhook-game/.test(sw));
 check('staging uses its own, separately scoped token and never the production one',
   /secrets\.FLY_STAGING_API_TOKEN/.test(upJob) && /secrets\.FLY_STAGING_API_TOKEN/.test(downJob) &&
   !/secrets\.FLY_API_TOKEN/.test(sw));
@@ -461,7 +463,7 @@ check('staging uses its own, separately scoped token and never the production on
    It may reach the job through env and checkout's `ref:` only - never pasted
    into a run: script, where ${{ }} is expanded before the shell parses it. */
 check('the branch input never reaches a script as pasted text',
-  sw.split('\n').filter(l => /\$\{\{\s*inputs\.branch/.test(l))
+  sw.split('\n').filter(l => /\$\{\{[^}]*inputs\.branch/.test(l))
     .every(l => /^\s*(ref|BRANCH):/.test(l)));
 check('staging operations are serialised on the app and never cancelled',
   /group:\s*fly-skyhook-staging/.test(sw) && /cancel-in-progress:\s*false/.test(sw));
@@ -475,17 +477,27 @@ check('nothing in staging.yml can destroy the app itself',
    staging name. Refused before the build, not caught a minute after it. */
 check('up refuses a branch that cannot build an isolated staging image',
   /branch\/staging\/config\.staging\.js/.test(upJob) && /branch\/Dockerfile/.test(upJob) &&
-  /"\$stag_ref" != "\$prod_ref"/.test(upJob));
+  /"\$stag_ref" != "\$prod_ref"/.test(upJob) && /"\$key_ref" = "\$stag_ref"/.test(upJob));
+/* ...and it has to run BEFORE the deploy, or it is a post-mortem. */
+check('the pre-build guard runs before the deploy step',
+  upJob.indexOf('build an isolated staging image') > 0 &&
+  upJob.indexOf('build an isolated staging image') < upJob.indexOf('flyctl deploy'));
 /* The post-deploy verification must check the LIVE site's project, not just
    the image that was meant to be built. */
 check('the pipeline verifies the LIVE staging site’s Supabase project',
   /refof \/tmp\/live\.js/.test(upJob) && /live_ref/.test(upJob));
 check('the pipeline reads production’s ref from js/config.js, not a hardcoded copy',
   /refof js\/config\.js/.test(upJob));
-check('the pipeline still demands readOnlyScores in the shared-project fallback',
-  /readOnlyScores: true/.test(upJob));
-check('a failed verification takes staging straight back down',
-  /if:\s*failure\(\) && steps\.deploy\.outcome == 'success'\s*\n\s*run: flyctl scale count 0/.test(upJob));
+/* No shared-project fallback on the live check: staging has its own project,
+   so staging on production's is a failure whatever readOnlyScores says. */
+check('live staging on production’s project fails, with no read-only fallback',
+  /"\$live_ref" = "\$prod_ref" \]; then\s*\n\s*echo "FAIL/.test(upJob) && !/readOnlyScores/.test(upJob));
+/* The anon key's project sits in a base64 JWT payload that no grep can see. */
+check('the live anon key is DECODED and must name staging’s own project',
+  /live_key_ref=\$\(keyref "\$live_key"\)/.test(upJob) &&
+  /"\$live_key_ref" = "\$live_ref"/.test(upJob) && /base64 -d/.test(upJob));
+check('anything deployed but not verified is taken straight back down',
+  /if:\s*always\(\) && steps\.deploy\.outcome != 'skipped' && steps\.verify\.outcome != 'success'\s*\n\s*run: flyctl scale count 0/.test(upJob));
 /* No workflow may contain a literal project ref - that is the copy that goes
    stale and turns a real check into a passing one. */
 check('the workflows hardcode NO supabase project ref',

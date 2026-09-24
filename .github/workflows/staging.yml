@@ -52,7 +52,9 @@ on:
         default: main
 
 # One app, one operation at a time, never cancelled half-way: an `up` racing a
-# `down` is a coin flip over whether staging ends up on or off.
+# `down` is a coin flip over whether staging ends up on or off. GitHub keeps
+# ONE waiting run per group: a third press while one runs and one waits
+# replaces the waiting one, so the latest request is the one that happens.
 concurrency:
   group: fly-skyhook-staging
   cancel-in-progress: false
@@ -99,8 +101,13 @@ jobs:
       # it had been serving for a minute. This refuses it before the build.
       - name: The branch can build an isolated staging image
         run: |
-          set -e
+          set -eo pipefail
           refof() { sed -n "s#.*supabaseUrl: 'https://\([a-z0-9]\{1,\}\)\.supabase\.co'.*#\1#p" "$1" | head -1; }
+          keyref() {
+            local p; p=$(printf '%s' "$1" | cut -d. -f2 | tr '_-' '/+')
+            while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done
+            printf '%s' "$p" | base64 -d 2>/dev/null | sed -n 's#.*"ref":"\([a-z0-9]*\)".*#\1#p'
+          }
           prod_ref=$(refof js/config.js)
           [ -n "$prod_ref" ] || { echo "FAIL: no project ref in js/config.js"; exit 1; }
           stale="merge main into '$BRANCH' first - it predates on-demand staging"
@@ -119,6 +126,12 @@ jobs:
           if grep -q "$prod_ref" "$cfg"; then
             echo "FAIL: production's project ref appears in $cfg"; exit 1
           fi
+          # The anon key names its project too, but inside a base64 JWT payload
+          # where no plain grep can see it. Decoded and compared, because a
+          # staging URL carrying production's key is a production client.
+          key_ref=$(keyref "$(sed -n "s#.*supabaseAnonKey: '\([^']*\)'.*#\1#p" "$cfg" | head -1)")
+          [ "$key_ref" = "$stag_ref" ] \
+            || { echo "FAIL: $cfg pairs project '$stag_ref' with an anon key for '$key_ref'"; exit 1; }
           echo "OK: '$BRANCH' builds against staging's own project, not production's"
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
@@ -138,7 +151,12 @@ jobs:
       - name: Verify the staging site
         id: verify
         run: |
-          set -e
+          set -eo pipefail
+          keyref() {
+            local p; p=$(printf '%s' "$1" | cut -d. -f2 | tr '_-' '/+')
+            while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done
+            printf '%s' "$p" | base64 -d 2>/dev/null | sed -n 's#.*"ref":"\([a-z0-9]*\)".*#\1#p'
+          }
           base="https://skyhook-staging.fly.dev"
           for i in $(seq 1 20); do
             curl -sf "$base/health" > /dev/null && break
@@ -162,14 +180,15 @@ jobs:
           live_ref=$(refof /tmp/live.js)
           [ -n "$prod_ref" ] || { echo "FAIL: no project ref in js/config.js"; exit 1; }
           [ -n "$live_ref" ] || { echo "FAIL: no project ref in the LIVE staging config"; exit 1; }
+          # No shared-project fallback here. Staging has had its own project
+          # since 2026-09-23 and the pre-build step refuses anything else, so a
+          # live staging site on production's project is a failure, full stop -
+          # readOnlyScores is not accepted as a reason to leave it up.
           if [ "$live_ref" = "$prod_ref" ]; then
-            grep -q 'readOnlyScores: true' /tmp/live.js \
-              || { echo "FAIL: live staging serves production's project AND is writable"; exit 1; }
-            echo "WARNING: live staging is on production's project, held safe only by readOnlyScores"
+            echo "FAIL: live staging serves production's Supabase project"; exit 1
           fi
-          # Belt to that brace: production's ref must not appear ANYWHERE in the
-          # served staging config - not in the URL, and not in the anon key,
-          # which is the half a URL comparison cannot see.
+          # Production's ref must not appear anywhere in the served config as
+          # plain text (the anon key is decoded separately, below)...
           if grep -q "$prod_ref" /tmp/live.js; then
             echo "FAIL: production's project ref appears in the live staging config"; exit 1
           fi
@@ -185,6 +204,11 @@ jobs:
           # design, so no secret is needed.
           live_key=$(sed -n "s#.*supabaseAnonKey: '\([^']*\)'.*#\1#p" /tmp/live.js | head -1)
           [ -n "$live_key" ] || { echo "FAIL: no anon key in the live staging config"; exit 1; }
+          # ...and the anon key, whose project sits in a base64 JWT payload
+          # that grep cannot read, must be staging's own.
+          live_key_ref=$(keyref "$live_key")
+          [ "$live_key_ref" = "$live_ref" ] \
+            || { echo "FAIL: live staging pairs project '$live_ref' with an anon key for '$live_key_ref'"; exit 1; }
           curl -sf "https://$live_ref.supabase.co/auth/v1/settings" -H "apikey: $live_key" > /tmp/auth.json \
             || { echo "FAIL: the staging Supabase project did not answer /auth/v1/settings (paused? see docs/STAGING.md)"; exit 1; }
           grep -q '"mailer_autoconfirm":true' /tmp/auth.json \
@@ -205,10 +229,12 @@ jobs:
 
           echo "OK: $base is live, isolated and unindexed"
 
-      # Fail closed. A build that deployed but did not pass the checks above is
-      # not left serving: staging goes back to zero machines.
-      - name: Verification failed - take staging back down
-        if: failure() && steps.deploy.outcome == 'success'
+      # Fail closed. Anything that got as far as starting a deploy and did not
+      # end in a passed verification - a verify failure, a deploy that died
+      # after creating a machine, a timeout or a cancel - is not left serving:
+      # staging goes back to zero machines.
+      - name: Not verified - take staging back down
+        if: always() && steps.deploy.outcome != 'skipped' && steps.verify.outcome != 'success'
         run: flyctl scale count 0 -a skyhook-staging --yes
 
       - name: Say where it is
@@ -250,7 +276,7 @@ jobs:
       # "not the game", not "no response".
       - name: Verify staging is off
         run: |
-          set -e
+          set -eo pipefail
           n=$(flyctl machines list -a skyhook-staging --json | jq length)
           [ "$n" = "0" ] || { echo "FAIL: $n machine(s) still exist"; exit 1; }
           for i in $(seq 1 12); do

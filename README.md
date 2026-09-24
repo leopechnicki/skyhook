@@ -170,20 +170,20 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 | `js/game.js` | 2157 | Core game: celestial bodies, gravity, orbiting, flying, latching, meteoroids, shards, rendering, screen flow (title / playing / paused / game over) |
 | `js/main.js` | 202 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
 | `js/config.js` | 45 | Supabase project URL + **anon** (public) key. Committed on purpose -- GitHub Pages serves the repo, so an uncommitted config does not exist on the live site. Blank both strings to go offline |
-| `js/online.js` | 1159 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
-| `js/ui_online.js` | 731 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
+| `js/online.js` | 1196 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
+| `js/ui_online.js` | 741 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
 | `js/ship.js` | 572 | Ship paint model: the swatch menu, the per-part readability rule, the #1 gold crown. No DOM, no network |
 | `js/ui_ship.js` | 574 | The customiser panel - one component, opened from the title, PAUSED and game-over screens |
 | `supabase/schema.sql` | 484 | Tables, RLS policies, plausibility CHECKs, rate-limit trigger, public board view, ship-paint allow-list (+ first-palette remap) |
-| `test/smoke.mjs` | 388 | Playwright end-to-end smoke test |
+| `test/smoke.mjs` | 408 | Playwright end-to-end smoke test |
 | `test/balance.mjs` | 572 | Headless difficulty/balance harness (no browser) |
 | `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |
-| `test/online.mjs` | 1175 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
-| `test/leaderboard_ui.mjs` | 1342 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
+| `test/online.mjs` | 1285 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
+| `test/leaderboard_ui.mjs` | 1362 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
 | `test/ship.mjs` | 751 | Ship paint model: every menu combination readable, gold never stored, the DB allow-list and palette remap match the client |
 | `test/ship_ui.mjs` | 193 | The customiser panel in a real browser |
 | `test/ship_live.mjs` | 223 | The account round trip against a REAL staging Supabase (sign up, paint, second device, gold/off-menu refused, teardown). Not in CI - needs `SKYHOOK_LIVE_URL`, `SKYHOOK_LIVE_ANON_KEY`, `SKYHOOK_LIVE_DB_URL`; refuses to run against production |
-| `test/staging.mjs` | 495 | Staging isolation (its own Supabase project, never production's) and the deploy rules: production only from `main`, staging only on a manual run of `staging.yml` |
+| `test/staging.mjs` | 507 | Staging isolation (its own Supabase project, never production's) and the deploy rules: production only from `main`, staging only on a manual run of `staging.yml` |
 | `test/ship_access.mjs` | 245 | Customise mid-session: pause and game-over doors, the run frozen to the tick, the paint visible at once |
 | `test/palette_metrics.mjs` | 113 | Measures the palette (chroma, contrast vs sky, pairwise and gold distance) - how the colours were chosen |
 
