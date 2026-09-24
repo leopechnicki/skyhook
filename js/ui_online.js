@@ -589,10 +589,11 @@
         /* "You are still signed in" is not filler. The player has just changed
            the credential this session was opened with, and the reasonable
            assumption is that they now have to log back in - possibly mid-run.
-           They do not: GoTrue keeps the current session and drops the others.
-           Saying so is the difference between finishing the game and going to
-           look for the sign-in form. */
-        showBoard('Password changed. You are still signed in here, and signed out everywhere else.');
+           They do not: GoTrue keeps the current session and revokes the
+           others' refresh tokens. Their access tokens stay valid until they
+           expire (an hour at most), so "signed out everywhere else" would be
+           a promise the server keeps late - the copy says when. */
+        showBoard('Password changed. You are still signed in here. Other devices will have to sign in again within the hour.');
       }, function (err) {
         setBusy(false);
         text(el['ol-auth-msg'], safeMessage(err, spec.fallback), true);

@@ -900,6 +900,31 @@ const WRONG = 'the-one-somebody-else-guessed';
     norm.includes('rename limit'));
   check('the rename trigger pins the columns that are not the player\'s',
     norm.includes('new.id := old.id') && norm.includes('new.created_at := old.created_at'));
+  /* The rename window is FIXED, not sliding (Axon B1 on PR #28). The window
+     start may move only where a new window opens; the branch that counts a
+     further rename must carry the old start forward. The first version set
+     it to now() on every rename, so renaming once a day never reset the count
+     and the sixth such rename was refused as "five times today". Proved
+     against real Postgres in PR #28; pinned here so it cannot drift back. */
+  {
+    const guard = (/function public\.profiles_rename_guard\(\)[\s\S]*?\$\$([\s\S]*?)\$\$/i.exec(sql) || [])[1] || '';
+    const code = guard.replace(/--[^\n]*/g, '').replace(/\s+/g, ' ').toLowerCase();
+    /* The window IF: from its condition to the `end if;` that closes it. The
+       ELSE branch holds a nested IF (the refusal), so the split is on the
+       first " else " and the LAST "end if;", not on the first of each. */
+    const from = code.indexOf('if old.username_changed_at is null');
+    const body = from < 0 ? '' : code.slice(from, code.lastIndexOf('end if;'));
+    const cut = body.indexOf(' else ');
+    const opens = cut < 0 ? [] : [null, body.slice(0, cut), body.slice(cut)];
+    check('the rename window opens (and its start moves) only when the old one has closed',
+      /new\.username_changed_at := now\(\)/.test(opens[1] || '') &&
+      /new\.username_changes := 1/.test(opens[1] || ''), opens[1]);
+    check('a further rename inside the window keeps the window start where it was',
+      /new\.username_changed_at := old\.username_changed_at/.test(opens[2] || '') &&
+      !/username_changed_at := now\(\)/.test(opens[2] || ''), opens[2]);
+    check('nothing after the window logic re-stamps the start on every rename',
+      (code.match(/username_changed_at := now\(\)/g) || []).length === 1);
+  }
   check('there is still NO delete policy on profiles',
     !/create policy[^;]*for delete[^;]*on public\.profiles/.test(norm));
 

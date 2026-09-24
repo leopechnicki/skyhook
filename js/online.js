@@ -1342,7 +1342,7 @@
      * already saved in localStorage and already on screen before either of
      * these is called. The network is a convenience here, never a dependency.
      *
-     * A project whose SQL predates supabase/schema.sql section 8 has no
+     * A project whose SQL predates supabase/schema.sql section 9 has no
      * ship_* columns at all. PostgREST answers that with a 400, which arrives
      * here as a rejected promise and is swallowed exactly like a dead
      * connection. That is deliberate: the feature must not appear broken on a

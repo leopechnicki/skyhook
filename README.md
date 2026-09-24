@@ -171,8 +171,8 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 
 | File | Lines | Purpose |
 |---|---|---|
-| `index.html` | 224 | Shell: canvas, ad slot, script loading |
-| `css/style.css` | 593 | Layout only (all game visuals are canvas-drawn) |
+| `index.html` | 246 | Shell: canvas, ad slot, script loading |
+| `css/style.css` | 609 | Layout only (all game visuals are canvas-drawn) |
 | `js/utils.js` | 145 | Math helpers, PRNG, localStorage wrapper, particle system, glow sprites |
 | `js/audio.js` | 159 | Fully synthesized audio via Web Audio API (no sample files) |
 | `js/celestial.js` | 955 | Body ART only: planet formation classes, spectral star colours, meteoroid rocks. Sprite-cached, zero physics |
@@ -181,10 +181,10 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 | `js/main.js` | 202 | Bootstrap: canvas fitting, input handling (pointer + keyboard), main loop |
 | `js/config.js` | 45 | Supabase project URL + **anon** (public) key. Committed on purpose -- GitHub Pages serves the repo, so an uncommitted config does not exist on the live site. Blank both strings to go offline |
 | `js/online.js` | 1454 | Accounts, sessions and score submission over plain `fetch` (no SDK, no CDN script, no build step) |
-| `js/ui_online.js` | 964 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
+| `js/ui_online.js` | 965 | The leaderboard/auth overlay. Inert unless there is a configured backend AND an http(s) origin |
 | `js/ship.js` | 572 | Ship paint model: the swatch menu, the per-part readability rule, the #1 gold crown. No DOM, no network |
 | `js/ui_ship.js` | 574 | The customiser panel - one component, opened from the title, PAUSED and game-over screens |
-| `supabase/schema.sql` | 615 | Tables, RLS policies, plausibility CHECKs, rate-limit and rename triggers, public board view, ship-paint allow-list (+ first-palette remap) |
+| `supabase/schema.sql` | 628 | Tables, RLS policies, plausibility CHECKs, rate-limit and rename triggers, public board view, ship-paint allow-list (+ first-palette remap) |
 | `test/smoke.mjs` | 408 | Playwright end-to-end smoke test |
 | `test/balance.mjs` | 572 | Headless difficulty/balance harness (no browser) |
 | `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |

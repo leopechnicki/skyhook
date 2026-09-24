@@ -19,9 +19,11 @@
 --   * A player may INSERT only rows carrying their own auth.uid(). They may
 --     never UPDATE or DELETE a score - not even their own. Scores are an
 --     append-only ledger; "edit my score" is the same operation as "cheat".
---   * The single exception is a player's own display name. Renaming is an
---     UPDATE, so it needs a policy AND a grant, and both are written to be as
---     narrow as the operation actually is: your row, that one column.
+--   * A player's own display name is the one column they may UPDATE directly.
+--     Renaming needs a policy AND a grant, and both are written to be as
+--     narrow as the operation actually is: your row, that one column. (Ship
+--     paint, section 9, is also the player's own, but it is written only
+--     through a checked RPC, never by a direct UPDATE.)
 --   * The public leaderboard is a VIEW that selects username + score + run
 --     stats and nothing else. Emails live in auth.users, which PostgREST does
 --     not expose at all, and no view here reaches into it.
@@ -34,8 +36,10 @@
 -- ---------------------------------------------------------------------------
 -- 1. profiles - the only identity the leaderboard needs
 -- ---------------------------------------------------------------------------
--- One row per account, holding the display name and NOTHING else. Leo's brief
--- was explicit: username, email, password, no extra profile fields. The email
+-- One row per account, holding the display name - plus, added later, the
+-- rename bookkeeping below and the ship paint in section 9, and nothing
+-- personal. Leo's brief was explicit: username, email, password, no extra
+-- profile fields. The email
 -- and password stay in auth.users where GoTrue manages them; this table
 -- deliberately does not copy the email, so a leak here cannot leak an address.
 
@@ -62,9 +66,11 @@ create unique index if not exists profiles_username_lower_key
 --
 -- Neither column is writable by a player: the grant at the bottom of this file
 -- hands out UPDATE on `username` and on nothing else, and the trigger in
--- section 5 sets both itself. They are readable, like every other column on
--- this table - "when did this pilot last change their name" is not a secret,
--- and the UI uses it to say how many changes are left.
+-- section 5 sets both itself: `username_changed_at` is when the player's
+-- current 24-hour rename window opened and `username_changes` is how many
+-- renames it has used. They are readable, like every other column on this
+-- table - none of it is a secret - but nothing in the client reads them today;
+-- the limit is enforced, and reported, by the trigger alone.
 alter table public.profiles
   add column if not exists username_changed_at timestamptz;
 alter table public.profiles
@@ -270,19 +276,25 @@ begin
     return new;
   end if;
 
+  -- username_changed_at is the START of the current 24-hour window, not the
+  -- time of the latest rename. It moves only when a new window opens. Moving
+  -- it on every rename (as the first version did) made the window slide: a
+  -- player renaming once every twenty hours never saw the count reset and was
+  -- refused on the sixth rename in five days, told "five times today".
   if old.username_changed_at is null
      or old.username_changed_at < now() - interval '24 hours' then
-    -- First rename, or the first one in a fresh day: the window starts here.
-    new.username_changes := 1;
+    -- First rename, or the first one after the window closed: a new window.
+    new.username_changes    := 1;
+    new.username_changed_at := now();
   else
     if old.username_changes >= 5 then
       raise exception 'rename limit: a name can be changed 5 times a day'
         using errcode = '54000';
     end if;
-    new.username_changes := old.username_changes + 1;
+    new.username_changes    := old.username_changes + 1;
+    new.username_changed_at := old.username_changed_at;
   end if;
 
-  new.username_changed_at := now();
   return new;
 end;
 $$;
@@ -426,7 +438,7 @@ $$;
 grant execute on function public.my_rank() to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 8. ship paint - the ship the player painted, one colour per part
+-- 9. ship paint - the ship the player painted, one colour per part
 -- ---------------------------------------------------------------------------
 -- Cosmetic, and the only thing in this file that is. It lives on profiles
 -- because it belongs to the ACCOUNT rather than to a run: the point of storing
@@ -608,7 +620,8 @@ grant  execute on function public.set_ship_paint(text, text, text, text) to auth
 --     -- nothing else ever.
 --
 --   select privilege_type, column_name from information_schema.column_privileges
---    where table_name = 'profiles' and grantee = 'authenticated';
+--    where table_name = 'profiles' and grantee = 'authenticated'
+--      and privilege_type = 'UPDATE';
 --     -- exactly one row: UPDATE on username.
 --
 --   select * from public.leaderboard limit 5;        -- empty, no error
