@@ -303,7 +303,19 @@ jobs:
           if grep -q 'https://skyhookplay.com' /tmp/sindex.html; then
             fail "staging is claiming the production canonical"
           fi
-          grep -q "STAGING - scores are not saved" /tmp/scfg.js || fail "staging banner text is gone"
+          # The banner, asserted as a PROPERTY rather than as one sentence of
+          # copy. This line used to grep for the literal
+          # "STAGING - scores are not saved". That sentence stopped being
+          # true the moment staging got its own project and its own board -
+          # scores ARE saved now, to staging's board - so the honest copy
+          # edit that went with that change turned this gate red while the
+          # thing it guards (is the build visibly marked as staging?) was
+          # never in danger. A gate that fails when the truth improves is a
+          # gate people learn to force past. What must hold is: the overlay
+          # still builds a banner element, and what that element says still
+          # starts with the word STAGING.
+          grep -q 'sk-staging-banner' /tmp/scfg.js             || fail "the staging overlay no longer creates a banner element"
+          grep -qE "textContent[[:space:]]*=[[:space:]]*'STAGING" /tmp/scfg.js             || fail "the staging banner no longer announces itself as STAGING"
 
           # 6. A bad SKYHOOK_ENV must fail the build, not be ignored. Without
           #    this the ARG is a typo away from silently producing production.

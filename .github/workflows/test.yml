@@ -94,15 +94,13 @@ jobs:
       # purpose: what it protects is Leo's real leaderboard, so it has to run
       # on every PR rather than only on the ones that reach a deploy.
       #
-      # skyhook-staging shares the production Supabase project - there is no
-      # second project to point it at, see staging/config.staging.js - so the
-      # only thing between a test run and the live board is readOnlyScores and
-      # the lines in js/online.js that honour it. This asserts the flag is
-      # there, that submitRun refuses on it WITHOUT queueing the run for a
-      # later session that could write, that reads still work (or the staging
-      # site could not test the feature it exists for), that production is
-      # untouched by any of it, and that main and a feature branch cannot
-      # reach each other's deploy job.
+      # skyhook-staging now has its OWN Supabase project (see
+      # staging/config.staging.js), so the guarantee under test is no longer
+      # "one flag stops the write" but "staging's URL and staging's anon key
+      # both name a project that is not production's". readOnlyScores is kept
+      # as declared machinery and still proved to work, against a fixture that
+      # forces it on. Also asserts that production is untouched by any of it,
+      # and that main and a feature branch cannot reach each other's deploy job.
       - name: Staging isolation (scores cannot reach the real board)
         run: node test/staging.mjs
 
