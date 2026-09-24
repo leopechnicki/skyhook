@@ -19,6 +19,11 @@
 --   * A player may INSERT only rows carrying their own auth.uid(). They may
 --     never UPDATE or DELETE a score - not even their own. Scores are an
 --     append-only ledger; "edit my score" is the same operation as "cheat".
+--   * A player's own display name is the one column they may UPDATE directly.
+--     Renaming needs a policy AND a grant, and both are written to be as
+--     narrow as the operation actually is: your row, that one column. (Ship
+--     paint, section 9, is also the player's own, but it is written only
+--     through a checked RPC, never by a direct UPDATE.)
 --   * The public leaderboard is a VIEW that selects username + score + run
 --     stats and nothing else. Emails live in auth.users, which PostgREST does
 --     not expose at all, and no view here reaches into it.
@@ -31,8 +36,10 @@
 -- ---------------------------------------------------------------------------
 -- 1. profiles - the only identity the leaderboard needs
 -- ---------------------------------------------------------------------------
--- One row per account, holding the display name and NOTHING else. Leo's brief
--- was explicit: username, email, password, no extra profile fields. The email
+-- One row per account, holding the display name - plus, added later, the
+-- rename bookkeeping below and the ship paint in section 9, and nothing
+-- personal. Leo's brief was explicit: username, email, password, no extra
+-- profile fields. The email
 -- and password stay in auth.users where GoTrue manages them; this table
 -- deliberately does not copy the email, so a leak here cannot leak an address.
 
@@ -50,6 +57,24 @@ create table if not exists public.profiles (
 -- board where the whole point is telling players apart at a glance.
 create unique index if not exists profiles_username_lower_key
   on public.profiles (lower(username));
+
+-- Rename bookkeeping, added when players were given a way to change their
+-- name. It is an ALTER rather than two more lines in the CREATE above because
+-- the table already exists on the live project, where `create table if not
+-- exists` does exactly nothing - a column added to that block would be a
+-- change that only ever reaches a project nobody has yet.
+--
+-- Neither column is writable by a player: the grant at the bottom of this file
+-- hands out UPDATE on `username` and on nothing else, and the trigger in
+-- section 5 sets both itself: `username_changed_at` is when the player's
+-- current 24-hour rename window opened and `username_changes` is how many
+-- renames it has used. They are readable, like every other column on this
+-- table - none of it is a secret - but nothing in the client reads them today;
+-- the limit is enforced, and reported, by the trigger alone.
+alter table public.profiles
+  add column if not exists username_changed_at timestamptz;
+alter table public.profiles
+  add column if not exists username_changes integer not null default 0;
 
 -- ---------------------------------------------------------------------------
 -- 2. scores - append-only run ledger
@@ -198,16 +223,100 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 
 -- ---------------------------------------------------------------------------
--- 5. Row Level Security
+-- 5. Renames - the one UPDATE a player is allowed, and its limits
+-- ---------------------------------------------------------------------------
+-- A player may change their display name. Because the leaderboard is a VIEW
+-- that joins this table (section 7), the new name appears on every one of
+-- their past scores the moment this UPDATE commits: there is no copy of the
+-- username on a score row and therefore nothing to backfill.
+--
+-- The rules below are in a trigger for the same reason the score rate limit
+-- is: a trigger sits under every write path, so there is no request shape that
+-- goes around it.
+--
+--   * Only the name moves. `id` IS the account and `created_at` is history.
+--     The column grant at the bottom of this file is the real lock on those
+--     two; forcing them back to their old values here is the belt for it.
+--   * The shape CHECK and the case-insensitive unique index in section 1 apply
+--     to an UPDATE exactly as they do to an INSERT, so a collision surfaces as
+--     23505 on both paths and the client has one thing to handle, not two.
+--   * Renaming is not free. Five changes a day is more than a person needs to
+--     fix a typo and fewer than a script wants.
+--
+-- What this deliberately does NOT do is retire a released name. When a player
+-- renames, their old name is immediately free and anyone may take it - by
+-- renaming into it or by signing up with it. Holding names in quarantine would
+-- mean a second table and a check on the signup path as well as this one, and
+-- a bug there fails a SIGN-UP, which is a worse outcome than the squatting it
+-- prevents on a board this size. The limit above is the part that was worth
+-- having: it stops a script from watching for a name to come free.
+
+-- security INVOKER, unlike its neighbour in section 3: this function reads and
+-- writes nothing but the row already in front of it, so it needs no privilege
+-- the caller does not have, and handing it the owner's rights would be a gift
+-- with no purpose. search_path is still pinned - an unpinned one is a hijack
+-- surface in any function, definer or not.
+create or replace function public.profiles_rename_guard()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  -- Not the player's to edit, whatever the request body said.
+  new.id         := old.id;
+  new.created_at := old.created_at;
+
+  -- An UPDATE that does not touch the name is not a rename and must not spend
+  -- one of the day's changes. `is not distinct from` rather than `=` so a null
+  -- on either side compares as data instead of poisoning the branch.
+  if new.username is not distinct from old.username then
+    new.username_changed_at := old.username_changed_at;
+    new.username_changes    := old.username_changes;
+    return new;
+  end if;
+
+  -- username_changed_at is the START of the current 24-hour window, not the
+  -- time of the latest rename. It moves only when a new window opens. Moving
+  -- it on every rename (as the first version did) made the window slide: a
+  -- player renaming once every twenty hours never saw the count reset and was
+  -- refused on the sixth rename in five days, told "five times today".
+  if old.username_changed_at is null
+     or old.username_changed_at < now() - interval '24 hours' then
+    -- First rename, or the first one after the window closed: a new window.
+    new.username_changes    := 1;
+    new.username_changed_at := now();
+  else
+    if old.username_changes >= 5 then
+      raise exception 'rename limit: a name can be changed 5 times a day'
+        using errcode = '54000';
+    end if;
+    new.username_changes    := old.username_changes + 1;
+    new.username_changed_at := old.username_changed_at;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_rename_guard_trg on public.profiles;
+create trigger profiles_rename_guard_trg
+  before update on public.profiles
+  for each row execute function public.profiles_rename_guard();
+
+-- ---------------------------------------------------------------------------
+-- 6. Row Level Security
 -- ---------------------------------------------------------------------------
 
 alter table public.profiles enable row level security;
 alter table public.scores   enable row level security;
 
 -- profiles: the world may read display names (that is what a leaderboard is).
--- A signed-in user may create their own row - which normally the trigger above
--- already did - and may never touch anyone else's. No UPDATE policy and no
--- DELETE policy exist, so those operations are denied to everyone.
+-- A signed-in user may create their own row - which normally the trigger in
+-- section 4 already did - may rename themselves, and may never touch anyone
+-- else's row. There is no DELETE policy, so deleting a profile is denied to
+-- everyone; an account goes away by deleting the auth.users row, which
+-- cascades.
 drop policy if exists profiles_public_read on public.profiles;
 create policy profiles_public_read
   on public.profiles for select
@@ -218,6 +327,24 @@ drop policy if exists profiles_insert_own on public.profiles;
 create policy profiles_insert_own
   on public.profiles for insert
   to authenticated
+  with check (id = auth.uid());
+
+-- The rename. USING picks the row you are allowed to touch, WITH CHECK judges
+-- the row you are trying to leave behind, and they say the same thing on
+-- purpose: without the WITH CHECK half, a player could update their own row
+-- into someone else's id and walk off with that account's scores.
+--
+-- This policy is half of the permission. The other half is the column grant at
+-- the bottom of this file, and neither works alone: a policy with no grant is
+-- refused at the privilege check before RLS is consulted (which is what this
+-- project shipped with - the rename UI was written against a table that would
+-- silently update nothing), and a grant with no policy is refused by RLS's
+-- default deny.
+drop policy if exists profiles_update_own on public.profiles;
+create policy profiles_update_own
+  on public.profiles for update
+  to authenticated
+  using (id = auth.uid())
   with check (id = auth.uid());
 
 -- scores: public read (the board), own-row insert, and that is the entire
@@ -248,8 +375,18 @@ grant insert on public.scores   to authenticated;
 revoke update, delete on public.scores   from anon, authenticated;
 revoke update, delete on public.profiles from anon, authenticated;
 
+-- ...and then hand back the one column a rename needs, to the one role that
+-- can own a row. A column-level grant is not decoration here: table-level
+-- UPDATE would also let a player rewrite `username_changed_at` and
+-- `username_changes`, which are the only record of how often they have
+-- renamed, so the limit in section 5 would be a limit the limited party is
+-- allowed to reset. It is stated AFTER the blanket revoke above, so a re-run
+-- of this file top to bottom always ends in this state rather than in
+-- whichever order the two happened to be applied.
+grant update (username) on public.profiles to authenticated;
+
 -- ---------------------------------------------------------------------------
--- 6. The public board
+-- 7. The public board
 -- ---------------------------------------------------------------------------
 -- One row per player (their best run), ranked. security_invoker = on means the
 -- view runs with the CALLER's permissions and therefore obeys the RLS policies
@@ -279,7 +416,7 @@ order by b.score desc, b.created_at asc;
 grant select on public.leaderboard to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 7. my_rank() - what the game-over screen asks for
+-- 8. my_rank() - what the game-over screen asks for
 -- ---------------------------------------------------------------------------
 -- Computing "where am I?" client-side would mean downloading the whole board.
 -- This answers it in one round trip and returns null for a signed-out caller.
@@ -301,7 +438,7 @@ $$;
 grant execute on function public.my_rank() to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 8. ship paint - the ship the player painted, one colour per part
+-- 9. ship paint - the ship the player painted, one colour per part
 -- ---------------------------------------------------------------------------
 -- Cosmetic, and the only thing in this file that is. It lives on profiles
 -- because it belongs to the ACCOUNT rather than to a run: the point of storing
@@ -478,7 +615,14 @@ grant  execute on function public.set_ship_paint(text, text, text, text) to auth
 --    where schemaname = 'public';                    -- both must be true
 --
 --   select tablename, policyname, cmd from pg_policies
---    where schemaname = 'public' order by tablename; -- SELECT + INSERT only
+--    where schemaname = 'public' order by tablename;
+--     -- profiles: SELECT, INSERT, UPDATE.  scores: SELECT, INSERT, and
+--     -- nothing else ever.
+--
+--   select privilege_type, column_name from information_schema.column_privileges
+--    where table_name = 'profiles' and grantee = 'authenticated'
+--      and privilege_type = 'UPDATE';
+--     -- exactly one row: UPDATE on username.
 --
 --   select * from public.leaderboard limit 5;        -- empty, no error
 -- ===========================================================================

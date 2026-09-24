@@ -81,7 +81,7 @@
    * Every entry below clears LUMA_FLOOR against the background - asserted in
    * test/ship.mjs, so adding a fashionable near-black here fails the build
    * rather than shipping. Same menu for every part: one menu to learn, and
-   * one allow-list for the database to hold (supabase/schema.sql section 8).
+   * one allow-list for the database to hold (supabase/schema.sql section 9).
    *
    * WHY THESE ELEVEN (2026-09-23, Leo: "make sure have strong colors")
    * ---------------------------------------------------------------
@@ -135,7 +135,7 @@
      here, not at the default: same family, stronger colour. Solar has no
      yellow to go to (see above) and goes to the nearest warm one. The
      database runs the same mapping over stored rows (supabase/schema.sql
-     section 8), and test/ship.mjs asserts the two lists agree. */
+     section 9), and test/ship.mjs asserts the two lists agree. */
   var RENAMED = {
     '#8af4ff': '#35e6ff',   // Ice        -> Signal Cyan
     '#ecf6ff': '#ffffff',   // Hull White -> Nova White
@@ -476,7 +476,7 @@
     /* The paint as the ACCOUNT should hold it: a part still on the shipped
        default goes up as '' (stored NULL), so the default stays a property
        of the game rather than being frozen into every row that never chose.
-       See supabase/schema.sql section 8. */
+       See supabase/schema.sql section 9. */
     toStored: function () {
       var p = copy(load());
       for (var i = 0; i < PARTS.length; i++) {
