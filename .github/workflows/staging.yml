@@ -106,7 +106,9 @@ jobs:
           keyref() {
             local p; p=$(printf '%s' "$1" | cut -d. -f2 | tr '_-' '/+')
             while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done
-            printf '%s' "$p" | base64 -d 2>/dev/null | sed -n 's#.*"ref":"\([a-z0-9]*\)".*#\1#p'
+            # Not valid base64 -> empty output, not an aborted step, so the
+            # comparison that follows still prints its FAIL line.
+            { printf '%s' "$p" | base64 -d 2>/dev/null || true; } | sed -n 's#.*"ref":"\([a-z0-9]*\)".*#\1#p'
           }
           prod_ref=$(refof js/config.js)
           [ -n "$prod_ref" ] || { echo "FAIL: no project ref in js/config.js"; exit 1; }
@@ -155,7 +157,9 @@ jobs:
           keyref() {
             local p; p=$(printf '%s' "$1" | cut -d. -f2 | tr '_-' '/+')
             while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done
-            printf '%s' "$p" | base64 -d 2>/dev/null | sed -n 's#.*"ref":"\([a-z0-9]*\)".*#\1#p'
+            # Not valid base64 -> empty output, not an aborted step, so the
+            # comparison that follows still prints its FAIL line.
+            { printf '%s' "$p" | base64 -d 2>/dev/null || true; } | sed -n 's#.*"ref":"\([a-z0-9]*\)".*#\1#p'
           }
           base="https://skyhook-staging.fly.dev"
           for i in $(seq 1 20); do
@@ -164,7 +168,10 @@ jobs:
           done
           curl -sf "$base/health" > /dev/null || { echo "FAIL: /health"; exit 1; }
 
-          curl -sf "$base/" | grep -q '<canvas id="game"' || { echo "FAIL: / is not the game"; exit 1; }
+          # To a file first: under pipefail, `curl | grep -q` fails falsely once
+          # the page outgrows the pipe buffer (grep exits, curl gets EPIPE).
+          curl -sf "$base/" > /tmp/index.html || { echo "FAIL: / did not serve"; exit 1; }
+          grep -q '<canvas id="game"' /tmp/index.html || { echo "FAIL: / is not the game"; exit 1; }
           for f in js/game.js js/main.js js/rocket.js js/celestial.js js/online.js css/style.css screenshot.png; do
             curl -sfI "$base/$f" > /dev/null || { echo "FAIL: $f is not 200"; exit 1; }
           done
@@ -223,7 +230,7 @@ jobs:
             || { echo "FAIL: staging is indexable"; exit 1; }
           # Spelled out as an `if` rather than `grep -q ... && fail`: under
           # `set -e` the && form aborts the step on the HEALTHY path.
-          if curl -sf "$base/" | grep -q 'skyhookplay.com'; then
+          if grep -q 'skyhookplay.com' /tmp/index.html; then
             echo "FAIL: staging claims the production canonical"; exit 1
           fi
 
