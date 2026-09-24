@@ -35,6 +35,9 @@
 --     run passes every constraint honestly. Section 3b answers that one, and
 --     answers it by FLAGGING, not rejecting: a flagged run stays in the
 --     ledger, drops off the public board, and waits for a human to look.
+--   * When the human has looked and decided, section 11 gives the owner -
+--     and only accounts listed in public.admins, checked server-side on
+--     every call - a ban (reversible) and a delete (not), from in the game.
 --
 -- ===========================================================================
 
@@ -301,6 +304,77 @@ create trigger scores_review_trg
   for each row execute function public.scores_review();
 
 -- ---------------------------------------------------------------------------
+-- 3c. Bans - an owner decision, enforced here and nowhere else
+-- ---------------------------------------------------------------------------
+-- Section 3b holds a suspicious RUN. A ban is about the ACCOUNT: the owner has
+-- looked at it and decided it is a bot. One row per banned account, carrying
+-- who banned it, when and why. Unbanning deletes the row; the record of both
+-- decisions survives in public.admin_audit (section 11).
+--
+-- What a ban does:
+--   * the account's runs drop off the public board and out of my_rank()
+--     (section 7 filters on is_banned()), and come back on unban - nothing
+--     is deleted, the ledger stays append-only;
+--   * the account cannot submit another run: the trigger below refuses it
+--     with its own SQLSTATE, SKBAN, so the game can say the true thing, and
+--     a RESTRICTIVE policy in section 6 refuses it again should the trigger
+--     ever be dropped.
+--
+-- Nobody but the SQL editor and the admin RPCs in section 11 can read or
+-- write this table: RLS is on and no policy exists for any client role. The
+-- one fact that IS public - "is this account banned" - is what the public
+-- board already shows by omission, and is_banned() answers exactly that and
+-- nothing else (not the reason, not who, not when).
+
+create table if not exists public.bans (
+  user_id   uuid primary key references auth.users (id) on delete cascade,
+  banned_by uuid,
+  reason    text not null default '',
+  banned_at timestamptz not null default now(),
+  constraint bans_reason_len check (char_length(reason) <= 200)
+);
+
+alter table public.bans enable row level security;
+revoke all on public.bans from anon, authenticated;
+
+create or replace function public.is_banned(p_user uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (select 1 from public.bans b where b.user_id = p_user);
+$$;
+
+revoke execute on function public.is_banned(uuid) from public;
+grant  execute on function public.is_banned(uuid) to anon, authenticated;
+
+-- Named so it sorts, and therefore fires, BEFORE scores_rate_limit_trg and
+-- scores_review_trg: a banned account's run is refused before it can count
+-- against a limit or be graded. It checks the CALLER, like the rate limit,
+-- because the body's user_id is not trusted for anything.
+create or replace function public.scores_ban_guard()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if public.is_banned(coalesce(auth.uid(), new.user_id)) then
+    raise exception 'banned: this account can no longer submit scores'
+      using errcode = 'SKBAN';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists scores_ban_guard_trg on public.scores;
+create trigger scores_ban_guard_trg
+  before insert on public.scores
+  for each row execute function public.scores_ban_guard();
+
+-- ---------------------------------------------------------------------------
 -- 4. New account -> profile row
 -- ---------------------------------------------------------------------------
 -- Email signup sends { data: { username } } so the name the player typed lands
@@ -499,6 +573,16 @@ create policy scores_insert_own
   to authenticated
   with check (user_id = auth.uid());
 
+-- A banned account may not insert, whatever else allows it. RESTRICTIVE, so
+-- it is ANDed with the policy above instead of ORed: a future permissive
+-- insert policy cannot reopen the door. The trigger in section 3c refuses
+-- first and with a clearer message; this is the belt for it.
+drop policy if exists scores_insert_not_banned on public.scores;
+create policy scores_insert_not_banned
+  on public.scores as restrictive for insert
+  to authenticated
+  with check (not public.is_banned(auth.uid()));
+
 -- Table grants, stated explicitly rather than inherited from whatever the
 -- project's default privileges happen to be. RLS decides WHICH rows; these
 -- decide which verbs exist at all.
@@ -548,6 +632,9 @@ from (
    -- Flagged runs stay in the ledger and off the board. A player with a
    -- flagged best still shows with their best UNflagged run, if any.
    where not s.flagged
+     -- A banned account is off the board entirely (section 3c), and back
+     -- with every run intact the moment it is unbanned.
+     and not public.is_banned(s.user_id)
    order by s.user_id, s.score desc, s.created_at asc
 ) b
 join public.profiles p on p.id = b.user_id
@@ -781,8 +868,11 @@ revoke all on public.scores_review_queue from anon, authenticated;
 --
 --   select tablename, policyname, cmd from pg_policies
 --    where schemaname = 'public' order by tablename;
---     -- profiles: SELECT, INSERT, UPDATE.  scores: SELECT, INSERT, and
---     -- nothing else ever.
+--     -- profiles: SELECT, INSERT, UPDATE.  scores: SELECT, INSERT (plus
+--     -- the restrictive not-banned INSERT), and nothing else ever. bans,
+--     -- admins, admin_audit: none at all.
+--
+--   select * from public.admins;                     -- the owner, on prod
 --
 --   select privilege_type, column_name from information_schema.column_privileges
 --    where table_name = 'profiles' and grantee = 'authenticated'
