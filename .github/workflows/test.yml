@@ -75,8 +75,9 @@ jobs:
       # it makes are the ones that matter most: with no js/config.js the game
       # makes ZERO requests and behaves exactly as it did before accounts
       # existed. It also greps supabase/schema.sql for the security rules
-      # (RLS on, no UPDATE, no DELETE, no email in the public view), because
-      # a threat model nothing checks is a comment.
+      # (RLS on, scores never updatable or deletable, a rename fenced by both
+      # a policy and a column grant, no email in the public view), because a
+      # threat model nothing checks is a comment.
       - name: Online layer (offline default + RLS rules)
         run: node test/online.mjs
 

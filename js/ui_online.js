@@ -41,7 +41,8 @@
      one page load. Every read of these is null-guarded. */
   var SOFT_IDS = ['ol-email-label', 'ol-email-hint', 'ol-username-label',
     'ol-username-hint', 'ol-forgot', 'ol-email-field', 'ol-password-field',
-    'ol-password-label'];
+    'ol-password-label', 'ol-account-links', 'ol-edit-name', 'ol-edit-password',
+    'ol-password2-field', 'ol-password2', 'ol-password2-label'];
 
   function collect() {
     for (var i = 0; i < IDS.length; i++) {
@@ -91,7 +92,26 @@
        would invite someone to think they can retarget it. */
     recover: {
       emailLabel: 'Email you signed up with',
-      emailHint: 'Not your leaderboard name.'
+      emailHint: 'Not your leaderboard name.',
+      passwordLabel: 'New password'
+    },
+    /* Renaming. The hint is not the sign-up one: the question a player asks
+       before pressing this is "what happens to my scores?", and the answer -
+       nothing, they follow the name - is the whole reason renaming is safe to
+       offer. It is true because the board is a view over profiles; if that
+       ever changes, this sentence becomes a lie and supabase/schema.sql
+       section 7 is where it would be broken. */
+    username: {
+      usernameLabel: 'New username',
+      usernameHint: 'Your public name. Your past scores follow it. Five changes a day.'
+    },
+    /* Two password boxes, and which is which is the thing to get right: the
+       top one is the credential being PROVEN, the bottom one the credential
+       being SET. Labelling both "Password" would be the same class of mistake
+       as the email/username muddle these labels exist to fix. */
+    password: {
+      passwordLabel: 'Current password',
+      password2Label: 'New password'
     }
   };
 
@@ -128,6 +148,36 @@
       passwordAutocomplete: 'new-password',
       toggle: 'Cancel', showForgot: false,
       fallback: 'Could not set that password.'
+    },
+    /* The two account-settings views. They are modes of the same form rather
+       than a panel of their own on purpose: the field machinery, the busy
+       state, the error line and the focus trap below all already work, and a
+       parallel copy of them is a second place for the truthful-message rule
+       to be forgotten. */
+    username: {
+      title: 'CHANGE USERNAME', submit: 'SAVE NAME', busy: 'Saving...',
+      fields: { username: true, email: false, password: false },
+      passwordAutocomplete: 'current-password',
+      toggle: 'Cancel', showForgot: false,
+      fallback: 'Could not change that name.'
+    },
+    password: {
+      title: 'CHANGE PASSWORD', submit: 'CHANGE PASSWORD', busy: 'Changing...',
+      fields: { username: false, email: false, password: true, password2: true },
+      passwordAutocomplete: 'current-password',
+      toggle: 'Cancel', showForgot: false,
+      fallback: 'Could not change that password.'
+    },
+    /* An account that signs in with Google has no password to type, so this
+       view has no boxes at all - it explains that and offers the one thing
+       that does work, the emailed link. A disabled password form with an
+       apology under it would be the dead form the brief rules out. */
+    setPassword: {
+      title: 'ACCOUNT PASSWORD', submit: 'EMAIL ME A LINK', busy: 'Sending...',
+      fields: { username: false, email: false, password: false },
+      passwordAutocomplete: 'new-password',
+      toggle: 'Cancel', showForgot: false,
+      fallback: 'Could not send that link.'
     }
   };
 
@@ -268,6 +318,25 @@
     });
   }
 
+  /* MAY THE ACCOUNT VIEWS BE OPENED AT ALL.
+   *
+   * Two conditions, and they fail for different reasons. Signed out there is
+   * no account to edit. Mid-run there is - but the panel would be taking the
+   * screen away from a run that is still being played, and the form it opens
+   * wants the keyboard, which during a run belongs to the thruster. In
+   * practice the overlay is only reachable from the title and results screens
+   * (js/game.js hit-tests the LEADERBOARD button in those two states only), so
+   * this is a second lock on a door that is already shut - which is the point:
+   * the first lock is a hit-test in another file that knows nothing about this
+   * one, and SK.UI.open() is a public handle anybody can call.
+   */
+  function canEditAccount() {
+    if (!Online.state().signedIn) return false;
+    if (!game) return true;
+    var st = game.state;
+    return st !== 'playing' && st !== 'dying' && st !== 'paused';
+  }
+
   function refreshAccountLine() {
     var s = Online.state();
     el['ol-account'].textContent = s.signedIn
@@ -275,6 +344,17 @@
       : 'Playing as a guest - sign in to appear on the board.';
     el['ol-signin'].hidden = s.signedIn;
     el['ol-signout'].hidden = !s.signedIn;
+    /* Absent rather than disabled, the same rule the Google button follows:
+       an affordance that cannot work should not be drawn. */
+    var links = el['ol-account-links'];
+    if (links) links.hidden = !canEditAccount();
+    /* And if the markup for a view is not there - a cached index.html against
+       a fresh script, which SOFT_IDS exists for - its entry point goes with
+       it rather than opening a form with no boxes in it. */
+    if (el['ol-edit-name']) el['ol-edit-name'].hidden = !el['ol-username'];
+    if (el['ol-edit-password']) {
+      el['ol-edit-password'].hidden = !el['ol-password2'];
+    }
   }
 
   /* ------------------------------------------------------------ the views */
@@ -315,15 +395,32 @@
     el['ol-username'].disabled = !spec.fields.username;
     setField('ol-email-field', 'ol-email', spec.fields.email);
     setField('ol-password-field', 'ol-password', spec.fields.password);
+    setField('ol-password2-field', 'ol-password2', !!spec.fields.password2);
 
     var copy = COPY[mode] || COPY.signin;
     setCopy(el['ol-email-label'], copy.emailLabel);
     setCopy(el['ol-email-hint'], copy.emailHint);
     if (spec.fields.username) {
-      setCopy(el['ol-username-label'], COPY.signup.usernameLabel);
-      setCopy(el['ol-username-hint'], COPY.signup.usernameHint);
+      setCopy(el['ol-username-label'], copy.usernameLabel || COPY.signup.usernameLabel);
+      setCopy(el['ol-username-hint'], copy.usernameHint || COPY.signup.usernameHint);
     }
-    setCopy(el['ol-password-label'], mode === 'recover' ? 'New password' : 'Password');
+    /* Seven modes now, and the password box carries a different meaning in
+       four of them: the credential you have (SIGN IN), the one you are
+       choosing (CREATE ACCOUNT, SET A NEW PASSWORD) and the one you are
+       proving (CHANGE PASSWORD). A ternary that named one mode and lumped the
+       rest together was already the wrong shape at four; the label lives in
+       the COPY table with every other string that varies by view. */
+    setCopy(el['ol-password-label'], copy.passwordLabel || 'Password');
+    setCopy(el['ol-password2-label'], copy.password2Label || 'New password');
+
+    /* A typed password must not survive a change of view. The old flows only
+       ever had one box and cleared it by hand at each site that needed it;
+       with CHANGE PASSWORD there are two, one of them is the player's CURRENT
+       credential, and leaving either sitting in the DOM after the view has
+       moved on is how a shoulder-surfer gets a free look. Clearing here covers
+       every route in and out at once. */
+    el['ol-password'].value = '';
+    if (el['ol-password2']) el['ol-password2'].value = '';
 
     el['ol-toggle'].textContent = spec.toggle;
     /* Only on SIGN IN. On CREATE ACCOUNT there is no password to have
@@ -344,8 +441,13 @@
 
   function focusFirst() {
     var spec = MODES[mode] || MODES.signin;
+    /* A view with no fields at all (ACCOUNT PASSWORD on a Google account) has
+       nothing to type into, and focusing a disabled input silently does
+       nothing - which would leave the keyboard on the page behind the dialog.
+       Its only action is the button, so that is where the keyboard goes. */
     var first = spec.fields.username ? el['ol-username']
-      : (spec.fields.email ? el['ol-email'] : el['ol-password']);
+      : (spec.fields.email ? el['ol-email']
+        : (spec.fields.password ? el['ol-password'] : el['ol-submit']));
     try { first.focus(); } catch (e) { /* ignore */ }
   }
 
@@ -390,6 +492,7 @@
     el.ol.hidden = true;
     el.ol.setAttribute('aria-hidden', 'true');
     el['ol-password'].value = '';
+    if (el['ol-password2']) el['ol-password2'].value = '';
     try { if (lastFocus && lastFocus.focus) lastFocus.focus(); } catch (e) { /* ignore */ }
     lastFocus = null;
     /* After the panel is visually gone: closing must feel instant, and the
@@ -446,6 +549,71 @@
         text(el['ol-auth-msg'],
           'If there is an account for that address, a reset link is on its way. ' +
           'Check your inbox and your spam folder, then open the link in this browser.');
+        revealAuthMsg();
+      }, function (err) {
+        setBusy(false);
+        text(el['ol-auth-msg'], safeMessage(err, spec.fallback), true);
+        revealAuthMsg();
+      });
+      return;
+    }
+
+    /* ---- rename ----
+       The board is reloaded rather than patched in place: the player's row
+       moves nowhere, but it is the board that has to show the new name, and
+       re-reading it is the only version of "it worked" that comes from the
+       server rather than from this file believing itself. */
+    if (mode === 'username') {
+      Online.changeUsername(username).then(function () {
+        setBusy(false);
+        syncGame();
+        showBoard('You are ' + Online.state().username + ' now, on every score you have set.');
+      }, function (err) {
+        setBusy(false);
+        text(el['ol-auth-msg'], safeMessage(err, spec.fallback), true);
+        revealAuthMsg();
+      });
+      return;
+    }
+
+    /* ---- change the password, from inside a live session ----
+       Online.changePassword checks the current one against the server before
+       it sets anything, so a wrong entry here fails at the check and the
+       account is untouched. */
+    if (mode === 'password') {
+      var next = el['ol-password2'] ? el['ol-password2'].value : '';
+      Online.changePassword(password, next).then(function () {
+        setBusy(false);
+        el['ol-password'].value = '';
+        if (el['ol-password2']) el['ol-password2'].value = '';
+        /* "You are still signed in" is not filler. The player has just changed
+           the credential this session was opened with, and the reasonable
+           assumption is that they now have to log back in - possibly mid-run.
+           They do not: GoTrue keeps the current session and revokes the
+           others' refresh tokens. Their access tokens stay valid until they
+           expire (an hour at most), so "signed out everywhere else" would be
+           a promise the server keeps late - the copy says when. */
+        showBoard('Password changed. You are still signed in here. Other devices will have to sign in again within the hour.');
+      }, function (err) {
+        setBusy(false);
+        text(el['ol-auth-msg'], safeMessage(err, spec.fallback), true);
+        revealAuthMsg();
+      });
+      return;
+    }
+
+    /* ---- a Google account asking for a password ----
+       Same endpoint as "Forgot password?", aimed at the address already on
+       the account, so the player never has to type an address to prove they
+       own a mailbox we already know. The wording avoids promising which of
+       "set" or "reset" it will be, because from here we cannot know whether
+       a password was added to this account earlier. */
+    if (mode === 'setPassword') {
+      Online.sendSetPasswordLink().then(function () {
+        setBusy(false);
+        text(el['ol-auth-msg'],
+          'A link is on its way to the address on this account. Open it in this ' +
+          'browser and it will let you choose a password. Check your spam folder too.');
         revealAuthMsg();
       }, function (err) {
         setBusy(false);
@@ -539,6 +707,63 @@
     });
   }
 
+  /* The two doors out of the "Signed in as X" line.
+   *
+   * Both re-check canEditAccount() rather than trusting that the links were
+   * hidden when the view was drawn: refreshAccountLine() runs when the board
+   * is rendered, and a run can start after that - so the state that hid them
+   * is a snapshot, and this is the fact. */
+  function onEditName() {
+    if (busy) return;
+    if (!canEditAccount()) { refuseAccountEdit(); return; }
+    showAuth('username');
+    /* Start from the name they have. A rename is nearly always an edit of the
+       current name rather than a fresh one, and an empty box asks them to
+       remember and retype it exactly. */
+    el['ol-username'].value = Online.state().username || '';
+    try { el['ol-username'].select(); } catch (e) { /* ignore */ }
+  }
+
+  /* WHICH PASSWORD VIEW, decided before anything is drawn.
+   *
+   * An account that signs in with Google has no password, and the two answers
+   * ("type your current one" / "there isn't one, here is a link") share no
+   * fields. Showing one and swapping it a round trip later is the bug this
+   * file already has a comment about on the recovery path - a form the player
+   * watches appear and vanish - so nothing opens until the answer is in.
+   * Online.accountInfo() resolves from the session when it already knows,
+   * which is the common case and costs no request at all. */
+  function onEditPassword() {
+    if (busy) return;
+    if (!canEditAccount()) { refuseAccountEdit(); return; }
+    setBusy(true);
+    text(el['ol-board-msg'], 'Checking how this account signs in...');
+    Online.accountInfo().then(function (info) {
+      setBusy(false);
+      if (info.hasPassword) { showAuth('password'); return; }
+      showAuth('setPassword');
+      text(el['ol-auth-msg'],
+        'This account signs in with Google, so there is no password on it to ' +
+        'change. If you want one as well - to sign in without Google - we can ' +
+        'email you a link that lets you choose one.');
+      revealAuthMsg();
+    }, function (err) {
+      setBusy(false);
+      /* No form, because we still do not know which form would be true. The
+         board stays up and says what failed. */
+      text(el['ol-board-msg'],
+        safeMessage(err, 'Could not check how this account signs in. Try again.'), true);
+    });
+  }
+
+  function refuseAccountEdit() {
+    text(el['ol-board-msg'],
+      Online.state().signedIn
+        ? 'Account settings are closed while a run is in progress. Finish it first.'
+        : 'Sign in first - there is no account to change yet.',
+      true);
+  }
+
   function onSignOut() {
     Online.signOut().then(function () {
       syncGame();
@@ -611,6 +836,8 @@
     });
     el['ol-signin'].addEventListener('click', function () { showAuth('signin'); });
     el['ol-signout'].addEventListener('click', onSignOut);
+    if (el['ol-edit-name']) el['ol-edit-name'].addEventListener('click', onEditName);
+    if (el['ol-edit-password']) el['ol-edit-password'].addEventListener('click', onEditPassword);
 
     /* Google is an extra opt-in in the Supabase dashboard, not something a
        project has by default - docs/LEADERBOARD_SETUP.md step 3 is a whole
@@ -639,6 +866,13 @@
       if (mode === 'signup') { showAuth('signin'); return; }
       if (mode === 'reset') { showAuth('signin'); return; }
       if (mode === 'recover') { abandonRecovery(function () { showBoard(); }); return; }
+      /* Cancelling an account view goes back to the board, not to a sign-in
+         form: the player is already signed in, and offering them a login box
+         reads as "that logged you out". */
+      if (mode === 'username' || mode === 'password' || mode === 'setPassword') {
+        showBoard();
+        return;
+      }
       showAuth('signup');
     });
 

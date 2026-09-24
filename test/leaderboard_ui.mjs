@@ -59,6 +59,37 @@ const SESSION = {
   user: { id: 'user-uuid-1', email: 'leo@example.com' }
 };
 
+/* WHICH SIGN-IN METHOD the mock account uses. GoTrue reports this on every
+   token response and on /auth/v1/user, and the account panel reads it to
+   decide whether there is a password to change at all - so a mock that left
+   it out would test the email half only and let the Google half ship blind.
+   Both shapes here were read off the live project on 2026-09-22. */
+let oauthAccount = false;
+function userBody() {
+  return oauthAccount
+    ? Object.assign({}, SESSION.user, {
+      identities: [{ provider: 'google' }],
+      app_metadata: { provider: 'google', providers: ['google'] }
+    })
+    : Object.assign({}, SESSION.user, {
+      identities: [{ provider: 'email' }],
+      app_metadata: { provider: 'email', providers: ['email'] }
+    });
+}
+function sessionBody() {
+  return Object.assign({}, SESSION, { user: userBody() });
+}
+
+/* The name the mock's profiles row currently holds. A rename moves it, so a
+   later read comes back with the new one rather than resurrecting the old - a
+   stub that always answered 'leo' would hide a client that never noticed. */
+let profileName = 'leo';
+
+/* Set to { status, body } to make the next rename FAIL the way the database
+   really does. The one that matters is a taken name: 409 with SQLSTATE 23505
+   out of profiles_username_lower_key. */
+let renameFailure = null;
+
 /* The URL GoTrue sends a recovering player back on, assembled from parts
    instead of pasted in as a literal.
 
@@ -134,11 +165,11 @@ function handleApi(req, res, body) {
        case) is what let the bug below ship unnoticed. */
     return json(200, confirmRequired
       ? { id: 'user-uuid-2', email: (parsed && parsed.email) || '', confirmation_sent_at: '2026-09-16T18:00:00Z' }
-      : SESSION);
+      : sessionBody());
   }
   if (url.startsWith('/auth/v1/token')) {
     if (signinFailure) return json(signinFailure.status, signinFailure.body);
-    return json(200, SESSION);
+    return json(200, sessionBody());
   }
   /* GoTrue answers a recovery request with 200 and an empty object, for an
      address that has an account and for one that does not. That sameness is
@@ -149,8 +180,20 @@ function handleApi(req, res, body) {
     return json(200, {});
   }
   if (url.startsWith('/auth/v1/logout')) { res.writeHead(204).end(); return; }
-  if (url.startsWith('/auth/v1/user')) return json(200, SESSION.user);
-  if (url.startsWith('/rest/v1/profiles')) return json(200, [{ username: 'leo' }]);
+  /* PUT is a password change; GET is "who am I and how do I sign in". GoTrue
+     answers both with the user object and no new tokens, which is why the
+     session survives a password change. */
+  if (url.startsWith('/auth/v1/user')) return json(200, userBody());
+  if (url.startsWith('/rest/v1/profiles')) {
+    if (req.method === 'PATCH') {
+      if (renameFailure) return json(renameFailure.status, renameFailure.body);
+      /* PostgREST echoes the stored row back when asked to, which is the only
+         evidence the client has that RLS did not silently drop the write. */
+      profileName = (parsed && parsed.username) || profileName;
+      return json(200, [{ username: profileName }]);
+    }
+    return json(200, [{ username: profileName }]);
+  }
   if (url.startsWith('/rest/v1/leaderboard')) return json(200, BOARD);
   if (url.startsWith('/rest/v1/rpc/my_rank')) return json(200, [{ rank: 2, score: 1840, username: 'leo' }]);
   if (url.startsWith('/rest/v1/scores')) { res.writeHead(201, { 'Content-Type': 'application/json' }).end('{}'); return; }
@@ -273,6 +316,10 @@ function attachLogs(page, bucket, label, opts = {}) {
     }
     if (r.status() >= 400 && recoverFailure && r.status() === recoverFailure.status &&
         r.url().includes('/auth/v1/recover')) {
+      provoked.add(r.url());
+    }
+    if (r.status() >= 400 && renameFailure && r.status() === renameFailure.status &&
+        r.url().includes('/rest/v1/profiles')) {
       provoked.add(r.url());
     }
   });
@@ -496,12 +543,18 @@ async function main() {
       (await page.locator('#ol-email').getAttribute('placeholder')).includes('@'));
 
     await page.locator('#ol-toggle').click();
+    /* Counted by what is VISIBLE rather than by what exists. The form gained a
+       fourth input when CHANGE PASSWORD arrived - a second password box, for
+       the current one - and it is hidden AND disabled on every other view. The
+       rule being defended here is "CREATE ACCOUNT asks for three things", not
+       "this <form> contains three tags", and the visible count is the one that
+       states it. */
     check('the create-account view asks for exactly username, email, password',
       (await page.locator('#ol-username').isVisible()) === true &&
       (await page.locator('#ol-email').isVisible()) === true &&
       (await page.locator('#ol-password').isVisible()) === true &&
-      (await page.locator('#ol-form input').count()) === 3,
-      `inputs=${await page.locator('#ol-form input').count()}`);
+      (await page.locator('#ol-form input:visible').count()) === 3,
+      `visible inputs=${await page.locator('#ol-form input:visible').count()}`);
     check('create-account tells the browser it is a NEW password (password managers)',
       (await page.locator('#ol-password').getAttribute('autocomplete')) === 'new-password');
 
@@ -773,6 +826,154 @@ async function main() {
     check('the password was cleared from the DOM after signing in',
       (await page.locator('#ol-password').inputValue()) === '');
 
+    /* ---- ACCOUNT SETTINGS ----
+       Until this existed, "Signed in as leo" was a dead end: the only thing a
+       player could do with their account from inside the game was leave it.
+       Both routes out of that line are checked here, and so is the thing that
+       makes a rename safe to offer - that the board follows the new name. */
+    check('a signed-in player is offered the two account actions',
+      (await page.locator('#ol-account-links').isVisible()) === true &&
+      (await page.locator('#ol-edit-name').isVisible()) === true &&
+      (await page.locator('#ol-edit-password').isVisible()) === true);
+
+    await page.locator('#ol-edit-name').click();
+    await wait(200);
+    check('Change username opens a view that says so',
+      (await page.locator('#ol-title').textContent()).trim() === 'CHANGE USERNAME');
+    check('...prefilled with the name they have, so it is an edit and not a retype',
+      (await page.locator('#ol-username').inputValue()) === 'leo');
+    check('...and asks for nothing else - no email, no password',
+      (await page.locator('#ol-form input:visible').count()) === 1,
+      `visible inputs=${await page.locator('#ol-form input:visible').count()}`);
+    check('...and says what happens to the scores already on the board',
+      /past scores/i.test(await page.locator('#ol-username-hint').textContent()),
+      await page.locator('#ol-username-hint').textContent());
+
+    /* A name the database would refuse, refused here instead - and provably
+       not sent, because the rule is a CHECK constraint and a round trip to be
+       told so is a round trip wasted. */
+    api.length = 0;
+    await page.locator('#ol-username').fill('astro leo');
+    await page.locator('#ol-submit').click();
+    await wait(300);
+    check('a name with a space is refused with the actual rule',
+      /3-16/.test(await page.locator('#ol-auth-msg').textContent()),
+      await page.locator('#ol-auth-msg').textContent());
+    check('...and was never sent', !api.some(c => c.method === 'PATCH'),
+      api.map(c => c.method + ' ' + c.url).join(' | '));
+
+    /* A name the database refuses because somebody else has it. This one HAS
+       to make the trip, and the sentence has to be the one sign-up uses. */
+    renameFailure = {
+      status: 409,
+      body: { code: '23505', message: 'duplicate key value violates unique constraint "profiles_username_lower_key"' }
+    };
+    api.length = 0;
+    await page.locator('#ol-username').fill('klaudia');
+    await page.locator('#ol-submit').click();
+    await wait(400);
+    check('a name somebody else holds comes back as taken',
+      /already taken/i.test(await page.locator('#ol-auth-msg').textContent()),
+      await page.locator('#ol-auth-msg').textContent());
+    check('...and the player is still called leo',
+      (await page.evaluate('window.__SKYHOOK.game.online.username')) === 'leo');
+    renameFailure = null;
+
+    api.length = 0;
+    await page.locator('#ol-username').fill('astro_leo');
+    await page.locator('#ol-submit').click();
+    await page.waitForFunction(
+      'window.__SKYHOOK.game.online.username === "astro_leo"', null, { timeout: 8000 });
+    await wait(300);
+    const rename = api.find(c => c.method === 'PATCH');
+    check('the rename is a PATCH of the username alone',
+      !!rename && JSON.stringify(rename.body) === JSON.stringify({ username: 'astro_leo' }),
+      rename ? JSON.stringify(rename.body) : 'no PATCH');
+    check('the rename asks for the stored row back rather than trusting a 200',
+      !!rename && rename.headers.prefer === 'return=representation',
+      rename ? String(rename.headers.prefer) : '');
+    check('the panel goes back to the board and states the new name',
+      (await page.locator('#ol-board').isVisible()) === true &&
+      /signed in as astro_leo/i.test(await page.locator('#ol-account').textContent()),
+      await page.locator('#ol-account').textContent());
+    check('...and says the scores already set came with it',
+      /every score/i.test(await page.locator('#ol-board-msg').textContent()),
+      await page.locator('#ol-board-msg').textContent());
+
+    /* ---- the password, from inside a live session ---- */
+    await page.locator('#ol-edit-password').click();
+    await wait(400);
+    check('Change password opens a view that says so',
+      (await page.locator('#ol-title').textContent()).trim() === 'CHANGE PASSWORD');
+    check('it asks for the current password AND a new one, labelled apart',
+      (await page.locator('#ol-form input:visible').count()) === 2 &&
+      /current/i.test(await page.locator('#ol-password-label').textContent()) &&
+      /new/i.test(await page.locator('#ol-password2-label').textContent()),
+      `${await page.locator('#ol-password-label').textContent()} / ${await page.locator('#ol-password2-label').textContent()}`);
+    check('the browser is told which box is which, so it saves the right one',
+      (await page.locator('#ol-password').getAttribute('autocomplete')) === 'current-password' &&
+      (await page.locator('#ol-password2').getAttribute('autocomplete')) === 'new-password');
+
+    /* THE POINT OF THE WHOLE FLOW. A session left open on a shared machine
+       must not be enough to take the account, so a wrong current password has
+       to stop before anything is written. */
+    signinFailure = {
+      status: 400,
+      body: { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' }
+    };
+    api.length = 0;
+    await page.locator('#ol-password').fill('not-the-one');
+    await page.locator('#ol-password2').fill('brand-new-secret');
+    await page.locator('#ol-submit').click();
+    await wait(500);
+    check('a wrong current password is named as exactly that',
+      /not your current password/i.test(await page.locator('#ol-auth-msg').textContent()),
+      await page.locator('#ol-auth-msg').textContent());
+    check('...and nothing was written to the account',
+      !api.some(c => c.method === 'PUT'),
+      api.map(c => c.method + ' ' + c.url).join(' | '));
+    check('...and the player is still signed in',
+      (await page.evaluate('window.__SKYHOOK.game.online.signedIn')) === true);
+    signinFailure = null;
+
+    api.length = 0;
+    await page.locator('#ol-password').fill('hunter2hunter2');
+    await page.locator('#ol-password2').fill('brand-new-secret');
+    await page.locator('#ol-submit').click();
+    await page.waitForSelector('#ol-board:visible', { timeout: 8000 });
+    await wait(300);
+    const reauth = api.find(c => c.url.includes('grant_type=password'));
+    const put = api.find(c => c.method === 'PUT' && c.url.startsWith('/auth/v1/user'));
+    check('the current password is proved to the server before the new one is set',
+      !!reauth && !!put && api.indexOf(reauth) < api.indexOf(put),
+      api.map(c => c.method + ' ' + c.url).join(' | '));
+    check('the new password is sent alone, on the session token',
+      !!put && JSON.stringify(put.body) === JSON.stringify({ password: 'brand-new-secret' }) &&
+      put.headers.authorization === 'Bearer jwt-access-1',
+      put ? JSON.stringify(put.body) : 'no PUT');
+    /* The assumption anybody makes after changing a password is that they have
+       just been logged out. They have not, and being told so is the difference
+       between carrying on and going to hunt for the sign-in form. */
+    check('the player is told they are still signed in',
+      /still signed in/i.test(await page.locator('#ol-board-msg').textContent()),
+      await page.locator('#ol-board-msg').textContent());
+    check('...and actually is', (await page.evaluate('window.__SKYHOOK.game.online.signedIn')) === true);
+    check('both password boxes were emptied afterwards',
+      (await page.locator('#ol-password').inputValue()) === '' &&
+      (await page.locator('#ol-password2').inputValue()) === '');
+
+    /* Back to the name the rest of this file expects to find. Renaming twice
+       is not padding: it is the second rename, the one a cooldown or a stale
+       cache would break. */
+    await page.locator('#ol-edit-name').click();
+    await wait(200);
+    await page.locator('#ol-username').fill('leo');
+    await page.locator('#ol-submit').click();
+    await page.waitForFunction(
+      'window.__SKYHOOK.game.online.username === "leo"', null, { timeout: 8000 });
+    check('a second rename works as well as the first',
+      (await page.evaluate('window.__SKYHOOK.game.online.username')) === 'leo');
+
     /* ---- Escape closes, and the canvas gets its keyboard back ---- */
     await page.keyboard.press('Escape');
     await wait(200);
@@ -840,6 +1041,78 @@ async function main() {
       (await page.evaluate('localStorage.getItem("skyhook.session")')) === '');
     check('the board is still readable after signing out',
       (await page.locator('#ol-list .ol-row').count()) === 3);
+    check('a guest is offered no account actions to take',
+      (await page.locator('#ol-account-links').isVisible()) === false);
+
+    /* ---- AN ACCOUNT WITH NO PASSWORD ----
+       Signing in with Google means there is no password on the account, so a
+       password form would be a form the player can never fill in. What they
+       get instead is the truth and the one route that does work. */
+    oauthAccount = true;
+    await page.locator('#ol-signin').click();
+    await page.locator('#ol-email').fill('leo@example.com');
+    await page.locator('#ol-password').fill('hunter2hunter2');
+    await page.locator('#ol-submit').click();
+    await page.waitForFunction('window.__SKYHOOK.game.online.signedIn === true', null, { timeout: 8000 });
+    await wait(300);
+
+    api.length = 0;
+    await page.locator('#ol-edit-password').click();
+    await wait(500);
+    check('a Google account is never shown a password form',
+      (await page.locator('#ol-form input:visible').count()) === 0,
+      `visible inputs=${await page.locator('#ol-form input:visible').count()}`);
+    check('...it is told plainly how this account signs in',
+      /google/i.test(await page.locator('#ol-auth-msg').textContent()),
+      await page.locator('#ol-auth-msg').textContent());
+    check('...and offered the one thing that does work',
+      /email me a link/i.test(await page.locator('#ol-submit').textContent()),
+      await page.locator('#ol-submit').textContent());
+
+    api.length = 0;
+    await page.locator('#ol-submit').click();
+    await wait(500);
+    const link = api.find(c => c.url.startsWith('/auth/v1/recover'));
+    check('pressing it asks for a link to the address already on the account',
+      !!link && link.body.email === 'leo@example.com',
+      link ? JSON.stringify(link.body) : 'no recover call');
+    check('...and says where to look for it',
+      /spam/i.test(await page.locator('#ol-auth-msg').textContent()),
+      await page.locator('#ol-auth-msg').textContent());
+    oauthAccount = false;
+
+    /* ---- NOT WHILE A RUN IS IN PROGRESS ----
+       js/game.js only hit-tests the LEADERBOARD button on the title and
+       results screens, so this is a second lock on a door that is already
+       shut. It is here because SK.UI.open() is a public handle, and because
+       the first lock lives in a file that knows nothing about this one. */
+    /* Closed, not just sent back to the board view. A panel that is ALREADY
+       open is not re-rendered by opening it again, so leaving it up would test
+       a stale frame rather than the rule - which is itself the reason the
+       click handler re-checks instead of trusting what was drawn. */
+    await page.evaluate('window.SK.UI.close()');
+    await wait(200);
+    await page.evaluate(`(() => {
+      const g = window.__SKYHOOK.game;
+      g.skipTutorial(true);
+      g.start(777);
+    })()`);
+    await page.evaluate('window.SK.UI.open("board")');
+    await wait(300);
+    check('mid-run the account actions are not drawn',
+      (await page.locator('#ol-account-links').isVisible()) === false &&
+      (await page.evaluate('window.__SKYHOOK.game.state')) === 'playing');
+    /* Hidden is not the same as refused. Fire the handler directly - the way a
+       stale frame or a console would - and it must still say no. */
+    api.length = 0;
+    await page.evaluate(
+      `document.getElementById('ol-edit-name').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+    await wait(200);
+    check('and firing it anyway is refused, in words',
+      (await page.locator('#ol-board').isVisible()) === true &&
+      /run is in progress/i.test(await page.locator('#ol-board-msg').textContent()),
+      await page.locator('#ol-board-msg').textContent());
+    check('...having sent nothing', !api.some(c => c.method === 'PATCH'));
 
     await ctx.close();
 
