@@ -139,7 +139,12 @@
     /* The per-account DAILY cap in supabase/schema.sql (scores_rate_limit),
        raised with its own SQLSTATE precisely so this line can differ from the
        per-minute one: "wait a minute" would be the wrong advice here. */
-    SKDAY: 'Daily score limit reached for this account. Your best is saved on this device - try again tomorrow.'
+    SKDAY: 'Daily score limit reached for this account. Your best is saved on this device - try again tomorrow.',
+
+    /* The account was banned from the board by the owner (supabase/schema.sql
+       section 3c). Stated plainly: nothing the player does on this device
+       will change it, so no "try again". */
+    SKBAN: 'This account has been banned from the leaderboard. Scores are no longer saved.'
   };
 
   /* Some codes mean different things depending on what the player just asked
@@ -215,6 +220,15 @@
       over_email_send_rate_limit:
         'The server is rate-limiting this right now. Wait a minute and try again.',
       network: 'Cannot reach the server. Your password was not changed.'
+    },
+    /* The owner's moderation actions (supabase/schema.sql section 11). The
+       server's own sentences are not passed through - the rule for the whole
+       file - so each refusal it can give has its line here. */
+    moderation: {
+      '42501': 'Only an admin can do that.',
+      '22023': 'Not allowed on that account (your own, or another admin).',
+      P0002: 'That account no longer exists.',
+      network: 'Cannot reach the server. Nothing was changed.'
     },
     newPassword: {
       /* There is no email in this step at all - only the PUT that sets the
@@ -797,6 +811,7 @@
     configure: function (raw) {
       cfg = normalise(raw);
       session = null;
+      adminFor = null;
       refreshing = null;
       recovering = false;
       if (!cfg) return false;
@@ -1386,7 +1401,8 @@
            plausibility constraint or the rate limit. Queueing it would just
            replay a rejection forever. */
         if (status && status >= 400 && status < 500 && status !== 401 && status !== 403) {
-          return { submitted: false, queued: false, reason: friendly(err, 'Score refused.') };
+          return { submitted: false, queued: false, reason: friendly(err, 'Score refused.'),
+                   code: (err && err.code) || '' };
         }
         queuePending(run);
         return { submitted: false, queued: true, reason: friendly(err, 'Saved on this device for now.') };
@@ -1510,8 +1526,84 @@
           username: String(r.username || '')
         };
       }, function () { return null; });
+    },
+
+    /* ------------------------------------------------------ moderation ---
+     * Owner-only ban / unban / delete (supabase/schema.sql section 11).
+     *
+     * NOTHING here grants anything. isAdmin() only decides whether the UI
+     * DRAWS the controls; every action is re-checked by the database against
+     * public.admins on the server, so a forged "true" gets buttons that are
+     * all refused. It answers false - without a network call - signed out or
+     * with no backend, and false on ANY failure, including a project whose
+     * schema predates section 11 (404 on the RPC): a player must never see
+     * moderation controls because a request went wrong.
+     *
+     * The answer is remembered per account id, so the board does not ask on
+     * every open, and a different sign-in asks again.
+     */
+    isAdmin: function () {
+      if (!cfg || !session) return Promise.resolve(false);
+      var id = session.user && session.user.id;
+      if (adminFor && adminFor.id === id) return Promise.resolve(adminFor.yes);
+      return withToken(function (token) {
+        return request('/rest/v1/rpc/is_admin', { method: 'POST', token: token, body: {} });
+      }).then(function (yes) {
+        var ok = yes === true;
+        if (session && session.user && session.user.id === id) adminFor = { id: id, yes: ok };
+        return ok;
+      }, function () { return false; });
+    },
+
+    /* The board an admin sees: the same ranking plus the account id to act
+       on, and the banned accounts (last, unranked) so they can be unbanned. */
+    adminBoard: function (limit) {
+      if (!cfg || !session) return Promise.reject(new Error('offline'));
+      var n = Math.min(parseInt(limit, 10) || cfg.boardLimit, 200);
+      return withToken(function (token) {
+        return request('/rest/v1/rpc/admin_board', { method: 'POST', token: token, body: { p_limit: n } });
+      }).then(function (rows) {
+        return (rows || []).map(function (r) {
+          return {
+            rank: parseInt(r.rank, 10) || 0,
+            userId: String(r.user_id || ''),
+            username: String(r.username || ''),
+            score: parseInt(r.score, 10) || 0,
+            hooks: parseInt(r.hooks, 10) || 0,
+            altitude: parseInt(r.altitude, 10) || 0,
+            createdAt: r.created_at || '',
+            banned: r.banned === true,
+            banReason: String(r.ban_reason || ''),
+            isAdmin: r.is_admin === true
+          };
+        });
+      }, function (err) {
+        throw playerError(err, 'Could not load the leaderboard.', 'moderation');
+      });
+    },
+
+    banUser: function (userId, reason) {
+      return moderate('admin_ban_user', { target: String(userId || ''), reason: String(reason || '').slice(0, 200) });
+    },
+    unbanUser: function (userId) {
+      return moderate('admin_unban_user', { target: String(userId || '') });
+    },
+    deleteUser: function (userId) {
+      return moderate('admin_delete_user', { target: String(userId || '') });
     }
   };
+
+  var adminFor = null;         // { id, yes } - see isAdmin()
+
+  function moderate(fn, body) {
+    if (!cfg || !session) return Promise.reject(new Error('offline'));
+    if (!body.target) return Promise.reject(new Error('No account given.'));
+    return withToken(function (token) {
+      return request('/rest/v1/rpc/' + fn, { method: 'POST', token: token, body: body });
+    }).then(function () { return true; }, function (err) {
+      throw playerError(err, 'That did not work. Nothing was changed.', 'moderation');
+    });
+  }
 
   /* Keep only the best unsent run. A queue of every failed submission would
      grow without bound in a tunnel and replay a hundred mediocre runs on the

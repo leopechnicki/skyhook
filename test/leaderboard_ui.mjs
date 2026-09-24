@@ -123,6 +123,32 @@ const BOARD = [
 
 const api = [];   // every call the page made to the mock project
 
+/* MODERATION (supabase/schema.sql section 11). `adminMode` is what the mock
+   database answers to is_admin() for the signed-in account - false
+   everywhere except section B3, so every other section is the view a normal
+   player gets. The admin board is a small ledger the ban/unban/delete RPCs
+   really mutate, ranked the way the SQL ranks it: unbanned by score, banned
+   last and unranked. */
+let adminMode = false;
+let moderationFailure = null;   // { status, body } for the next admin RPC
+let accounts = [];
+function resetAccounts() {
+  accounts = [
+    { user_id: 'u-klaudia', username: 'klaudia', score: 9100, banned: false, ban_reason: '', is_admin: false },
+    { user_id: SESSION.user.id, username: 'leo', score: 1840, banned: false, ban_reason: '', is_admin: true },
+    { user_id: 'u-lucas', username: 'lucas', score: 620, banned: false, ban_reason: '', is_admin: false },
+    { user_id: 'u-grok', username: 'grok_bot', score: 35000, banned: true, ban_reason: 'suspected bot', is_admin: false }
+  ];
+}
+resetAccounts();
+function adminBoardRows() {
+  const live = accounts.filter(a => !a.banned).sort((a, b) => b.score - a.score);
+  const gone = accounts.filter(a => a.banned).sort((a, b) => b.score - a.score);
+  return live.map((a, i) => Object.assign({ rank: i + 1 }, a))
+    .concat(gone.map(a => Object.assign({ rank: null }, a)))
+    .map(a => Object.assign({ hooks: 10, altitude: 100, created_at: '2026-09-20T10:00:00Z' }, a));
+}
+
 /* Flipped on for the one signup below that must behave like a project with
    "Confirm email" left ON - which is Supabase's default, so it is the shape
    most real deployments have, including this game's own. */
@@ -145,6 +171,9 @@ let signinFailure = null;
    not an edge case for the person it happens to: they are locked out, and the
    button they pressed is the only door left. */
 let recoverFailure = null;
+
+/* True only while section B3 provokes an admin refusal on purpose. */
+let moderationArmed = false;
 
 function handleApi(req, res, body) {
   const url = req.url.replace(/^\/api/, '');
@@ -196,6 +225,33 @@ function handleApi(req, res, body) {
   }
   if (url.startsWith('/rest/v1/leaderboard')) return json(200, BOARD);
   if (url.startsWith('/rest/v1/rpc/my_rank')) return json(200, [{ rank: 2, score: 1840, username: 'leo' }]);
+  if (url.startsWith('/rest/v1/rpc/is_admin')) return json(200, adminMode);
+  if (url.startsWith('/rest/v1/rpc/admin_')) {
+    /* The mock enforces what the database enforces: not an admin, 42501. */
+    const denied = { code: '42501', message: 'not allowed: admins only' };
+    if (!adminMode) return json(403, denied);
+    if (moderationFailure) {
+      const f = moderationFailure;
+      moderationFailure = null;
+      return json(f.status, f.body);
+    }
+    if (url.startsWith('/rest/v1/rpc/admin_board')) return json(200, adminBoardRows());
+    const target = accounts.find(a => a.user_id === (parsed && parsed.target));
+    if (!target) return json(404, { code: 'P0002', message: 'no such account' });
+    if (target.is_admin) return json(400, { code: '22023', message: 'that account is an admin' });
+    if (url.startsWith('/rest/v1/rpc/admin_ban_user')) {
+      target.banned = true; target.ban_reason = (parsed && parsed.reason) || '';
+      res.writeHead(204).end(); return;
+    }
+    if (url.startsWith('/rest/v1/rpc/admin_unban_user')) {
+      const was = target.banned; target.banned = false; target.ban_reason = '';
+      return json(200, was);
+    }
+    if (url.startsWith('/rest/v1/rpc/admin_delete_user')) {
+      accounts = accounts.filter(a => a !== target);
+      res.writeHead(204).end(); return;
+    }
+  }
   if (url.startsWith('/rest/v1/scores')) { res.writeHead(201, { 'Content-Type': 'application/json' }).end('{}'); return; }
   return json(404, { message: 'no such endpoint: ' + url });
 }
@@ -320,6 +376,9 @@ function attachLogs(page, bucket, label, opts = {}) {
     }
     if (r.status() >= 400 && renameFailure && r.status() === renameFailure.status &&
         r.url().includes('/rest/v1/profiles')) {
+      provoked.add(r.url());
+    }
+    if (r.status() >= 400 && r.url().includes('/rest/v1/rpc/admin_') && moderationArmed) {
       provoked.add(r.url());
     }
   });
@@ -826,6 +885,21 @@ async function main() {
     check('the password was cleared from the DOM after signing in',
       (await page.locator('#ol-password').inputValue()) === '');
 
+    /* A normal player: the board they get is the board they always got. The
+       one new request is the server being asked "is this an admin?" - with
+       their own token, answered no - and nothing is drawn because of it. */
+    check('non-admin: no moderation control anywhere on the board',
+      (await page.locator('#ol-list .ol-mod, #ol-list .ol-modbar, #ol-list .ol-tag').count()) === 0);
+    check('non-admin: the admin board was never requested',
+      !api.some(c => c.url.startsWith('/rest/v1/rpc/admin_')),
+      api.filter(c => c.url.includes('admin_')).map(c => c.url).join(' | '));
+    check('non-admin: whether to draw controls is asked of the SERVER, with the player\'s own token',
+      api.some(c => c.url.startsWith('/rest/v1/rpc/is_admin') &&
+        c.headers.authorization === 'Bearer ' + SESSION.access_token));
+    check('signed out, nobody asked the server about admin at all',
+      api.findIndex(c => c.url.startsWith('/rest/v1/rpc/is_admin')) >
+      api.findIndex(c => c.url.startsWith('/auth/v1/token')));
+
     /* ---- ACCOUNT SETTINGS ----
        Until this existed, "Signed in as leo" was a dead end: the only thing a
        player could do with their account from inside the game was leave it.
@@ -1175,6 +1249,126 @@ async function main() {
         alogs.join(' | '));
 
       await actx.close();
+    }
+
+    /* ==================================================================
+     * B3. MODERATION - the owner bans, unbans and deletes from the board.
+     *
+     * The server decides who is an admin (is_admin() and every admin RPC
+     * check public.admins). This proves the half a person touches: that the
+     * controls appear for an admin and not on their own row, that Ban and
+     * Unban send the right account, that Delete sends NOTHING until it has
+     * been confirmed, and that a refusal is shown and changes nothing.
+     * ================================================================ */
+    {
+      adminMode = true;
+      resetAccounts();
+      const mctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      const mpage = await mctx.newPage();
+      attachLogs(mpage, errors, 'moderation');
+      const before = api.length;
+      const calls = () => api.slice(before);
+
+      await mpage.goto(base + 'online/', { waitUntil: 'load' });
+      await mpage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(400);
+      await mpage.evaluate(`window.SK.UI.open('auth')`);
+      await mpage.locator('#ol-email').fill('leo@example.com');
+      await mpage.locator('#ol-password').fill('hunter2hunter2');
+      await mpage.locator('#ol-submit').click();
+      await mpage.waitForFunction('window.__SKYHOOK.game.online.signedIn === true', null, { timeout: 8000 });
+      await mpage.waitForSelector('#ol-list .ol-mod', { timeout: 8000 });
+
+      const row = name => mpage.locator('#ol-list .ol-row', { has: mpage.locator('.ol-name', { hasText: new RegExp('^' + name + '$') }) });
+      check('admin: the admin board is what gets drawn',
+        calls().some(c => c.url.startsWith('/rest/v1/rpc/admin_board') &&
+          c.headers.authorization === 'Bearer ' + SESSION.access_token));
+      check('admin: every other account has a Manage control',
+        (await row('klaudia').locator('.ol-mod').count()) === 1 &&
+        (await row('lucas').locator('.ol-mod').count()) === 1 &&
+        (await row('grok_bot').locator('.ol-mod').count()) === 1);
+      check('admin: no control on your own row (the server refuses it anyway)',
+        (await row('leo').locator('.ol-mod').count()) === 0);
+      check('admin: a banned account is listed last, unranked and marked',
+        (await mpage.locator('#ol-list .ol-row').last().locator('.ol-name').textContent()) === 'grok_bot' &&
+        (await row('grok_bot').locator('.ol-rank').textContent()) === '--' &&
+        (await row('grok_bot').locator('.ol-tag').textContent()) === 'BANNED');
+      check('admin: the controls are real buttons with a name a screen reader can say',
+        (await row('lucas').locator('.ol-mod').getAttribute('aria-label')) === 'Manage lucas');
+
+      /* ---- ban ---- */
+      await row('lucas').locator('.ol-mod').click();
+      const bar = mpage.locator('#ol-list .ol-modbar');
+      check('Manage opens one action strip under that row',
+        (await bar.count()) === 1 &&
+        (await row('lucas').locator('.ol-mod').getAttribute('aria-expanded')) === 'true');
+      check('the strip offers Ban, Delete and Cancel for an unbanned account',
+        JSON.stringify(await bar.locator('button').allTextContents()) === '["Ban","Delete","Cancel"]',
+        JSON.stringify(await bar.locator('button').allTextContents()));
+      await bar.getByRole('button', { name: 'Ban' }).click();
+      await mpage.waitForFunction(() => /banned/.test(document.getElementById('ol-board-msg').textContent), null, { timeout: 8000 });
+      const ban = calls().find(c => c.url.startsWith('/rest/v1/rpc/admin_ban_user'));
+      check('Ban sends that account\'s id - and only that', !!ban && ban.body.target === 'u-lucas' &&
+        ban.method === 'POST', JSON.stringify(ban && ban.body));
+      await mpage.waitForFunction(() => !!document.querySelector('#ol-list .ol-row.is-banned .ol-name') &&
+        [...document.querySelectorAll('#ol-list .ol-row.is-banned .ol-name')].some(n => n.textContent === 'lucas'), null, { timeout: 8000 });
+      check('after a ban the board reloads with the account marked banned',
+        (await row('lucas').locator('.ol-tag').count()) === 1);
+      check('the admin is told what a ban does, in words',
+        /lucas is banned/i.test(await mpage.locator('#ol-board-msg').textContent()),
+        await mpage.locator('#ol-board-msg').textContent());
+
+      /* ---- unban ---- */
+      await row('lucas').locator('.ol-mod').click();
+      check('a banned account is offered Unban instead of Ban',
+        JSON.stringify(await bar.locator('button').allTextContents()) === '["Unban","Delete","Cancel"]');
+      await bar.getByRole('button', { name: 'Unban' }).click();
+      await mpage.waitForFunction(() => /back on the board/.test(document.getElementById('ol-board-msg').textContent), null, { timeout: 8000 });
+      const unban = calls().find(c => c.url.startsWith('/rest/v1/rpc/admin_unban_user'));
+      check('Unban sends that account\'s id', !!unban && unban.body.target === 'u-lucas');
+      check('after an unban the account is back, ranked',
+        (await row('lucas').locator('.ol-tag').count()) === 0 &&
+        (await row('lucas').locator('.ol-rank').textContent()) === '#3');
+
+      /* ---- delete: nothing is sent until it is confirmed ---- */
+      await row('grok_bot').locator('.ol-mod').click();
+      await bar.getByRole('button', { name: 'Delete' }).click();
+      check('Delete asks first, naming the account and saying it cannot be undone',
+        /delete grok_bot for good/i.test(await bar.locator('.ol-modq').textContent()) &&
+        /cannot be undone/i.test(await bar.locator('.ol-modq').textContent()));
+      check('...and has sent nothing yet', !calls().some(c => c.url.startsWith('/rest/v1/rpc/admin_delete_user')));
+      await bar.getByRole('button', { name: 'Keep' }).click();
+      check('Keep backs out to the actions, still having sent nothing',
+        (await bar.locator('.ol-modq').count()) === 0 &&
+        !calls().some(c => c.url.startsWith('/rest/v1/rpc/admin_delete_user')));
+      await bar.getByRole('button', { name: 'Cancel' }).click();
+      check('Cancel closes the strip', (await bar.count()) === 0);
+      await row('grok_bot').locator('.ol-mod').click();
+      await bar.getByRole('button', { name: 'Delete' }).click();
+      await bar.getByRole('button', { name: 'Yes, delete' }).click();
+      await mpage.waitForFunction(() => /was deleted/.test(document.getElementById('ol-board-msg').textContent), null, { timeout: 8000 });
+      const del = calls().filter(c => c.url.startsWith('/rest/v1/rpc/admin_delete_user'));
+      check('confirmed Delete sends exactly one call, for that account',
+        del.length === 1 && del[0].body.target === 'u-grok', JSON.stringify(del.map(c => c.body)));
+      check('the deleted account is gone from the board', (await row('grok_bot').count()) === 0);
+
+      /* ---- a refusal is shown, and changes nothing ---- */
+      moderationArmed = true;
+      moderationFailure = { status: 403, body: { code: '42501', message: 'not allowed: admins only' } };
+      await row('klaudia').locator('.ol-mod').click();
+      await bar.getByRole('button', { name: 'Ban' }).click();
+      await mpage.waitForFunction(() => document.getElementById('ol-board-msg').classList.contains('is-error'), null, { timeout: 8000 });
+      check('a refused action says so, in words, not a server message',
+        (await mpage.locator('#ol-board-msg').textContent()) === 'Only an admin can do that.',
+        await mpage.locator('#ol-board-msg').textContent());
+      check('...and the account is untouched and the strip is usable again',
+        (await row('klaudia').locator('.ol-tag').count()) === 0 &&
+        (await bar.getByRole('button', { name: 'Ban' }).isDisabled()) === false);
+      moderationArmed = false;
+
+      await mctx.close();
+      adminMode = false;
+      resetAccounts();
     }
 
     /* ==================================================================

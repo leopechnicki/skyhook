@@ -255,6 +255,69 @@ body {
   color: #fff;
 }
 
+/* ---- moderation (drawn only for an admin, see js/ui_online.js) ----
+   None of these classes exist in the DOM for anybody else. */
+.ol-row.is-banned .ol-name,
+.ol-row.is-banned .ol-score {
+  color: rgba(223, 240, 255, 0.45);
+  text-decoration: line-through;
+}
+.ol-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #ff8ca3;
+}
+.ol-row:has(.ol-mod) { align-items: center; }
+.ol-mod {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: rgba(53, 230, 255, 0.92);
+  background: none;
+  border: 1px solid rgba(53, 230, 255, 0.28);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.ol-mod[aria-expanded="true"] { background: rgba(53, 230, 255, 0.12); }
+.ol-modbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(53, 230, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(53, 230, 255, 0.22);
+}
+.ol-modq {
+  flex: 1 0 100%;
+  margin: 0 0 2px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #ffd0da;
+}
+.ol-modbtn {
+  flex: 1 1 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #dff0ff;
+  background: rgba(53, 230, 255, 0.07);
+  border: 1px solid rgba(53, 230, 255, 0.34);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.ol-modbtn.is-warn { color: #ffd75e; border-color: rgba(255, 215, 94, 0.5); }
+.ol-modbtn.is-danger { color: #ff8ca3; border-color: rgba(255, 140, 163, 0.55); }
+.ol-modbtn:disabled { opacity: 0.5; cursor: default; }
+
 /* The line every answer in this panel is delivered on: "a reset link is on its
    way", "Link confirmed. Choose a new password", "that link has expired". It
    used to be 12px at 85% opacity, which is fine for "earlier run uploaded" and

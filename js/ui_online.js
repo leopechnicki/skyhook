@@ -259,20 +259,27 @@
 
   /* ------------------------------------------------------------ the board */
 
-  function renderRows(rows) {
+  /* `admin` is true only when the SERVER said so (Online.isAdmin) and the
+     rows came from the admin board. Everyone else gets exactly the rows they
+     always had: no extra element, no extra class, nothing to find in the DOM. */
+  function renderRows(rows, admin) {
     var me = (Online.state().username || '').toLowerCase();
     var list = el['ol-list'];
     while (list.firstChild) list.removeChild(list.firstChild);
+    modOpen = null;
 
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
       var li = doc.createElement('li');
-      li.className = 'ol-row' + (r.rank <= 3 ? ' is-top' : '') +
-        (me && r.username.toLowerCase() === me ? ' is-me' : '');
+      li.className = 'ol-row' + (r.rank && r.rank <= 3 ? ' is-top' : '') +
+        (me && r.username.toLowerCase() === me ? ' is-me' : '') +
+        (admin && r.banned ? ' is-banned' : '');
 
       var rank = doc.createElement('span');
       rank.className = 'ol-rank';
-      rank.textContent = '#' + r.rank;
+      /* A banned account has no rank - the public board does not list it at
+         all. The admin sees it last, marked, so it can be found and unbanned. */
+      rank.textContent = r.rank ? '#' + r.rank : '--';
 
       /* textContent, never innerHTML. Usernames are attacker-supplied strings
          from a public signup form; the schema restricts them to [A-Za-z0-9_]
@@ -288,9 +295,109 @@
 
       li.appendChild(rank);
       li.appendChild(name);
+      if (admin && r.banned) {
+        var tag = doc.createElement('span');
+        tag.className = 'ol-tag';
+        tag.textContent = 'BANNED';
+        li.appendChild(tag);
+      }
       li.appendChild(score);
+      /* No control on your own row or another admin's: the server refuses
+         both, so drawing a button for them would be drawing a lie. */
+      if (admin && r.userId && !r.isAdmin) li.appendChild(modButton(r, li));
       list.appendChild(li);
     }
+  }
+
+  /* ----------------------------------------------------- moderation (admin)
+   * One small "Manage" button per row opens an action strip directly under
+   * that row: Ban (or Unban) / Delete / Cancel. Ban is reversible and runs on
+   * the tap. Delete is not, so it asks once more, naming the account and what
+   * goes with it, before anything is sent. One strip open at a time. */
+  var modOpen = null;          // the strip <li> currently open, if any
+
+  function closeMod() {
+    if (modOpen && modOpen.parentNode) modOpen.parentNode.removeChild(modOpen);
+    if (modOpen && modOpen.opener) modOpen.opener.setAttribute('aria-expanded', 'false');
+    modOpen = null;
+  }
+
+  function modButton(r, li) {
+    var b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'ol-mod';
+    b.textContent = 'Manage';
+    b.setAttribute('aria-expanded', 'false');
+    b.setAttribute('aria-label', 'Manage ' + r.username);
+    b.addEventListener('click', function () {
+      var wasMine = modOpen && modOpen.opener === b;
+      closeMod();
+      if (!wasMine) openMod(r, li, b);
+    });
+    return b;
+  }
+
+  function modAction(label, cls, fn) {
+    var b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'ol-modbtn' + (cls ? ' ' + cls : '');
+    b.textContent = label;
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function openMod(r, li, opener) {
+    var bar = doc.createElement('li');
+    bar.className = 'ol-modbar';
+    bar.opener = opener;
+    opener.setAttribute('aria-expanded', 'true');
+
+    function actions() {
+      while (bar.firstChild) bar.removeChild(bar.firstChild);
+      bar.appendChild(r.banned
+        ? modAction('Unban', '', function () {
+          run(Online.unbanUser(r.userId), r.username + ' is back on the board.');
+        })
+        : modAction('Ban', 'is-warn', function () {
+          run(Online.banUser(r.userId, 'suspected bot'),
+            r.username + ' is banned: off the board, and cannot submit. Unban from this list.');
+        }));
+      bar.appendChild(modAction('Delete', 'is-danger', confirmDelete));
+      bar.appendChild(modAction('Cancel', '', closeMod));
+    }
+
+    function confirmDelete() {
+      while (bar.firstChild) bar.removeChild(bar.firstChild);
+      var q = doc.createElement('p');
+      q.className = 'ol-modq';
+      q.textContent = 'Delete ' + r.username + ' for good? The account and every run go. This cannot be undone.';
+      bar.appendChild(q);
+      var yes = modAction('Yes, delete', 'is-danger', function () {
+        run(Online.deleteUser(r.userId), r.username + ' was deleted.');
+      });
+      bar.appendChild(yes);
+      bar.appendChild(modAction('Keep', '', actions));
+      try { yes.focus(); } catch (e) { /* ignore */ }
+    }
+
+    function run(p, done) {
+      var btns = bar.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+      p.then(function () {
+        boardNotice = done;
+        closeMod();
+        loadBoard();
+      }, function (err) {
+        for (var j = 0; j < btns.length; j++) btns[j].disabled = false;
+        text(el['ol-board-msg'], safeMessage(err, 'That did not work. Nothing was changed.'), true);
+      });
+    }
+
+    actions();
+    li.parentNode.insertBefore(bar, li.nextSibling);
+    modOpen = bar;
+    var first = bar.querySelector('button');
+    try { if (first) first.focus(); } catch (e) { /* ignore */ }
   }
 
   function loadBoard() {
@@ -299,9 +406,20 @@
     var notice = boardNotice;
     boardNotice = '';
     text(el['ol-board-msg'], notice || 'Loading...');
-    return Online.topScores().then(function (rows) {
+    /* isAdmin() never rejects, and answers false with no request at all when
+       signed out - so for every non-admin this is the same topScores() read
+       as always. If the admin board itself fails, fall back to the public one
+       rather than show an admin nothing. */
+    var admin = false;
+    return Online.isAdmin().then(function (yes) {
+      if (!yes) return Online.topScores();
+      return Online.adminBoard().then(function (rows) {
+        admin = true;
+        return rows;
+      }, function () { return Online.topScores(); });
+    }).then(function (rows) {
       loadedOnce = true;
-      renderRows(rows);
+      renderRows(rows, admin);
       text(el['ol-board-msg'], notice || (rows.length ? '' : 'No scores yet. Be the first.'));
       return Online.myRank();
     }).then(function (mine) {
@@ -797,7 +915,8 @@
     setStatus('saving score...');
     Online.submitRun(run).then(function (res) {
       if (!res.submitted) {
-        setStatus(res.queued ? 'saved here - will upload later' : 'score not saved');
+        setStatus(res.queued ? 'saved here - will upload later'
+          : res.code === 'SKBAN' ? 'account banned - score not saved' : 'score not saved');
         return null;
       }
       /* Saved, but held for bot review (supabase/schema.sql, section 3b).
