@@ -35,6 +35,9 @@
 --     run passes every constraint honestly. Section 3b answers that one, and
 --     answers it by FLAGGING, not rejecting: a flagged run stays in the
 --     ledger, drops off the public board, and waits for a human to look.
+--   * When the human has looked and decided, section 11 gives the owner -
+--     and only accounts listed in public.admins, checked server-side on
+--     every call - a ban (reversible) and a delete (not), from in the game.
 --
 -- ===========================================================================
 
@@ -301,6 +304,77 @@ create trigger scores_review_trg
   for each row execute function public.scores_review();
 
 -- ---------------------------------------------------------------------------
+-- 3c. Bans - an owner decision, enforced here and nowhere else
+-- ---------------------------------------------------------------------------
+-- Section 3b holds a suspicious RUN. A ban is about the ACCOUNT: the owner has
+-- looked at it and decided it is a bot. One row per banned account, carrying
+-- who banned it, when and why. Unbanning deletes the row; the record of both
+-- decisions survives in public.admin_audit (section 11).
+--
+-- What a ban does:
+--   * the account's runs drop off the public board and out of my_rank()
+--     (section 7 filters on is_banned()), and come back on unban - nothing
+--     is deleted, the ledger stays append-only;
+--   * the account cannot submit another run: the trigger below refuses it
+--     with its own SQLSTATE, SKBAN, so the game can say the true thing, and
+--     a RESTRICTIVE policy in section 6 refuses it again should the trigger
+--     ever be dropped.
+--
+-- Nobody but the SQL editor and the admin RPCs in section 11 can read or
+-- write this table: RLS is on and no policy exists for any client role. The
+-- one fact that IS public - "is this account banned" - is what the public
+-- board already shows by omission, and is_banned() answers exactly that and
+-- nothing else (not the reason, not who, not when).
+
+create table if not exists public.bans (
+  user_id   uuid primary key references auth.users (id) on delete cascade,
+  banned_by uuid,
+  reason    text not null default '',
+  banned_at timestamptz not null default now(),
+  constraint bans_reason_len check (char_length(reason) <= 200)
+);
+
+alter table public.bans enable row level security;
+revoke all on public.bans from anon, authenticated;
+
+create or replace function public.is_banned(p_user uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (select 1 from public.bans b where b.user_id = p_user);
+$$;
+
+revoke execute on function public.is_banned(uuid) from public;
+grant  execute on function public.is_banned(uuid) to anon, authenticated;
+
+-- Named so it sorts, and therefore fires, BEFORE scores_rate_limit_trg and
+-- scores_review_trg: a banned account's run is refused before it can count
+-- against a limit or be graded. It checks the CALLER, like the rate limit,
+-- because the body's user_id is not trusted for anything.
+create or replace function public.scores_ban_guard()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if public.is_banned(coalesce(auth.uid(), new.user_id)) then
+    raise exception 'banned: this account can no longer submit scores'
+      using errcode = 'SKBAN';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists scores_ban_guard_trg on public.scores;
+create trigger scores_ban_guard_trg
+  before insert on public.scores
+  for each row execute function public.scores_ban_guard();
+
+-- ---------------------------------------------------------------------------
 -- 4. New account -> profile row
 -- ---------------------------------------------------------------------------
 -- Email signup sends { data: { username } } so the name the player typed lands
@@ -499,6 +573,16 @@ create policy scores_insert_own
   to authenticated
   with check (user_id = auth.uid());
 
+-- A banned account may not insert, whatever else allows it. RESTRICTIVE, so
+-- it is ANDed with the policy above instead of ORed: a future permissive
+-- insert policy cannot reopen the door. The trigger in section 3c refuses
+-- first and with a clearer message; this is the belt for it.
+drop policy if exists scores_insert_not_banned on public.scores;
+create policy scores_insert_not_banned
+  on public.scores as restrictive for insert
+  to authenticated
+  with check (not public.is_banned(auth.uid()));
+
 -- Table grants, stated explicitly rather than inherited from whatever the
 -- project's default privileges happen to be. RLS decides WHICH rows; these
 -- decide which verbs exist at all.
@@ -548,6 +632,9 @@ from (
    -- Flagged runs stay in the ledger and off the board. A player with a
    -- flagged best still shows with their best UNflagged run, if any.
    where not s.flagged
+     -- A banned account is off the board entirely (section 3c), and back
+     -- with every run intact the moment it is unbanned.
+     and not public.is_banned(s.user_id)
    order by s.user_id, s.score desc, s.created_at asc
 ) b
 join public.profiles p on p.id = b.user_id
@@ -773,6 +860,309 @@ select s.id, p.username, s.score, s.hooks, s.altitude, s.duration_ms,
 
 revoke all on public.scores_review_queue from anon, authenticated;
 
+-- ---------------------------------------------------------------------------
+-- 11. Moderation - owner-only ban / unban / delete, from inside the game
+-- ---------------------------------------------------------------------------
+-- The review queue (section 10) is the dashboard's tool. This section is the
+-- in-game one: an admin looking at the leaderboard can ban an account, lift
+-- the ban, or delete the account outright, without opening the SQL editor.
+--
+-- WHO IS AN ADMIN. A row in public.admins, and nothing else. There is no
+-- client-side flag, no JWT claim, no user_metadata field: the client is
+-- attacker-controlled, and anything it can say about itself it can forge.
+-- Every function below starts by checking auth.uid() against this table,
+-- server-side, inside the same call that does the work. The game asks
+-- is_admin() only to decide whether to DRAW the controls; a forged "yes"
+-- draws buttons whose every press is refused here.
+--
+-- Nobody can make themselves an admin through the API: RLS is on, there is
+-- no policy, and every client grant is revoked. Adding or removing one is a
+-- SQL-editor action:
+--
+--   insert into public.admins (user_id, note) values ('<uuid>', 'why');
+--   delete from public.admins where user_id = '<uuid>';
+--
+-- THE ACTIONS, and their limits (each one refused with a clear error):
+--   admin_ban_user(target, reason)  reversible. Section 3c describes what a
+--                                   ban does. Re-banning updates the reason.
+--   admin_unban_user(target)        lifts it. Every run comes back.
+--   admin_delete_user(target)       NOT reversible. Deletes the auth account;
+--                                   the foreign keys cascade to its profile,
+--                                   every score, and any ban row.
+--   An admin cannot ban or delete themselves, or another admin - demote
+--   first, in the SQL editor, so that removing an owner is never one tap.
+--
+-- WHY DELETE IS A DATABASE FUNCTION AND NOT AN EDGE FUNCTION. Removing an
+-- auth user needs a privileged identity. The Edge Function route means
+-- deploying a second piece of code that holds the project's service key -
+-- the master key that bypasses RLS on every table - and exposing it to the
+-- internet behind our own auth check. The route taken here keeps that key
+-- out of the picture: a SECURITY DEFINER function owned by the role that
+-- runs this file, with its search_path pinned, checking the caller in the
+-- same transaction as the delete, and writing the audit row in that same
+-- transaction (so there is no deleted account without a record, and no
+-- record of a delete that did not happen). It ships with the schema, through
+-- the same one paste as everything else. Deleting from auth.users is what
+-- the dashboard's own "Delete user" does; the auth tables that hang off it
+-- (identities, sessions, refresh tokens) cascade the same way.
+--
+-- EVERY ACTION IS LOGGED in public.admin_audit: who, what, to whom (id and
+-- the username at that moment, so a delete stays readable), why, when. The
+-- log has no foreign keys on purpose - the account it describes may no
+-- longer exist, and that is exactly the row worth keeping. Dashboard-only:
+--
+--   select * from public.admin_audit order by created_at desc;
+
+create table if not exists public.admins (
+  user_id  uuid primary key references auth.users (id) on delete cascade,
+  note     text not null default '',
+  added_at timestamptz not null default now()
+);
+
+alter table public.admins enable row level security;
+revoke all on public.admins from anon, authenticated;
+
+create table if not exists public.admin_audit (
+  id              bigint generated always as identity primary key,
+  admin_id        uuid not null,
+  action          text not null,
+  target_id       uuid not null,
+  target_username text,
+  reason          text not null default '',
+  created_at      timestamptz not null default now(),
+  constraint admin_audit_action check (action in ('ban', 'unban', 'delete'))
+);
+
+alter table public.admin_audit enable row level security;
+revoke all on public.admin_audit from anon, authenticated;
+
+-- The owner: Leo's account on the production project. Seeded through
+-- profiles rather than by a bare insert so the line is a no-op on any
+-- project where that account does not exist (staging, a fresh project):
+-- there it inserts nothing and fails nothing. Such a project seeds its own
+-- admin by hand with the insert above.
+insert into public.admins (user_id, note)
+select p.id, 'owner (Leo)'
+  from public.profiles p
+ where p.id = 'e2391165-b83a-4dc8-849f-999b418aae3b'
+on conflict (user_id) do nothing;
+
+-- For the game: may I draw the moderation controls? False for anyone signed
+-- out. Deciding to draw is ALL this is for - see above.
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select auth.uid() is not null
+     and exists (select 1 from public.admins a where a.user_id = auth.uid());
+$$;
+
+revoke execute on function public.is_admin() from public;
+grant  execute on function public.is_admin() to anon, authenticated;
+
+-- The gate every admin function calls first. 42501 is insufficient_privilege,
+-- which PostgREST answers as 403. Not callable by any client role on its own.
+create or replace function public.admin_require()
+returns void
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if auth.uid() is null
+     or not exists (select 1 from public.admins a where a.user_id = auth.uid()) then
+    raise exception 'not allowed: admins only'
+      using errcode = '42501';
+  end if;
+end;
+$$;
+
+revoke execute on function public.admin_require() from public, anon, authenticated;
+
+-- The checks shared by ban and delete: a real target, not yourself, not an
+-- admin. Returns the target's current username, for the audit row.
+create or replace function public.admin_target(p_target uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  uname text;
+begin
+  if p_target is null then
+    raise exception 'no account given' using errcode = '22023';
+  end if;
+  if p_target = auth.uid() then
+    raise exception 'you cannot do that to your own account' using errcode = '22023';
+  end if;
+  if exists (select 1 from public.admins a where a.user_id = p_target) then
+    raise exception 'that account is an admin - remove it from admins first'
+      using errcode = '22023';
+  end if;
+  select p.username into uname from public.profiles p where p.id = p_target;
+  if not found then
+    raise exception 'no such account' using errcode = 'P0002';
+  end if;
+  return uname;
+end;
+$$;
+
+revoke execute on function public.admin_target(uuid) from public, anon, authenticated;
+
+create or replace function public.admin_ban_user(target uuid, reason text default '')
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  uname text;
+  why   text := left(btrim(coalesce(admin_ban_user.reason, '')), 200);
+begin
+  perform public.admin_require();
+  uname := public.admin_target(admin_ban_user.target);
+
+  insert into public.bans (user_id, banned_by, reason, banned_at)
+  values (admin_ban_user.target, auth.uid(), why, now())
+  on conflict (user_id) do update
+     set banned_by = excluded.banned_by,
+         reason    = excluded.reason,
+         banned_at = excluded.banned_at;
+
+  insert into public.admin_audit (admin_id, action, target_id, target_username, reason)
+  values (auth.uid(), 'ban', admin_ban_user.target, uname, why);
+end;
+$$;
+
+revoke execute on function public.admin_ban_user(uuid, text) from public, anon;
+grant  execute on function public.admin_ban_user(uuid, text) to authenticated;
+
+-- Returns whether a ban was actually lifted. Unbanning an account that is
+-- not banned is not an error (two admins, or a double tap) - but it is
+-- still an admin action, so it is still logged.
+create or replace function public.admin_unban_user(target uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  lifted integer;
+  uname  text;
+begin
+  perform public.admin_require();
+  if admin_unban_user.target is null then
+    raise exception 'no account given' using errcode = '22023';
+  end if;
+
+  delete from public.bans b where b.user_id = admin_unban_user.target;
+  get diagnostics lifted = row_count;
+
+  select p.username into uname from public.profiles p where p.id = admin_unban_user.target;
+  insert into public.admin_audit (admin_id, action, target_id, target_username, reason)
+  values (auth.uid(), 'unban', admin_unban_user.target, uname,
+          case when lifted > 0 then '' else 'was not banned' end);
+  return lifted > 0;
+end;
+$$;
+
+revoke execute on function public.admin_unban_user(uuid) from public, anon;
+grant  execute on function public.admin_unban_user(uuid) to authenticated;
+
+-- The one statement in this file that removes rows a player created. It is
+-- reachable only through admin_require(), and it deletes the ACCOUNT - the
+-- scores go with it by the foreign key's cascade, never by a delete aimed at
+-- the ledger. The audit row is written first, in the same transaction: if
+-- the delete fails, both roll back together.
+create or replace function public.admin_delete_user(target uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  uname text;
+  gone  integer;
+begin
+  perform public.admin_require();
+  uname := public.admin_target(admin_delete_user.target);
+
+  insert into public.admin_audit (admin_id, action, target_id, target_username, reason)
+  values (auth.uid(), 'delete', admin_delete_user.target, uname, '');
+
+  delete from auth.users where id = target;
+  get diagnostics gone = row_count;
+  if gone <> 1 then
+    raise exception 'no such account' using errcode = 'P0002';
+  end if;
+end;
+$$;
+
+revoke execute on function public.admin_delete_user(uuid) from public, anon;
+grant  execute on function public.admin_delete_user(uuid) to authenticated;
+
+-- What the game shows an admin instead of the public board: the same
+-- ranking, plus the two things an admin needs and nobody else may see - the
+-- account id to act on, and the banned accounts (which the public board
+-- hides, and which an admin has to be able to find to unban). Banned rows
+-- come last, unranked, with the best run they have, flagged or not.
+create or replace function public.admin_board(p_limit integer default 50)
+returns table (
+  rank       bigint,
+  user_id    uuid,
+  username   text,
+  score      integer,
+  hooks      integer,
+  altitude   integer,
+  created_at timestamptz,
+  banned     boolean,
+  ban_reason text,
+  is_admin   boolean
+)
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+#variable_conflict use_column
+begin
+  perform public.admin_require();
+  return query
+  with best as (
+    select distinct on (s.user_id)
+           s.user_id, s.score, s.hooks, s.altitude, s.created_at,
+           (b.user_id is not null) as banned, b.reason as ban_reason
+      from public.scores s
+      left join public.bans b on b.user_id = s.user_id
+     where not s.flagged or b.user_id is not null
+     order by s.user_id, s.score desc, s.created_at asc
+  ), ranked as (
+    select case when not x.banned
+                then row_number() over (partition by x.banned
+                                        order by x.score desc, x.created_at asc)
+           end as rnk,
+           x.*
+      from best x
+  )
+  select r.rnk, r.user_id, p.username, r.score, r.hooks, r.altitude, r.created_at,
+         r.banned, coalesce(r.ban_reason, ''),
+         exists (select 1 from public.admins a where a.user_id = r.user_id)
+    from ranked r
+    join public.profiles p on p.id = r.user_id
+   where r.banned or r.rnk <= least(greatest(coalesce(p_limit, 50), 1), 200)
+   order by r.banned, r.rnk, r.score desc;
+end;
+$$;
+
+revoke execute on function public.admin_board(integer) from public, anon;
+grant  execute on function public.admin_board(integer) to authenticated;
+
 -- ===========================================================================
 -- Verification - run these after the script and read the answers.
 --
@@ -781,8 +1171,11 @@ revoke all on public.scores_review_queue from anon, authenticated;
 --
 --   select tablename, policyname, cmd from pg_policies
 --    where schemaname = 'public' order by tablename;
---     -- profiles: SELECT, INSERT, UPDATE.  scores: SELECT, INSERT, and
---     -- nothing else ever.
+--     -- profiles: SELECT, INSERT, UPDATE.  scores: SELECT, INSERT (plus
+--     -- the restrictive not-banned INSERT), and nothing else ever. bans,
+--     -- admins, admin_audit: none at all.
+--
+--   select * from public.admins;                     -- the owner, on prod
 --
 --   select privilege_type, column_name from information_schema.column_privileges
 --    where table_name = 'profiles' and grantee = 'authenticated'
