@@ -403,7 +403,17 @@
       p.then(function () {
         boardNotice = done;
         closeMod();
-        loadBoard();
+        /* The reload replaces every row, focus included. Put it back on this
+           account's Manage button, or on the list if the account is gone. */
+        var label = 'Manage ' + r.username;
+        Promise.resolve(loadBoard()).then(function () {
+          var mods = el['ol-list'].querySelectorAll('.ol-mod');
+          for (var k = 0; k < mods.length; k++) {
+            if (mods[k].getAttribute('aria-label') === label) { mods[k].focus(); return; }
+          }
+          var first = el['ol-list'].querySelector('.ol-mod');
+          if (first) first.focus();
+        }).catch(function () { /* ignore */ });
       }, function (err) {
         for (var j = 0; j < btns.length; j++) btns[j].disabled = false;
         text(el['ol-board-msg'], safeMessage(err, 'That did not work. Nothing was changed.'), true);

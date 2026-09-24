@@ -234,6 +234,36 @@ to ~2k going from 8 ms to 30 ms of spread). It raises the bar from "copy
 `test/bot.js`" to "write a bot that plays like a very good human" - it does not
 make cheating impossible, and nothing client-side can.
 
+## Moderation (ban / unban / delete)
+
+Admins get a **Manage** button on every other player's row in the in-game
+leaderboard: **Ban** (off the board, can no longer submit, reversible),
+**Unban**, and **Delete** (asks once more; removes the account, its sign-in
+and every run, for good). Banned players stay on the admin's list, last and
+marked BANNED, so they can be found again.
+
+Everything is checked on the server (`supabase/schema.sql`, section 11). The
+button only appears when the server says you are an admin, and every action
+re-checks it. An admin cannot ban or delete themselves or another admin.
+Every action lands in `public.admin_audit` (who, what, which account, why,
+when); read it in the SQL Editor:
+
+```sql
+select created_at, action, target_username, reason from public.admin_audit order by id desc;
+```
+
+Admins are the rows of `public.admins`. The schema seeds the owner; to add or
+remove one, in the SQL Editor:
+
+```sql
+insert into public.admins (user_id, note)
+  select id, 'why' from public.profiles where username = 'their_name';
+delete from public.admins where user_id = (select id from public.profiles where username = 'their_name');
+```
+
+An account with no profile row (profile creation failed at sign-up) cannot be
+moderated in game; delete it from Authentication -> Users instead.
+
 ## What players can see about each other
 
 Only what is on the board: username, score, hooks, altitude, date. Email

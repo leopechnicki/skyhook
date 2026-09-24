@@ -190,6 +190,8 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 | `test/world.mjs` | 185 | Golden world-stream gate: proves an art change did not move the simulation |
 | `test/online.mjs` | 1717 | Online layer in a vm sandbox with a scripted fetch: offline default, payloads, auth, and the schema's security rules |
 | `test/leaderboard_ui.mjs` | 1635 | The account layer in a real browser against a mock Supabase -- plus an explicitly config-less build and a dead backend |
+| `test/botdef.mjs` | 263 | Bot review calibration: the telemetry rules flag the harness bot and pass modelled human play |
+| `test/moderation_db.mjs` | 290 | Admin ban / unban / delete run on a REAL Postgres (PGlite, in-process): non-admins refused, bans hide and block, unban restores, delete removes, all audited |
 | `test/ship.mjs` | 751 | Ship paint model: every menu combination readable, gold never stored, the DB allow-list and palette remap match the client |
 | `test/ship_ui.mjs` | 193 | The customiser panel in a real browser |
 | `test/ship_live.mjs` | 223 | The account round trip against a REAL staging Supabase (sign up, paint, second device, gold/off-menu refused, teardown). Not in CI - needs `SKYHOOK_LIVE_URL`, `SKYHOOK_LIVE_ANON_KEY`, `SKYHOOK_LIVE_DB_URL`; refuses to run against production |
@@ -197,7 +199,7 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 | `test/ship_access.mjs` | 245 | Customise mid-session: pause and game-over doors, the run frozen to the tick, the paint visible at once |
 | `test/palette_metrics.mjs` | 113 | Measures the palette (chroma, contrast vs sky, pairwise and gold distance) - how the colours were chosen |
 
-Runtime dependencies: none. The only dev dependency is Playwright, and only for the smoke test.
+Runtime dependencies: none. The dev dependencies are Playwright (browser tests) and PGlite (the moderation test's in-process Postgres).
 
 ## Tests
 

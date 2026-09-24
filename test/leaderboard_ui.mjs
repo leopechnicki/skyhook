@@ -1319,6 +1319,9 @@ async function main() {
         [...document.querySelectorAll('#ol-list .ol-row.is-banned .ol-name')].some(n => n.textContent === 'lucas'), null, { timeout: 8000 });
       check('after a ban the board reloads with the account marked banned',
         (await row('lucas').locator('.ol-tag').count()) === 1);
+      check('after the reload, focus is back on that account\'s Manage button',
+        await mpage.waitForFunction(() => document.activeElement &&
+          document.activeElement.getAttribute('aria-label') === 'Manage lucas', null, { timeout: 8000 }).then(() => true, () => false));
       check('the admin is told what a ban does, in words',
         /lucas is banned/i.test(await mpage.locator('#ol-board-msg').textContent()),
         await mpage.locator('#ol-board-msg').textContent());
