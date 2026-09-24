@@ -165,12 +165,71 @@
     </div>
   </div>
 
+  <!-- =========================================================
+       SHIP CUSTOMISER  -  HIDDEN BY DEFAULT
+       ---------------------------------------------------------
+       Opened by the CUSTOMISE SHIP button, which js/game.js draws
+       on every screen where the run is standing still: the title,
+       PAUSED and game over. One panel, three doors - the game only
+       emits 'openShip'; this markup is the only customiser there is.
+       Unlike the leaderboard overlay above, this one has NO
+       backend requirement: the colour lives in localStorage and
+       the feature works on a file:// open with no network at
+       all. It is a sibling of #ol rather than a view inside it
+       for exactly that reason - folding it in would have tied a
+       local feature to a configured Supabase project.
+
+       It reuses .ol / .ol-panel / .ol-btn wholesale, so it is
+       the same machine as the leaderboard panel rather than a
+       second visual language; only the preview and the swatch
+       grid are new (.sh-*).
+
+       The grid is built by js/ui_ship.js from SK.Ship.SWATCHES,
+       so the menu of colours has ONE definition and the markup
+       can never drift from what the model will actually accept.
+       ========================================================= -->
+  <div id="sh" class="ol" hidden aria-hidden="true">
+    <div class="ol-panel sh-panel" role="dialog" aria-modal="true" aria-labelledby="sh-title">
+      <button type="button" id="sh-close" class="ol-close" aria-label="Close">&#215;</button>
+      <h2 id="sh-title" class="ol-title">YOUR SHIP</h2>
+
+      <!-- The rocket, drawn by js/rocket.js - the real renderer, not an
+           illustration of it. A mock-up here would be free to disagree with
+           the thing that actually flies. -->
+      <div class="sh-preview">
+        <canvas id="sh-canvas" width="240" height="230"
+                role="img" aria-label="Preview of your rocket"></canvas>
+      </div>
+
+      <p id="sh-crown" class="sh-crown" hidden></p>
+
+      <!-- One tab per part - nose, window, body, fire - built by
+           js/ui_ship.js from SK.Ship.PARTS. The grid below paints
+           whichever part is selected. -->
+      <div id="sh-parts" class="sh-parts" role="tablist"
+           aria-label="Part of the ship"></div>
+
+      <div id="sh-swatches" class="sh-swatches" role="radiogroup"
+           aria-label="Ship colour"></div>
+
+      <p id="sh-msg" class="ol-msg" role="status" aria-live="polite"></p>
+
+      <div class="ol-actions">
+        <button type="button" id="sh-done" class="ol-btn ol-btn-primary">DONE</button>
+        <button type="button" id="sh-reset" class="ol-btn">RESET TO DEFAULT</button>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- config.js first: it only sets a global, and js/online.js reads it. It is
      empty in the repo, which is what keeps the default build offline. -->
 <script src="js/config.js"></script>
 <script src="js/utils.js"></script>
+<!-- Before rocket.js: the renderer asks SK.Ship what colour to paint, and
+     falls back to the shipped default if this file is ever missing. -->
+<script src="js/ship.js"></script>
 <script src="js/audio.js"></script>
 <script src="js/celestial.js"></script>
 <script src="js/rocket.js"></script>
@@ -179,6 +238,9 @@
 <script src="js/main.js"></script>
 <!-- Last: needs both SK.Online and the game instance main.js creates. -->
 <script src="js/ui_online.js"></script>
+<!-- Needs the game instance main.js creates, same as ui_online.js. Unlike it,
+     this one boots with or without a configured backend. -->
+<script src="js/ui_ship.js"></script>
 <!-- Ad network loader script (e.g. AdSense) would go here, after the game scripts. -->
 </body>
 </html>

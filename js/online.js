@@ -1334,6 +1334,66 @@
       });
     },
 
+    /* ------------------------------------------------- the ship's paint ---
+     * The paint follows the ACCOUNT, so a player who paints their ship on a
+     * laptop finds it painted on their phone. Both halves are OPTIONAL in the
+     * strongest sense - js/ui_ship.js treats a rejection, a missing column and
+     * a signed-out player as the same non-event - because the paint is
+     * already saved in localStorage and already on screen before either of
+     * these is called. The network is a convenience here, never a dependency.
+     *
+     * A project whose SQL predates supabase/schema.sql section 8 has no
+     * ship_* columns at all. PostgREST answers that with a 400, which arrives
+     * here as a rejected promise and is swallowed exactly like a dead
+     * connection. That is deliberate: the feature must not appear broken on a
+     * backend that simply has not been migrated yet.
+     *
+     * What comes back is RAW - one string per part, '' for "never chosen".
+     * It is not trusted here: SK.Ship.setPaint() puts it through the same gate
+     * a tap goes through before a pixel of it is painted.
+     */
+    loadShipPaint: function () {
+      if (!cfg || !session) return Promise.resolve(null);
+      return withToken(function (token) {
+        return request('/rest/v1/profiles?select=ship_nose,ship_window,ship_body,ship_fire' +
+          '&id=eq.' + encodeURIComponent(session.user.id) + '&limit=1', { token: token });
+      }).then(function (rows) {
+        var r = rows && rows[0];
+        if (!r) return null;
+        return {
+          nose: String(r.ship_nose || ''),
+          window: String(r.ship_window || ''),
+          body: String(r.ship_body || ''),
+          fire: String(r.ship_fire || '')
+        };
+      }, function () { return null; });
+    },
+
+    /* Through an RPC rather than a PATCH on profiles, and that is the whole
+       security argument: whatever UPDATE a player holds on their own profile
+       row is column-scoped to their username, so the ship columns cannot be
+       written directly at all. The function is the one narrow door, it
+       writes only auth.uid()'s own row, all four parts in one statement (so
+       a half-saved ship cannot exist), and each column's CHECK constraint
+       holds the SAME allow-list the client shows - so the server rejects an
+       off-menu colour (champion gold included) even when the request did not
+       come from this file. */
+    saveShipPaint: function (paint) {
+      if (!cfg || !session) return Promise.resolve(false);
+      var p = paint || {};
+      return withToken(function (token) {
+        return request('/rest/v1/rpc/set_ship_paint', {
+          method: 'POST', token: token,
+          body: {
+            p_nose: String(p.nose || ''),
+            p_window: String(p.window || ''),
+            p_body: String(p.body || ''),
+            p_fire: String(p.fire || '')
+          }
+        });
+      }).then(function () { return true; }, function () { return false; });
+    },
+
     myRank: function () {
       if (!cfg || !session) return Promise.resolve(null);
       return withToken(function (token) {
