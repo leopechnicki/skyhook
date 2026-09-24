@@ -90,6 +90,15 @@ jobs:
       - name: Leaderboard bot review calibration
         run: node test/botdef.mjs
 
+      # Moderation, run on a REAL Postgres (PGlite: Postgres in WebAssembly,
+      # in-process, no server). schema.sql is applied twice onto a small
+      # stand-in for Supabase auth, then every call is made AS anon or
+      # authenticated the way PostgREST makes it - so this proves the grants,
+      # RLS and SECURITY DEFINER bodies, not the text: non-admins are refused,
+      # a ban hides and blocks, unban restores, delete removes, all audited.
+      - name: Moderation (admin ban / unban / delete on Postgres)
+        run: node test/moderation_db.mjs
+
       # The one canonical origin, both halves of it. index.html has to DECLARE
       # https://skyhookplay.com rather than have nginx correct it on the way
       # out, and pages/ has to redirect the retired GitHub Pages URL there
