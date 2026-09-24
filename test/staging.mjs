@@ -30,7 +30,7 @@
  *   - gut the readOnlyScores guard in js/online.js                -> FAIL
  *   - copy the staging config over the production one             -> FAIL
  *   - point fly.staging.toml at the production app                -> FAIL
- *   - let main reach the staging job, or a branch the prod job    -> FAIL
+ *   - let a branch reach the prod job, or a push reach staging    -> FAIL
  *
  * Pure Node, no browser, no network, sub-second.
  *
@@ -411,50 +411,85 @@ check('the crawler header is on the page, not only on the assets',
 check('staging/robots.txt disallows everything', /^Disallow:\s*\/\s*$/m.test(read('staging/robots.txt')));
 
 const wf = stripComments(read('.github/workflows/deploy.yml'));
-const jobBody = name => {
-  const m = wf.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z0-9-]*:\\n|$)`));
+const sw = stripComments(read('.github/workflows/staging.yml'));
+const jobIn = (src, name) => {
+  const m = src.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z0-9-]*:\\n|$)`));
   return m ? m[1] : '';
 };
-const prodJob = jobBody('deploy');
-const stagJob = jobBody('staging');
+const onBlock = src => {
+  const m = src.match(/\non:\n([\s\S]*?)\n(?=[a-z])/);
+  return m ? m[1] : '';
+};
+const prodJob = jobIn(wf, 'deploy');
+const upJob   = jobIn(sw, 'up');
+const downJob = jobIn(sw, 'down');
 
 check('the production deploy job still exists', prodJob.length > 0);
-check('the staging deploy job exists', stagJob.length > 0);
-/* Mutually exclusive by construction: main cannot reach staging and a branch
-   cannot reach production. Both halves are asserted, because deleting either
-   `if` is a one-line change with a very expensive blast radius. */
 check('production deploys ONLY from main',
   /github\.ref == 'refs\/heads\/main'/.test(prodJob));
 check('production never deploys on a pull_request event',
   /github\.event_name != 'pull_request'/.test(prodJob));
-check('staging deploys ONLY from something that is not main',
-  /github\.ref != 'refs\/heads\/main'/.test(stagJob));
-check('staging uses fly.staging.toml, never the bare fly.toml',
-  /--config fly\.staging\.toml/.test(stagJob));
-check('staging uses its own, separately scoped token',
-  /secrets\.FLY_STAGING_API_TOKEN/.test(stagJob));
 check('production uses the production token and not the staging one',
   /secrets\.FLY_API_TOKEN/.test(prodJob) && !/FLY_STAGING_API_TOKEN/.test(prodJob));
-check('staging waits for the test suite and the container checks',
-  /needs:\s*\[tests, image, preflight\]/.test(stagJob));
-/* One app, one deploy at a time. Two branches pushed a minute apart must not
-   race for the single machine Leo is about to open. */
-check('staging deploys are serialised on the app, not on the branch',
-  /group:\s*fly-skyhook-staging/.test(stagJob) && /cancel-in-progress:\s*false/.test(stagJob));
+check('deploy.yml is pushed only from main (no branch fan-out)',
+  /push:\s*\n\s*branches:\s*\[main\]/.test(onBlock(wf)) && !/branches-ignore/.test(onBlock(wf)));
+
+/* ON DEMAND (Leo, 2026-09-24): staging is down by default and comes up only
+   when somebody asks. Both halves are pinned - deploy.yml must not deploy
+   staging any more, and staging.yml must have no trigger except a manual one.
+   Putting `push:` back in either file is a one-line change that would quietly
+   turn staging back into an always-on box. */
+check('deploy.yml no longer deploys staging (no fly.staging.toml, no staging token)',
+  !/fly\.staging\.toml/.test(wf) && !/FLY_STAGING_API_TOKEN/.test(wf));
+check('staging.yml has an up job and a down job', upJob.length > 0 && downJob.length > 0);
+check('staging.yml runs ONLY on workflow_dispatch',
+  /^\s*workflow_dispatch:/m.test(onBlock(sw)) &&
+  !/^\s*(push|pull_request|pull_request_target|schedule|workflow_run|workflow_call|repository_dispatch):/m.test(onBlock(sw)));
+check('staging.yml takes an up/down action and a branch',
+  /options:\s*\[up, down\]/.test(onBlock(sw)) && /^\s+branch:/m.test(onBlock(sw)));
+check('up runs only for action=up, down only for action=down',
+  /if:\s*inputs\.action == 'up'/.test(upJob) && /if:\s*inputs\.action == 'down'/.test(downJob));
+check('staging uses fly.staging.toml, never the bare fly.toml',
+  /--config fly\.staging\.toml/.test(upJob) && !/--config fly\.toml/.test(sw));
+const flyCmds = sw.match(/flyctl (deploy|scale|machines)[^\n]*/g) || [];
+check('every fly command in staging.yml names skyhook-staging explicitly',
+  flyCmds.length >= 4 && flyCmds.every(l => /-a skyhook-staging/.test(l)), flyCmds.length);
+check('staging uses its own, separately scoped token and never the production one',
+  /secrets\.FLY_STAGING_API_TOKEN/.test(upJob) && /secrets\.FLY_STAGING_API_TOKEN/.test(downJob) &&
+  !/secrets\.FLY_API_TOKEN/.test(sw));
+/* A branch name is attacker-shaped text (anyone who can push can name one).
+   It may reach the job through env and checkout's `ref:` only - never pasted
+   into a run: script, where ${{ }} is expanded before the shell parses it. */
+check('the branch input never reaches a script as pasted text',
+  sw.split('\n').filter(l => /\$\{\{\s*inputs\.branch/.test(l))
+    .every(l => /^\s*(ref|BRANCH):/.test(l)));
+check('staging operations are serialised on the app and never cancelled',
+  /group:\s*fly-skyhook-staging/.test(sw) && /cancel-in-progress:\s*false/.test(sw));
+check('down scales staging to ZERO machines (not merely stopped)',
+  /flyctl scale count 0 -a skyhook-staging/.test(downJob));
+check('down proves it: no machines left, and the URL no longer serves the game',
+  /machines list -a skyhook-staging/.test(downJob) && /skyhook-staging\.fly\.dev/.test(downJob));
+check('nothing in staging.yml can destroy the app itself',
+  !/apps (destroy|delete)|flyctl destroy/.test(sw));
+/* A branch cut before this pipeline builds the PRODUCTION image under the
+   staging name. Refused before the build, not caught a minute after it. */
+check('up refuses a branch that cannot build an isolated staging image',
+  /branch\/staging\/config\.staging\.js/.test(upJob) && /branch\/Dockerfile/.test(upJob) &&
+  /"\$stag_ref" != "\$prod_ref"/.test(upJob));
 /* The post-deploy verification must check the LIVE site's project, not just
-   the image that was meant to be built. Both halves are pinned: that it reads
-   a ref out of the served config, and that it compares against production's
-   ref taken from js/config.js rather than a copy pasted into the workflow. */
+   the image that was meant to be built. */
 check('the pipeline verifies the LIVE staging site’s Supabase project',
-  /refof \/tmp\/live\.js/.test(stagJob) && /live_ref/.test(stagJob));
+  /refof \/tmp\/live\.js/.test(upJob) && /live_ref/.test(upJob));
 check('the pipeline reads production’s ref from js/config.js, not a hardcoded copy',
-  /refof js\/config\.js/.test(stagJob));
+  /refof js\/config\.js/.test(upJob));
 check('the pipeline still demands readOnlyScores in the shared-project fallback',
-  /readOnlyScores: true/.test(stagJob));
-/* The workflow must not contain a literal project ref - that is the copy that
-   goes stale and turns a real check into a passing one. */
-check('the workflow hardcodes NO supabase project ref',
-  !new RegExp(String(prodUrlRef)).test(wf), String(prodUrlRef));
+  /readOnlyScores: true/.test(upJob));
+check('a failed verification takes staging straight back down',
+  /if:\s*failure\(\) && steps\.deploy\.outcome == 'success'\s*\n\s*run: flyctl scale count 0/.test(upJob));
+/* No workflow may contain a literal project ref - that is the copy that goes
+   stale and turns a real check into a passing one. */
+check('the workflows hardcode NO supabase project ref',
+  !new RegExp(String(prodUrlRef)).test(wf + sw), String(prodUrlRef));
 
 console.log(fails ? `\n${fails} FAILED` : '\nAll staging pipeline checks passed');
 process.exit(fails ? 1 : 0);

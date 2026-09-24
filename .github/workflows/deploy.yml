@@ -45,34 +45,21 @@ name: deploy
 # it gone: update the required contexts FIRST, confirm a PR still merges, then
 # come back here.
 #
-# STAGING, AND WHY IT IS A `push` TRIGGER AND NOT A `pull_request` ONE
+# STAGING IS NOT HERE
 # ------------------------------------------------------------------------
-# Every branch that is not main deploys to `skyhook-staging` so Leo can play a
-# change on a real URL before it is allowed near skyhookplay.com. That is a
-# PUSH trigger deliberately:
-#
-#   * A PR run and a push run of the same commit would both try to claim the
-#     single staging machine. Two deploys racing for one app is a coin flip
-#     over which one Leo ends up testing.
-#   * A branch is worth testing before anybody opens a PR for it.
-#   * `pull_request` runs from a fork get no secrets, so the staging job there
-#     could only ever be a skipped job pretending to be a gate.
-#
-# gh-pages is excluded because the pages-stub job below pushes it. (Pushes
-# made with GITHUB_TOKEN do not start workflows, so this is belt to that
-# braces - but the day somebody publishes that branch by hand, a deploy of the
-# redirect stub to staging is not what should happen.)
+# This workflow deploys production and nothing else. Staging used to deploy
+# every branch automatically from here; since 2026-09-24 it is ON DEMAND and
+# lives in staging.yml, which only runs when somebody asks it to. No push to
+# any branch brings staging up. The `image` job below still builds and checks
+# the staging VARIANT of the image on every PR, because that is what proves a
+# branch cannot point staging at production's database - and that proof is
+# worth having whether or not anybody is about to deploy it.
 on:
   push:
-    # Everything except the generated branch. main goes to production (the
-    # `deploy` job, gated on refs/heads/main); everything else goes to staging
-    # (the `staging` job, gated on NOT refs/heads/main). One list, two
-    # destinations, and no branch can reach the wrong one.
-    branches-ignore: [gh-pages]
+    branches: [main]
   pull_request:
   # Lets Leo re-deploy the current main without an empty commit - the thing
-  # everybody wants about ten minutes after the first deploy. On any other
-  # branch it redeploys that branch to staging instead.
+  # everybody wants about ten minutes after the first deploy.
   workflow_dispatch:
 
 concurrency:
@@ -340,36 +327,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       configured: ${{ steps.check.outputs.configured }}
-      staging: ${{ steps.check.outputs.staging }}
     steps:
       - id: check
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          FLY_STAGING_API_TOKEN: ${{ secrets.FLY_STAGING_API_TOKEN }}
         run: |
-          # TWO tokens, and they are not interchangeable. Both are
-          # DEPLOY-scoped, which on Fly means bound to exactly one app: the
-          # production token can only redeploy skyhook-game and the staging
-          # token can only redeploy skyhook-staging. Reusing one for both
-          # would have been one fewer secret and would also have meant every
-          # feature branch in the repo held a credential for the app serving
-          # skyhookplay.com.
-          if [ -n "$FLY_STAGING_API_TOKEN" ]; then
-            echo "staging=yes" >> "$GITHUB_OUTPUT"
-            echo "FLY_STAGING_API_TOKEN is set - branches deploy to skyhook-staging."
-          else
-            echo "staging=no" >> "$GITHUB_OUTPUT"
-            {
-              echo "### Staging deploy skipped - no FLY_STAGING_API_TOKEN"
-              echo ""
-              echo '```sh'
-              echo "fly apps create skyhook-staging --org personal"
-              echo "fly tokens create deploy -a skyhook-staging -x 8760h   # copy the output"
-              echo "gh secret set FLY_STAGING_API_TOKEN --repo leopechnicki/skyhook"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
           if [ -n "$FLY_API_TOKEN" ]; then
             echo "configured=yes" >> "$GITHUB_OUTPUT"
             echo "FLY_API_TOKEN is set - deploy will run on push to main."
@@ -437,160 +399,7 @@ jobs:
           done
           echo "OK: $base is live and complete"
 
-  # -------------------------------------------------------------- 5. staging
-  # Every branch that is not main, on a real URL, before anything is allowed
-  # near skyhookplay.com.
-  #
-  # The three facts that keep this from being a second production deploy:
-  #
-  #   1. `--config fly.staging.toml`. That file names `skyhook-staging` and
-  #      nothing else; fly.toml, which names the app serving the real domain,
-  #      is not read by this job at all.
-  #   2. FLY_STAGING_API_TOKEN is deploy-scoped to skyhook-staging. Even a
-  #      command that somehow named the production app would be refused by
-  #      the credential.
-  #   3. The `if` below is the inverse of `deploy`'s. main cannot reach this
-  #      job and a branch cannot reach that one.
-  #
-  # And the image it ships is not the production image: fly.staging.toml
-  # carries SKYHOOK_ENV=staging as a build arg, which makes the Dockerfile
-  # overlay staging/config.staging.js over js/config.js. The `image` job above
-  # proves, on this same commit, that the overlay lands and that it points at
-  # staging's OWN Supabase project - a different database from production's,
-  # carrying the same schema from supabase/schema.sql. Staging reads and writes
-  # its own leaderboard and cannot see production's at all.
-  staging:
-    name: fly deploy (staging)
-    needs: [tests, image, preflight]
-    if: >-
-      github.event_name == 'push' &&
-      github.ref != 'refs/heads/main' &&
-      needs.preflight.outputs.staging == 'yes'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    # One app, one machine, one deploy at a time. cancel-in-progress is FALSE
-    # on purpose: a half-applied release is worse than a queued one, and that
-    # is as true of the box Leo is about to test as it is of production.
-    concurrency:
-      group: fly-skyhook-staging
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - name: Deploy to skyhook-staging
-        run: flyctl deploy --remote-only --config fly.staging.toml
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_STAGING_API_TOKEN }}
-
-      # The same shape as production's verification, and for the same reason:
-      # a deploy that exits 0 and serves a blank page has happened here before.
-      # The extra assertions are the staging-only facts - if any of them is
-      # false, the URL below is not safe to hand to Leo.
-      - name: Verify the staging site
-        id: verify
-        run: |
-          set -e
-          base="https://skyhook-staging.fly.dev"
-          for i in $(seq 1 20); do
-            curl -sf "$base/health" > /dev/null && break
-            echo "waiting for $base ..."; sleep 5
-          done
-          curl -sf "$base/health" > /dev/null || { echo "FAIL: /health"; exit 1; }
-
-          curl -sf "$base/" | grep -q '<canvas id="game"' || { echo "FAIL: / is not the game"; exit 1; }
-          for f in js/game.js js/main.js js/rocket.js js/celestial.js js/online.js css/style.css screenshot.png; do
-            curl -sfI "$base/$f" > /dev/null || { echo "FAIL: $f is not 200"; exit 1; }
-          done
-
-          # The isolation, asserted against the thing that is actually running
-          # rather than against the image that was meant to be built. The repo
-          # is checked out in this job, so production's ref is read out of
-          # js/config.js at this commit rather than hardcoded here: one place
-          # defines it, and this is not that place.
-          curl -sf "$base/js/config.js" > /tmp/live.js || { echo "FAIL: /js/config.js"; exit 1; }
-          refof() { sed -n "s#.*supabaseUrl: 'https://\([a-z0-9]\{1,\}\)\.supabase\.co'.*#\1#p" "$1" | head -1; }
-          prod_ref=$(refof js/config.js)
-          live_ref=$(refof /tmp/live.js)
-          [ -n "$prod_ref" ] || { echo "FAIL: no project ref in js/config.js"; exit 1; }
-          [ -n "$live_ref" ] || { echo "FAIL: no project ref in the LIVE staging config"; exit 1; }
-          if [ "$live_ref" = "$prod_ref" ]; then
-            grep -q 'readOnlyScores: true' /tmp/live.js \
-              || { echo "FAIL: live staging serves production's project AND is writable"; exit 1; }
-            echo "WARNING: live staging is on production's project, held safe only by readOnlyScores"
-          fi
-          # Belt to that brace: production's ref must not appear ANYWHERE in the
-          # served staging config - not in the URL, and not in the anon key,
-          # which is the half a URL comparison cannot see.
-          if grep -q "$prod_ref" /tmp/live.js; then
-            echo "FAIL: production's project ref appears in the live staging config"; exit 1
-          fi
-          # The staging PROJECT, not the staging build.
-          #
-          # Everything above this line reads a file that is in this repo.
-          # This does not, and that is the point: a Supabase project created
-          # from the dashboard defaults has MAILER_AUTOCONFIRM off and
-          # SITE_URL http://localhost:3000, and neither setting appears in
-          # any file here. So staging can be green, isolated, correctly built
-          # and completely unusable at the same time, with nothing in a diff
-          # to show for it.
-          #
-          # That is not hypothetical. On 2026-09-23 staging had its schema
-          # applied, its own project, a correct image and a passing deploy -
-          # and a tester who signed up got no session back, because the new
-          # project still wanted an email confirmation that the built-in SMTP
-          # (2 messages an hour) was never going to deliver. Production had
-          # already learned this on 2026-09-17 and turned autoconfirm ON;
-          # staging was created afterwards and inherited the default anyway.
-          #
-          # Probed with the anon key out of the live config - public by
-          # design, so no secret is needed and this works on a fork.
-          live_key=$(sed -n "s#.*supabaseAnonKey: '\([^']*\)'.*#\1#p" /tmp/live.js | head -1)
-          [ -n "$live_key" ] || { echo "FAIL: no anon key in the live staging config"; exit 1; }
-          curl -sf "https://$live_ref.supabase.co/auth/v1/settings" -H "apikey: $live_key" > /tmp/auth.json \
-            || { echo "FAIL: the staging Supabase project did not answer /auth/v1/settings"; exit 1; }
-          grep -q '"mailer_autoconfirm":true' /tmp/auth.json \
-            || { echo "FAIL: staging still requires email confirmation - anyone who signs up to test is stranded"; exit 1; }
-          grep -q '"disable_signup":false' /tmp/auth.json \
-            || { echo "FAIL: staging has sign-ups switched off - nobody can get an account to test with"; exit 1; }
-          echo "OK: a sign-up on staging produces a session immediately"
-
-          curl -sf "$base/robots.txt" | grep -q '^Disallow: /' \
-            || { echo "FAIL: staging robots.txt"; exit 1; }
-          curl -sfI "$base/" | grep -qi '^x-robots-tag: noindex' \
-            || { echo "FAIL: staging is indexable"; exit 1; }
-          # Spelled out as an `if` rather than `grep -q ... && fail`. Under
-          # `set -e` the && form aborts the step on the HEALTHY path, because
-          # a grep that finds nothing exits 1 - the trap this file already
-          # documents at the identical assertion in the `image` job.
-          if curl -sf "$base/" | grep -q 'skyhookplay.com'; then
-            echo "FAIL: staging claims the production canonical"; exit 1
-          fi
-
-          echo "OK: $base is live, isolated and unindexed"
-
-      - name: Say where it is
-        if: success()
-        run: |
-          {
-            echo "### Staging is live"
-            echo ""
-            echo "**<https://skyhook-staging.fly.dev/>** - branch \`${{ github.ref_name }}\` @ \`${{ github.sha }}\`"
-            echo ""
-            echo "Staging has its OWN Supabase project. Scores rolled here"
-            echo "ARE saved - to staging's board, which nobody else sees."
-            echo ""
-            echo "**Your production account does not exist here.** The database"
-            echo "starts empty, so sign up on staging rather than signing in."
-            echo "That is expected, not a bug - it is what stops a test run"
-            echo "editing a real account."
-            echo ""
-            echo "The machine stops itself when you close the tab and starts"
-            echo "again on the next request."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # ------------------------------------------------------- 6. the Pages stub
+  # ------------------------------------------------------- 5. the Pages stub
   #
   # GitHub Pages used to publish `main:/` - a SECOND, complete copy of the game
   # that declared itself canonical. That is the thing being retired. It is not

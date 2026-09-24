@@ -1,0 +1,273 @@
+# SKYHOOK - staging, ON DEMAND.
+#
+# Leo, 2026-09-24: "let's deploy changes there and turn off staging, let's only
+# make staging up when need test some new feature".
+#
+# So staging is DOWN by default and nothing brings it up by itself. There is no
+# push trigger, no pull_request trigger and no schedule on this file - the ONLY
+# way skyhook-staging gets a build is somebody pressing "Run workflow":
+#
+#   up   gh workflow run staging.yml -f action=up -f branch=<branch>
+#   down gh workflow run staging.yml -f action=down
+#
+# (or Actions -> staging -> Run workflow, same two inputs). docs/DEPLOY.md has
+# the one-step version for Leo.
+#
+# DOWN means zero machines, not a sleeping one. `auto_stop_machines` already
+# stops an idle machine, but a stopped machine with auto_start on wakes for the
+# first request that arrives, so "stopped" is not "off" - any crawler or old
+# link would bring the game back. `fly scale count 0` removes the machines and
+# keeps everything that makes the app the app: its name, its IPs, its
+# certificate, its release history and fly.staging.toml. Coming back is the
+# `up` action below, which deploys a branch onto the empty app - one command,
+# nothing to recreate.
+#
+# What did NOT change when this became manual (the reason staging is safe to
+# hand to Leo at all):
+#   * it deploys with fly.staging.toml and FLY_STAGING_API_TOKEN, a token that
+#     is deploy-scoped to skyhook-staging and cannot touch skyhook-game;
+#   * the image is the SKYHOOK_ENV=staging variant, whose config names
+#     staging's OWN Supabase project - never production's, so a test run can
+#     never write to Leo's real leaderboard;
+#   * the live site is verified after every deploy, including that production's
+#     project ref appears nowhere in what staging serves. If that verification
+#     fails, staging is taken straight back down rather than left serving a
+#     build nobody has vouched for.
+#
+# The production deploy is deploy.yml, and it no longer knows staging exists.
+
+name: staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "up = deploy a branch to https://skyhook-staging.fly.dev ; down = turn staging off"
+        type: choice
+        options: [up, down]
+        default: up
+      branch:
+        description: "Branch to put on staging (only used by 'up')"
+        type: string
+        default: main
+
+# One app, one operation at a time, never cancelled half-way: an `up` racing a
+# `down` is a coin flip over whether staging ends up on or off.
+concurrency:
+  group: fly-skyhook-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  up:
+    name: staging up
+    if: inputs.action == 'up'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_STAGING_API_TOKEN }}
+      BRANCH: ${{ inputs.branch }}
+    steps:
+      - name: Token present
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "FAIL: FLY_STAGING_API_TOKEN is not set - see docs/STAGING.md"; exit 1
+          fi
+
+      # The input is used as data, never pasted into a script: it arrives via
+      # $BRANCH and has to be a legal branch name before anything reads it.
+      - name: Branch name is a branch name
+        run: |
+          git check-ref-format --branch "$BRANCH" > /dev/null \
+            || { echo "FAIL: '$BRANCH' is not a valid branch name"; exit 1; }
+
+      # This workflow's own ref (main) at the root - it is where production's
+      # project ref is read from - and the branch under test in ./branch.
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          path: branch
+
+      # Before anything is built: can this branch produce a STAGING image at
+      # all? A branch cut before the staging pipeline existed has a Dockerfile
+      # that ignores SKYHOOK_ENV, so it would build the production image -
+      # production's Supabase project, served from the staging URL, writing to
+      # Leo's real board. The live check below would catch that, but only after
+      # it had been serving for a minute. This refuses it before the build.
+      - name: The branch can build an isolated staging image
+        run: |
+          set -e
+          refof() { sed -n "s#.*supabaseUrl: 'https://\([a-z0-9]\{1,\}\)\.supabase\.co'.*#\1#p" "$1" | head -1; }
+          prod_ref=$(refof js/config.js)
+          [ -n "$prod_ref" ] || { echo "FAIL: no project ref in js/config.js"; exit 1; }
+          stale="merge main into '$BRANCH' first - it predates on-demand staging"
+          [ -f branch/fly.staging.toml ] || { echo "FAIL: no fly.staging.toml - $stale"; exit 1; }
+          grep -q "^app = 'skyhook-staging'" branch/fly.staging.toml \
+            || { echo "FAIL: branch's fly.staging.toml does not name skyhook-staging"; exit 1; }
+          grep -q "SKYHOOK_ENV = 'staging'" branch/fly.staging.toml \
+            || { echo "FAIL: branch's fly.staging.toml does not build the staging variant"; exit 1; }
+          grep -q 'SKYHOOK_ENV' branch/Dockerfile \
+            || { echo "FAIL: branch's Dockerfile ignores SKYHOOK_ENV - $stale"; exit 1; }
+          cfg=branch/staging/config.staging.js
+          [ -f "$cfg" ] || { echo "FAIL: no staging/config.staging.js - $stale"; exit 1; }
+          stag_ref=$(refof "$cfg")
+          [ -n "$stag_ref" ] || { echo "FAIL: no project ref in $cfg"; exit 1; }
+          [ "$stag_ref" != "$prod_ref" ] || { echo "FAIL: $cfg points at production's project - $stale"; exit 1; }
+          if grep -q "$prod_ref" "$cfg"; then
+            echo "FAIL: production's project ref appears in $cfg"; exit 1
+          fi
+          echo "OK: '$BRANCH' builds against staging's own project, not production's"
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --ha=false: one machine. From zero, a deploy creates the machines it
+      # needs; without this flag Fly creates two for redundancy nobody testing
+      # a feature needs. -a pins the app on top of the config file's own name.
+      - name: Deploy the branch to skyhook-staging
+        id: deploy
+        working-directory: branch
+        run: flyctl deploy --remote-only --ha=false --config fly.staging.toml -a skyhook-staging
+
+      # The same shape as production's verification, and for the same reason:
+      # a deploy that exits 0 and serves a blank page has happened here before.
+      # The extra assertions are the staging-only facts - if any of them is
+      # false, the URL below is not safe to hand to Leo.
+      - name: Verify the staging site
+        id: verify
+        run: |
+          set -e
+          base="https://skyhook-staging.fly.dev"
+          for i in $(seq 1 20); do
+            curl -sf "$base/health" > /dev/null && break
+            echo "waiting for $base ..."; sleep 5
+          done
+          curl -sf "$base/health" > /dev/null || { echo "FAIL: /health"; exit 1; }
+
+          curl -sf "$base/" | grep -q '<canvas id="game"' || { echo "FAIL: / is not the game"; exit 1; }
+          for f in js/game.js js/main.js js/rocket.js js/celestial.js js/online.js css/style.css screenshot.png; do
+            curl -sfI "$base/$f" > /dev/null || { echo "FAIL: $f is not 200"; exit 1; }
+          done
+
+          # The isolation, asserted against the thing that is actually running
+          # rather than against the image that was meant to be built.
+          # Production's ref is read out of js/config.js at this workflow's own
+          # commit rather than hardcoded here: one place defines it, and this is
+          # not that place.
+          curl -sf "$base/js/config.js" > /tmp/live.js || { echo "FAIL: /js/config.js"; exit 1; }
+          refof() { sed -n "s#.*supabaseUrl: 'https://\([a-z0-9]\{1,\}\)\.supabase\.co'.*#\1#p" "$1" | head -1; }
+          prod_ref=$(refof js/config.js)
+          live_ref=$(refof /tmp/live.js)
+          [ -n "$prod_ref" ] || { echo "FAIL: no project ref in js/config.js"; exit 1; }
+          [ -n "$live_ref" ] || { echo "FAIL: no project ref in the LIVE staging config"; exit 1; }
+          if [ "$live_ref" = "$prod_ref" ]; then
+            grep -q 'readOnlyScores: true' /tmp/live.js \
+              || { echo "FAIL: live staging serves production's project AND is writable"; exit 1; }
+            echo "WARNING: live staging is on production's project, held safe only by readOnlyScores"
+          fi
+          # Belt to that brace: production's ref must not appear ANYWHERE in the
+          # served staging config - not in the URL, and not in the anon key,
+          # which is the half a URL comparison cannot see.
+          if grep -q "$prod_ref" /tmp/live.js; then
+            echo "FAIL: production's project ref appears in the live staging config"; exit 1
+          fi
+          # The staging PROJECT, not the staging build.
+          #
+          # Everything above this line reads a file that is in this repo.
+          # This does not, and that is the point: a Supabase project created
+          # from the dashboard defaults has MAILER_AUTOCONFIRM off and
+          # SITE_URL http://localhost:3000, and neither setting appears in
+          # any file here. On 2026-09-23 staging was green, isolated, correctly
+          # built and unusable - a tester who signed up got no session back.
+          # Probed with the anon key out of the live config - public by
+          # design, so no secret is needed.
+          live_key=$(sed -n "s#.*supabaseAnonKey: '\([^']*\)'.*#\1#p" /tmp/live.js | head -1)
+          [ -n "$live_key" ] || { echo "FAIL: no anon key in the live staging config"; exit 1; }
+          curl -sf "https://$live_ref.supabase.co/auth/v1/settings" -H "apikey: $live_key" > /tmp/auth.json \
+            || { echo "FAIL: the staging Supabase project did not answer /auth/v1/settings (paused? see docs/STAGING.md)"; exit 1; }
+          grep -q '"mailer_autoconfirm":true' /tmp/auth.json \
+            || { echo "FAIL: staging still requires email confirmation - anyone who signs up to test is stranded"; exit 1; }
+          grep -q '"disable_signup":false' /tmp/auth.json \
+            || { echo "FAIL: staging has sign-ups switched off - nobody can get an account to test with"; exit 1; }
+          echo "OK: a sign-up on staging produces a session immediately"
+
+          curl -sf "$base/robots.txt" | grep -q '^Disallow: /' \
+            || { echo "FAIL: staging robots.txt"; exit 1; }
+          curl -sfI "$base/" | grep -qi '^x-robots-tag: noindex' \
+            || { echo "FAIL: staging is indexable"; exit 1; }
+          # Spelled out as an `if` rather than `grep -q ... && fail`: under
+          # `set -e` the && form aborts the step on the HEALTHY path.
+          if curl -sf "$base/" | grep -q 'skyhookplay.com'; then
+            echo "FAIL: staging claims the production canonical"; exit 1
+          fi
+
+          echo "OK: $base is live, isolated and unindexed"
+
+      # Fail closed. A build that deployed but did not pass the checks above is
+      # not left serving: staging goes back to zero machines.
+      - name: Verification failed - take staging back down
+        if: failure() && steps.deploy.outcome == 'success'
+        run: flyctl scale count 0 -a skyhook-staging --yes
+
+      - name: Say where it is
+        if: success()
+        run: |
+          {
+            echo "### Staging is UP"
+            echo ""
+            echo "**<https://skyhook-staging.fly.dev/>** - branch \`$BRANCH\` @ \`$(git -C branch rev-parse --short HEAD)\`"
+            echo ""
+            echo "Staging has its OWN Supabase project and its own leaderboard."
+            echo "**Your production account does not exist here** - sign up on"
+            echo "staging rather than signing in."
+            echo ""
+            echo "It stays up until you turn it off. When you are done testing:"
+            echo ""
+            echo '```sh'
+            echo "gh workflow run staging.yml -R leopechnicki/skyhook -f action=down"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  down:
+    name: staging down
+    if: inputs.action == 'down'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_STAGING_API_TOKEN }}
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # Zero machines. The app, its IPs, its certificate and its release
+      # history stay, so `up` needs nothing recreated.
+      - name: Scale skyhook-staging to zero machines
+        run: flyctl scale count 0 -a skyhook-staging --yes
+
+      # Proved, not assumed: no machine left, and the URL no longer serves the
+      # game. Fly's proxy answers for an app with no machines, so the check is
+      # "not the game", not "no response".
+      - name: Verify staging is off
+        run: |
+          set -e
+          n=$(flyctl machines list -a skyhook-staging --json | jq length)
+          [ "$n" = "0" ] || { echo "FAIL: $n machine(s) still exist"; exit 1; }
+          for i in $(seq 1 12); do
+            if ! curl -s --max-time 10 https://skyhook-staging.fly.dev/ | grep -q '<canvas id="game"'; then
+              echo "OK: 0 machines, and https://skyhook-staging.fly.dev/ no longer serves the game"
+              {
+                echo "### Staging is DOWN"
+                echo ""
+                echo "0 machines, nothing served, nothing billed for compute."
+                echo "Bring it back on a branch with:"
+                echo ""
+                echo '```sh'
+                echo "gh workflow run staging.yml -R leopechnicki/skyhook -f action=up -f branch=<branch>"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "FAIL: https://skyhook-staging.fly.dev/ is still serving the game"; exit 1

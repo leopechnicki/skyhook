@@ -183,6 +183,7 @@ later. That is a gate in CI, not an intention -- see `test/leaderboard_ui.mjs`.
 | `test/ship.mjs` | 751 | Ship paint model: every menu combination readable, gold never stored, the DB allow-list and palette remap match the client |
 | `test/ship_ui.mjs` | 193 | The customiser panel in a real browser |
 | `test/ship_live.mjs` | 223 | The account round trip against a REAL staging Supabase (sign up, paint, second device, gold/off-menu refused, teardown). Not in CI - needs `SKYHOOK_LIVE_URL`, `SKYHOOK_LIVE_ANON_KEY`, `SKYHOOK_LIVE_DB_URL`; refuses to run against production |
+| `test/staging.mjs` | 495 | Staging isolation (its own Supabase project, never production's) and the deploy rules: production only from `main`, staging only on a manual run of `staging.yml` |
 | `test/ship_access.mjs` | 245 | Customise mid-session: pause and game-over doors, the run frozen to the tick, the paint visible at once |
 | `test/palette_metrics.mjs` | 113 | Measures the palette (chroma, contrast vs sky, pairwise and gold distance) - how the colours were chosen |
 

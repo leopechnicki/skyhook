@@ -2,9 +2,24 @@
 
 <https://skyhook-staging.fly.dev/>
 
-A second Fly app, `skyhook-staging`, region `ams`. Every branch that is not
-`main` deploys to it automatically, so a change can be played on a real URL
-before it is allowed anywhere near <https://skyhookplay.com>.
+A second Fly app, `skyhook-staging`, region `ams`, where a branch can be played
+on a real URL before it is allowed anywhere near <https://skyhookplay.com>.
+
+**Staging is OFF by default and comes up only when asked** (Leo, 2026-09-24:
+"let's only make staging up when need test some new feature"). Nothing
+deploys to it on a push. It is brought up on one branch, tested, and turned
+off again:
+
+```sh
+# up - put a branch on https://skyhook-staging.fly.dev/
+gh workflow run staging.yml -R leopechnicki/skyhook -f action=up -f branch=<branch>
+
+# down - zero machines, nothing served, nothing billed for compute
+gh workflow run staging.yml -R leopechnicki/skyhook -f action=down
+```
+
+Or, with no terminal: **GitHub -> Actions -> staging -> Run workflow**, pick
+`up` or `down`, type the branch, press the green button.
 
 Production is untouched by all of this: `main` still deploys to `skyhook-game`
 through `fly.toml`, exactly as it did before, and no branch can reach that app.
@@ -113,29 +128,55 @@ exactly as on production. The separation is between two **databases**, not
 between a trusted and an untrusted client.
 ---
 
-## How a branch becomes a URL
+## How a branch becomes a URL (on demand)
+
+`.github/workflows/staging.yml`, `workflow_dispatch` only - no push, no
+pull_request, no schedule. `test/staging.mjs` fails the build if any of those
+triggers is ever added back, and fails it if `deploy.yml` starts deploying
+staging again.
 
 ```
-push to any branch except main
-  -> tests (the whole suite, called from test.yml)
-  -> container build + serve checks, for BOTH variants
-  -> flyctl deploy --remote-only --config fly.staging.toml
-  -> curl the live site: /health, the game, every asset,
-     the Supabase project ref, robots.txt, X-Robots-Tag
+action=up, branch=<branch>
+  -> the branch can build an ISOLATED staging image?  (fly.staging.toml names
+     skyhook-staging, the Dockerfile honours SKYHOOK_ENV, staging/config.staging.js
+     names a project that is not production's) - refused before any build if not
+  -> flyctl deploy --remote-only --ha=false --config fly.staging.toml -a skyhook-staging
+     (from zero machines this creates the one machine it needs)
+  -> curl the live site: /health, the game, every asset, the Supabase project
+     ref, production's ref nowhere in it, sign-up yields a session,
+     robots.txt, X-Robots-Tag, no production canonical
+  -> any of those fails: staging is scaled straight back to zero
   -> the URL is printed into the run summary
+
+action=down
+  -> flyctl scale count 0 -a skyhook-staging
+  -> assert 0 machines, and that the URL no longer serves the game
 ```
 
 The staging URL is always the same - <https://skyhook-staging.fly.dev/> -
 because it is one app that gets redeployed, not a URL per branch. Whatever was
-pushed most recently is what is there. `flyctl status -a skyhook-staging` and
-the run summary both say which commit.
+brought up most recently is what is there; the run summary says which branch
+and commit.
 
-Deploys are serialised on the app (`concurrency: fly-skyhook-staging`,
-`cancel-in-progress: false`), so two branches pushed a minute apart queue
-rather than race for the single machine.
+Tests are not re-run by `up`: the branch's own CI (test.yml on its PR, and
+the `image` job in deploy.yml, which builds and checks the staging variant on
+every PR) already did that. `up` is a deploy, and its gates are the ones only a
+deploy can check.
 
-To redeploy without pushing: **Actions -> deploy -> Run workflow**, and pick
-the branch.
+**Old branches.** A branch cut before the staging pipeline existed cannot build
+a staging image - its Dockerfile ignores `SKYHOOK_ENV` and would build the
+production image, pointed at production's database. `up` refuses it with
+"merge main into '<branch>' first". Merge main, push, run `up` again.
+
+**Down is zero, not asleep.** An idle machine already stops itself, but a
+stopped machine with `auto_start_machines` on wakes for the next request - any
+crawler or old link brings the game back. `scale count 0` removes the machines
+and keeps everything else: the app, its IPs, its certificate, its release
+history and this config. Coming back is the `up` action; nothing is recreated.
+
+Operations are serialised on the app (`concurrency: fly-skyhook-staging`,
+`cancel-in-progress: false`), so an `up` and a `down` pressed a moment apart
+queue rather than race.
 
 ---
 
@@ -200,18 +241,31 @@ fly tokens create deploy -a skyhook-staging -x 8760h   # copy the output
 gh secret set FLY_STAGING_API_TOKEN --repo leopechnicki/skyhook
 ```
 
-Without that secret the `staging` job prints those three commands into the run
-summary and skips - the same shape as the production `preflight` gate. Nothing
-goes red for a missing credential.
+Without that secret the `up` job fails on its first step and says so. It is
+only ever run by hand, so a red run that names the missing secret is the
+useful answer, not a skipped one.
 
 ---
 
 ## Cost
 
-`auto_stop_machines = 'stop'`, `min_machines_running = 0`, one shared CPU,
-256 MB. A machine exists while somebody has the tab open and stops itself
-afterwards; the next request cold-starts it in a few hundred ms. Idle cost is
-the disk the image sits on.
+**Down (the default): zero.** No machine exists, so there is no compute and no
+machine rootfs to bill. What remains is the app record, its IPs and its
+certificate, which Fly does not charge for on this account.
+
+**Up:** one shared CPU, 256 MB, `auto_stop_machines = 'stop'`,
+`min_machines_running = 0` - even while up, the machine stops itself when
+nobody has the tab open and cold-starts in a few hundred ms. Turn it `down`
+when the feature is tested.
+
+**The staging Supabase project** (`qlaenczyhzjkmqkraiup`, org `skyhook`) is on
+the **Free** plan: $0. It is deliberately left in place while the Fly app is
+down - deleting it would mean re-applying the schema and re-doing the auth
+settings below on every `up`. Supabase pauses a Free project after about a
+week with no traffic. If `up` fails with "the staging Supabase project did not
+answer /auth/v1/settings", that is what happened: Supabase dashboard ->
+skyhook-staging -> **Restore project**, wait for it to report healthy, run `up`
+again.
 
 ---
 
@@ -223,12 +277,15 @@ the disk the image sits on.
 | `submitRun` refuses, and does not queue | `test/staging.mjs` |
 | Reads still work (the backend is not just switched off) | `test/staging.mjs` |
 | Production still POSTs scores | `test/staging.mjs` |
-| `main` and a branch cannot reach each other's deploy job | `test/staging.mjs` |
+| Production deploys only from `main`; staging only on a manual `workflow_dispatch`, never on push | `test/staging.mjs` |
+| `down` scales to zero and proves it; nothing can destroy the app | `test/staging.mjs` |
 | Every `${VAR}` in the nginx template has a default | `test/staging.mjs` |
 | The overlay actually lands in the built image | `deploy.yml`, `image` job |
 | Production's image did not pick the overlay up | `deploy.yml`, `image` job |
 | A misspelled `SKYHOOK_ENV` fails the build | `deploy.yml`, `image` job |
-| The **live** staging site is on its own project and unindexed | `deploy.yml`, `staging` job |
+| A branch that would build the production image is refused before `up` builds | `staging.yml`, `up` job |
+| The **live** staging site is on its own project and unindexed | `staging.yml`, `up` job |
+| After `down`: 0 machines and the URL no longer serves the game | `staging.yml`, `down` job |
 
 `test/staging.mjs` runs in the cheap `logic` job, so it gates every PR rather
 than only the ones that reach a deploy.
@@ -269,6 +326,6 @@ repo. Email/password sign-up and sign-in work without it.
 
 ## Rolling back staging
 
-There is nothing to roll back. Push the branch you want to look at, or run the
-workflow on `main` - staging is disposable by construction, which is the point
-of having it.
+There is nothing to roll back. Run `up` on the branch you want to look at, or
+on `main` - staging is disposable by construction, which is the point of having
+it. And when you are finished, run `down`.

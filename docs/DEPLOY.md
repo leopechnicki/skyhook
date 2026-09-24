@@ -17,13 +17,41 @@ mirror" below - it ends in one setting Leo has to flip by hand.
 
 Netlify is not used and must never be reintroduced.
 
-There is a second app, `skyhook-staging`, and every branch that is not `main`
-deploys to it: <https://skyhook-staging.fly.dev/>. It exists so a change can be
-played on a real URL before it reaches skyhookplay.com, and a run played there
-is never written to the leaderboard. Nothing in this file changes because of
-it - production is still `skyhook-game`, still driven by `fly.toml`, still only
-from `main`. The staging half is documented on its own, in
-[docs/STAGING.md](STAGING.md).
+There is a second app, `skyhook-staging` (<https://skyhook-staging.fly.dev/>),
+where a branch can be played on a real URL before it reaches skyhookplay.com.
+It has its own Supabase project, so nothing played there touches the real
+leaderboard or a real account. **It is OFF by default and only comes up when
+you ask for it** - see "Staging: up and down" right below. Production is
+unaffected by it: still `skyhook-game`, still driven by `fly.toml`, still only
+from `main`. The long version is [docs/STAGING.md](STAGING.md).
+
+## Staging: up and down
+
+One step each. Either from a terminal with the GitHub CLI:
+
+```sh
+# Bring staging UP with a branch (replace crew/feat/my-feature with the branch):
+gh workflow run staging.yml -R leopechnicki/skyhook -f action=up -f branch=crew/feat/my-feature
+
+# Take staging DOWN when you are done testing:
+gh workflow run staging.yml -R leopechnicki/skyhook -f action=down
+```
+
+Or from the browser, no terminal:
+
+1. <https://github.com/leopechnicki/skyhook/actions/workflows/staging.yml>
+2. **Run workflow** -> action `up` + the branch name (or action `down`) -> **Run workflow**.
+
+`up` takes about three minutes. When the run is green the game is on
+<https://skyhook-staging.fly.dev/> and the run summary says which branch and
+commit it is. Staging has its own empty database, so **sign up** there - your
+skyhookplay.com account does not exist on staging. `down` takes under a minute
+and leaves zero machines: the URL stops serving the game and nothing is billed
+for compute. Staging stays up until somebody runs `down`; nothing turns it off
+by itself, and nothing turns it on by itself.
+
+If `up` refuses with "merge main into '<branch>' first", the branch is older
+than this staging setup; merge main into it, push, and run `up` again.
 
 ---
 
@@ -38,10 +66,11 @@ Everything that lives in the repo:
 | `conf/404.html` | A 404 page that looks like the game instead of like nginx. |
 | `fly.toml` | App name, region, port, health check, machine size. |
 | `.dockerignore` | Keeps the test suite, docs and `node_modules` out of the build context. |
-| `.github/workflows/deploy.yml` | Test suite -> container smoke test -> `flyctl deploy --remote-only` on push to `main`. Branches go to staging instead; see [STAGING.md](STAGING.md). |
+| `.github/workflows/deploy.yml` | Test suite -> container smoke test (production AND staging variants) -> `flyctl deploy --remote-only` on push to `main`. Production only. |
+| `.github/workflows/staging.yml` | Staging, on demand: `action=up` + `branch` deploys that branch to `skyhook-staging`; `action=down` scales it to zero. Manual trigger only. See "Staging: up and down". |
 | `fly.staging.toml` | The staging app. A separate file, not a flag on `fly.toml`, so the production app name and the staging app name are never in the same command line. |
-| `staging/` | The only two files that differ on staging: the read-only config and a `Disallow: /` robots.txt. Copied over the originals by the Dockerfile, and only when built with `--build-arg SKYHOOK_ENV=staging`. |
-| `test/staging.mjs` | Asserts a staging run cannot reach the real leaderboard, that reads still work, that production is unaffected, and that `main` and a feature branch cannot reach each other's deploy job. |
+| `staging/` | The only two files that differ on staging: the config naming staging's own Supabase project and a `Disallow: /` robots.txt. Copied over the originals by the Dockerfile, and only when built with `--build-arg SKYHOOK_ENV=staging`. |
+| `test/staging.mjs` | Asserts a staging run cannot reach the real leaderboard, that production is unaffected, that production deploys only from `main`, and that staging deploys only when run by hand. |
 | `pages/` | The GitHub Pages redirect stub - two files, not the game. Published to the `gh-pages` branch by the `pages-stub` job so the retired `github.io` URL keeps working. See "Retiring the Pages mirror". |
 | `test/pages_stub.mjs` | Asserts the one canonical origin: that `index.html`, `conf/site.conf.template`, the `Dockerfile` default and `fly.toml` all agree, and that the stub redirects with the query string and hash intact. |
 
@@ -338,8 +367,8 @@ against its real domain list, and tested in the container job.
 ## Rolling back
 
 ```sh
-fly releases --app skyhook            # find the version that was good
-fly deploy --image <image-ref-from-that-release> --app skyhook
+fly releases --app skyhook-game --image   # find the version that was good
+fly deploy --image <image-ref-from-that-release> --app skyhook-game
 ```
 
 GitHub Pages is **not** a fallback for this. It publishes the redirect stub, not
