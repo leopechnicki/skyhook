@@ -37,9 +37,20 @@ window.SKYHOOK_CONFIG = {
 
   /* Show "Continue with Google"? Only set this true if Google is actually
      switched on as a provider in Authentication -> Sign In / Providers
-     (docs/LEADERBOARD_SETUP.md step 3). It is not on this project, and a
-     button pointing at a disabled provider does not fail politely - it
-     navigates the player out of the game onto a raw GoTrue JSON error. Email
-     and password work either way. */
-  googleSignIn: false
+     (docs/LEADERBOARD_SETUP.md step 3), because a button pointing at a
+     disabled provider does not fail politely - it navigates the player out of
+     the game onto a raw GoTrue JSON error, with the Back button as the only
+     way home. Email and password work either way.
+
+     Switched on for this project on 2026-09-17. The provider itself lives in
+     the dashboard, not in this repo, so this line is a CLAIM about a server
+     we do not control and must never be flipped on faith. The project will
+     answer the question itself:
+
+       curl -s https://ievfcqnyrekdixxbsite.supabase.co/auth/v1/settings          -H "apikey: <the anon key above>"
+
+     "google" under "external" must read true. If it reads false, this line
+     belongs back on false and the button belongs off the page - one that is
+     certain to dead-end the player is strictly worse than no button. */
+  googleSignIn: true
 };
