@@ -1,11 +1,13 @@
 # SKYHOOK Android - Release Checklist
 
-This Capacitor wrapper is fully scaffolded and integrated with **Google TEST ad
-unit IDs** and a **placeholder billing product id** only. Nothing below has been
-done, because every item requires a real Google account, money, or Leo's
-identity. Crew intentionally stopped at the last account-free step.
+This Capacitor wrapper ships **ad-free** (see the monetisation decision
+below). As of 2026-09-25 every account-free item is DONE and verified: the
+signed AAB, the emulator test, the store listing art and copy, the privacy
+policy page and the pre-filled Console answers. What remains needs a real
+Google account, money or Leo's identity, and is listed with time estimates in
+**`PLAYSTORE_READY_REPORT.md` section 6** - read that first.
 
-Legend: [ ] = TODO (blocked on account/identity/money)
+Legend: [x] = DONE (evidence linked)   [ ] = TODO (blocked on account/identity/money)
 
 ---
 
@@ -86,8 +88,16 @@ longer true and the whole section is now satisfied:
 - [ ] Create the app "SKYHOOK", set package name `com.leopechnicki.skyhook`.
 - [ ] Complete: privacy policy URL, data-safety form, content rating, target
       audience, ads declaration (**"contains ads" = NO** - v1 is ad-free,
-      see the monetisation decision above), store listing. Every answer is
-      pre-filled in `store-listing/PLAY_CONSOLE_ANSWERS.md`.
+      see the monetisation decision above), store listing. Paste-only:
+- [x] Every Console answer pre-filled from the code in
+      `store-listing/PLAY_CONSOLE_ANSWERS.md` (2026-09-25).
+- [x] Store listing copy within limits in `store-listing/LISTING.md`;
+      icon 512x512, feature graphic 1024x500 (JPEG, no alpha) and six real
+      1080x1920 screenshots of the signed build in `store-listing/`; all
+      checked by `scripts/listing-check.mjs` in `npm test` and CI.
+- [x] Privacy policy page written and wired into the site image
+      (`privacy.html` -> https://skyhookplay.com/privacy.html once merged;
+      `deploy.yml` fails if it is not served).
 
 ## C. AdMob (real account, real ad unit IDs)
 
@@ -142,7 +152,7 @@ longer true and the whole section is now satisfied:
       support.google.com/googleplay/android-developer/answer/11926878).
 - [x] Signed AAB built and verified with `jarsigner -verify` and
       `bundletool validate`; a universal APK was derived with `bundletool
-      build-apks --mode=universal` and installed on the emulator (section J).
+      build-apks --mode=universal` and installed on the emulator (section I).
 
 **Play App Signing (read this before worrying about the key):** Play App
 Signing is mandatory for new apps. Google generates and holds the **app
@@ -161,7 +171,11 @@ can live on one machine instead of a vault. Back it up anyway: copy the
 
 ## G. Upload & release
 
-- [ ] Upload the signed **AAB** to a track (internal -> closed -> production).
+- [x] Signed AAB ready: `C:\Users\leops\.skyhook\out\skyhook-1.1.0-vc2-release-signed.aab`
+      (12,375,267 bytes, sha256 `2f2f13ad...e28f8`, verified in
+      `PLAYSTORE_READY_REPORT.md` section 2).
+- [ ] Upload it to a track (internal -> closed -> production). Bump
+      `versionCode` in `android/app/build.gradle` before every further upload.
 - [ ] Complete pre-launch report review, roll out.
 
 ---
@@ -180,18 +194,43 @@ What still needs a real account:
       **GDPR consent message** (EEA/UK) and a **US states** message. Until a
       message is published, `requestConsentInfo` reports no form is available
       and the app will (correctly) serve no ads in the EEA.
-- [ ] Confirm the **target audience** answers in Play Console match the code
-      defaults in `ads.mjs` `DEFAULT_TARGETING`
+- [ ] Confirm the **target audience** answers in Play Console (pre-filled as
+      13+, not directed at children, in `PLAY_CONSOLE_ANSWERS.md` section 6 -
+      consistent with the code) match the code defaults in `ads.mjs`
+      `DEFAULT_TARGETING`
       (`tagForChildDirectedTreatment: false`, `tagForUnderAgeOfConsent: true`,
       `maxAdContentRating: 'General'`). If Leo declares the app as *directed to
       children*, flip `tagForChildDirectedTreatment` to `true` - the two must
       agree or it is a policy strike.
-- [ ] Publish a **privacy policy URL** (required by both Play and AdMob) and
-      link it in the store listing.
+- [x] Privacy policy page written (`privacy.html`, audited against
+      `js/online.js`, `supabase/schema.sql` and the merged manifest) and
+      served by the site image; the URL
+      `https://skyhookplay.com/privacy.html` is live once this branch is on
+      `main`.
+- [ ] Paste that URL into the store listing (Leo, Console).
 - [ ] Add a **privacy options entry point** (a "Privacy settings" button) if
       `privacyOptionsRequirementStatus` comes back `REQUIRED` for EEA users;
       the plugin exposes `resetConsentInfo()` / `showConsentForm()` for this.
       Not built yet - the game currently has no settings menu to hang it on.
+
+## I. Emulator test - DONE (2026-09-25, no account needed)
+
+- [x] Signed release universal APK (derived from the Play AAB, production
+      config) installed on a Pixel 6 / Android 15 (API 35) AVD: title, runs,
+      game over, customiser and the guest leaderboard driven by real `adb`
+      taps; `dumpsys package` confirms versionCode 2, targetSdk 36, not
+      debuggable, only INTERNET / ACCESS_NETWORK_STATE / WAKE_LOCK /
+      FOREGROUND_SERVICE.
+- [x] Sign-in, session persistence, score submit and `my_rank` proven inside
+      the WebView with a staging debug build against the **staging** Supabase
+      project only (never production), asserted over CDP.
+- [x] Android-only bug found and fixed: the WebView's synthesised click closed
+      overlays on open (`js/ui_online.js`, `js/ui_ship.js`, regression check
+      in `test/leaderboard_ui.mjs`, 229/229).
+- Evidence: `docs/EMULATOR_TEST_2026-09-25.md` + `docs/emulator-2026-09-25/`.
+- [ ] Repeat on a real phone once one is available (nothing in the emulator
+      run suggests a difference; the emulator's WebView 124 is older than
+      any current phone's).
 
 ### Wiring already done by Crew (no account needed)
 - Capacitor project, `appId=com.leopechnicki.skyhook`, `appName=SKYHOOK`.
@@ -205,5 +244,7 @@ What still needs a real account:
 
 ### Verify before every release
 ```
-npm test          # ad-gate + consent-gate unit tests (19 checks, no device)
+npm test                          # ad-gate + consent + ad-free switch + Play listing limits (no device)
+node ../test/leaderboard_ui.mjs   # includes the WebView backdrop regression check
+jarsigner -verify <aab> && java -jar bundletool.jar validate --bundle=<aab>
 ```

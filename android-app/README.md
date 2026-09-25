@@ -14,6 +14,12 @@ https://leopechnicki.github.io/skyhook/) as an Android app, adding:
   ads are switched on the model is a once-per-run rewarded continue, so the
   gate has to be redesigned first - see RELEASE-CHECKLIST.md.
 
+## Google Play status (2026-09-25)
+Everything that needs no Google account is done: signed AAB, emulator test,
+store art + copy, privacy policy, pre-filled Console answers. Read
+`PLAYSTORE_READY_REPORT.md` (section 6 is the short list of what only Leo can
+do) and `RELEASE-CHECKLIST.md`. Listing material lives in `store-listing/`.
+
 ## The web game is the single source of truth
 `scripts/sync-web.mjs` copies the parent game's `index.html`, `css/`, `js/`
 into `www/` and injects one `<script type="module" src="skyhook-native.js">`
