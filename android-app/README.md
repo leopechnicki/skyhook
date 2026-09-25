@@ -3,10 +3,16 @@
 Wraps the SKYHOOK web game (in the parent folder, live at
 https://leopechnicki.github.io/skyhook/) as an Android app, adding:
 
-- **AdMob interstitial** shown after every **5th** game-over (test IDs only).
-- **"Remove ads"** one-time purchase - a real Google Play **non-consumable**
-  with **restore-purchase** support (survives reinstall).
-- When the ad-free entitlement is owned, all interstitials are skipped.
+- **v1 is AD-FREE** (Leo, 2026-09-22). `src/native/monetisation.mjs` has
+  `ADS_ENABLED = false`, and while it does the bridge never constructs AdMob,
+  the UMP consent flow or Play Billing. Pinned by
+  `src/test/monetisation.test.mjs`; the ad permissions the SDKs would merge in
+  are stripped in `android/app/src/main/AndroidManifest.xml`.
+- Kept in the tree, inert, for later: an **AdMob interstitial** gate (every
+  5th game-over, test IDs only) and a **"Remove ads"** one-time purchase - a
+  real Google Play **non-consumable** with **restore-purchase** support. When
+  ads are switched on the model is a once-per-run rewarded continue, so the
+  gate has to be redesigned first - see RELEASE-CHECKLIST.md.
 
 ## The web game is the single source of truth
 `scripts/sync-web.mjs` copies the parent game's `index.html`, `css/`, `js/`
@@ -21,11 +27,14 @@ and fires once on each rising edge into `'over'`. Zero game-code changes.
 
 ## Layout
 ```
+src/native/monetisation.mjs  ADS_ENABLED (false for v1) + the wiring it gates - unit tested
 src/native/ad-gate.mjs   pure counter logic (every Nth game-over) - unit tested
 src/native/ads.mjs       AdMob interstitial wrapper (TEST IDs only)
 src/native/billing.mjs   CdvPurchase non-consumable + restore
 src/native/skyhook-native.js  bridge that wires the three together
 src/test/ad-gate.test.mjs     Node unit tests (no device needed)
+src/test/ads-consent.test.mjs UMP consent gate tests
+src/test/monetisation.test.mjs  proves the ad-free build never touches AdMob/Billing
 scripts/sync-web.mjs     builds www/ from the untouched game + injects bridge
 scripts/patch-manifest.mjs   inserts AdMob TEST app id into AndroidManifest
 ```
@@ -39,7 +48,7 @@ npx cap add android            # first time only (already done)
 node scripts/patch-manifest.mjs
 npx cap sync android
 (cd android && ./gradlew assembleDebug)
-# -> android/app/build/outputs/apk/debug/app-debug.apk  (shows TEST ads)
+# -> android/app/build/outputs/apk/debug/app-debug.apk  (ad-free; TEST ids only if ADS_ENABLED)
 ```
 
 ## Test / real IDs

@@ -147,8 +147,13 @@ jobs:
       # interrupted, and the consent path is the difference between a compliant
       # ad request and a policy strike. Neither should be able to regress
       # silently just because the native build is not run in CI.
-      - name: Android wrapper logic (ad cadence + consent)
-        run: node android-app/src/test/ad-gate.test.mjs && node android-app/src/test/ads-consent.test.mjs
+      #
+      # monetisation.test.mjs pins the v1 decision itself: ADS_ENABLED is
+      # false and, while it is, the shipped bridge never constructs AdMob,
+      # UMP consent or Play Billing at all. Flipping the flag fails this step
+      # until the test is updated deliberately - which is the point.
+      - name: Android wrapper logic (ad cadence + consent + ad-free switch)
+        run: node android-app/src/test/ad-gate.test.mjs && node android-app/src/test/ads-consent.test.mjs && node android-app/src/test/monetisation.test.mjs
 
   browser:
     name: browser (smoke + frame time)

@@ -85,7 +85,9 @@ longer true and the whole section is now satisfied:
       after 2023) ID verification + a **D-U-N-S number for orgs**.
 - [ ] Create the app "SKYHOOK", set package name `com.leopechnicki.skyhook`.
 - [ ] Complete: privacy policy URL, data-safety form, content rating, target
-      audience, ads declaration (**"contains ads" = yes**), store listing.
+      audience, ads declaration (**"contains ads" = NO** - v1 is ad-free,
+      see the monetisation decision above), store listing. Every answer is
+      pre-filled in `store-listing/PLAY_CONSOLE_ANSWERS.md`.
 
 ## C. AdMob (real account, real ad unit IDs)
 
