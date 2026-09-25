@@ -1097,8 +1097,28 @@ async function main() {
     check('LEADERBOARD on the game-over screen opens the panel, not a retry',
       (await page.locator('#ol').isVisible()) === true &&
       (await page.evaluate('window.__SKYHOOK.game.state')) === 'over');
-    await page.locator('#ol-close').click();
+
+    /* Android WebView regression (Play release run, 2026-09-25). After a
+       touch tap Chromium targets the synthesised click at whatever is under
+       the finger WHEN IT FIRES - by then, the overlay the tap just opened.
+       The backdrop handler took that click as "tap outside" and closed the
+       board ~20 ms after opening it, so on a phone LEADERBOARD did nothing
+       at all. Playwright's mouse keeps the pointerdown target for the click,
+       so no browser test saw it. Reproduce the order exactly: the tap above
+       opened the panel from a pointerdown on the canvas; now the click lands
+       on #ol with no pointerdown of its own. The panel must stay. */
+    await page.evaluate(() => {
+      document.getElementById('ol').dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    await wait(150);
+    check('a click synthesised onto the backdrop right after the opening tap does not close the panel',
+      (await page.locator('#ol').isVisible()) === true);
+    /* ...and a tap that genuinely STARTS on the backdrop still closes it. */
+    await page.locator('#ol').click({ position: { x: 5, y: 5 } });
     await wait(200);
+    check('a tap that starts on the backdrop still closes the panel',
+      (await page.locator('#ol').isVisible()) === false);
 
     /* ---- sign out ---- */
     await page.waitForFunction(

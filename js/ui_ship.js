@@ -513,9 +513,18 @@
       refresh();
     });
 
-    /* Backdrop click closes, panel click does not. */
+    /* Backdrop click closes, panel click does not - and only a click whose
+       pointerdown was ALSO on the backdrop. Same Android WebView behaviour
+       as js/ui_online.js: the click synthesised after the tap that opened the
+       panel is targeted at whatever is under the finger by then. Today the
+       panel covers every CUSTOMISE button, so that click lands on the panel
+       and is ignored; the guard keeps it that way when the layout moves. */
+    var downOnBackdrop = false;
+    el.sh.addEventListener('pointerdown', function (e) { downOnBackdrop = (e.target === el.sh); });
     el.sh.addEventListener('click', function (e) {
-      if (e.target === el.sh) closePanel();
+      var armed = downOnBackdrop;
+      downOnBackdrop = false;
+      if (e.target === el.sh && armed) closePanel();
     });
 
     el['sh-swatches'].addEventListener('keydown', arrows);

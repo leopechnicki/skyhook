@@ -1052,8 +1052,22 @@
 
     /* Clicking the darkened area outside the panel closes, the way every
        other dialog on the web does. */
+    /* Backdrop tap closes - but only a tap that STARTED on the backdrop.
+       On Android (Chromium WebView, real touch) the click synthesised after
+       a tap is targeted at whatever is under the finger when it fires, not
+       at what was there on pointerdown. The LEADERBOARD button on the
+       game-over screen sits below the panel, so the tap that opened the
+       overlay (pointerdown on the canvas -> openOverlay) was followed ~20 ms
+       later by a click on the now-visible backdrop, which closed it again:
+       the board could not be opened by touch at all. Playwright's mouse
+       click keeps the target the pointer went down on, so no browser test
+       saw it; the emulator did (android-app/PLAYSTORE_READY_REPORT.md). */
+    var downOnBackdrop = false;
+    el.ol.addEventListener('pointerdown', function (e) { downOnBackdrop = (e.target === el.ol); });
     el.ol.addEventListener('click', function (e) {
-      if (e.target === el.ol) closeOverlay();
+      var armed = downOnBackdrop;
+      downOnBackdrop = false;
+      if (e.target === el.ol && armed) closeOverlay();
     });
 
     doc.addEventListener('keydown', function (e) {
