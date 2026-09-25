@@ -128,6 +128,10 @@ jobs:
             curl -sf -o /dev/null "http://localhost:8080/$f" || fail "missing asset: $f"
           done
           curl -sf -o /dev/null http://localhost:8080/screenshot.png || fail "og:image missing"
+          # The privacy policy the Google Play listing links to. Play rejects a
+          # listing whose policy URL does not resolve, and the Android app's
+          # Data safety form names this exact address.
+          curl -sf http://localhost:8080/privacy.html | grep -q 'PRIVACY POLICY' || fail "privacy.html missing"
 
           # SITE_ORIGIN actually reached the served HTML. This is the check
           # that makes the hostname genuinely configurable rather than
@@ -394,7 +398,7 @@ jobs:
           done
           curl -sf "$base/health" > /dev/null || { echo "FAIL: /health"; exit 1; }
           curl -sf "$base/" | grep -q '<canvas id="game"' || { echo "FAIL: / is not the game"; exit 1; }
-          for f in js/game.js js/main.js js/rocket.js js/celestial.js css/style.css screenshot.png; do
+          for f in js/game.js js/main.js js/rocket.js js/celestial.js css/style.css screenshot.png privacy.html; do
             curl -sfI "$base/$f" > /dev/null || { echo "FAIL: $f is not 200"; exit 1; }
           done
           echo "OK: $base is live and complete"

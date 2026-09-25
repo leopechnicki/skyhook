@@ -19,7 +19,7 @@
 FROM alpine:3.20 AS site
 
 WORKDIR /src
-COPY index.html screenshot.png ./
+COPY index.html screenshot.png privacy.html ./
 COPY css/ ./css/
 COPY js/ ./js/
 COPY conf/404.html ./404.html
