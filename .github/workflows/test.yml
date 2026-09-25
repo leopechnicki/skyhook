@@ -154,6 +154,12 @@ jobs:
       # until the test is updated deliberately - which is the point.
       - name: Android wrapper logic (ad cadence + consent + ad-free switch)
         run: node android-app/src/test/ad-gate.test.mjs && node android-app/src/test/ads-consent.test.mjs && node android-app/src/test/monetisation.test.mjs
+      # The Play listing copy and art have hard limits (title 30, short
+      # description 80, full description 4000, icon 512x512, feature graphic
+      # 1024x500, 2-8 phone screenshots). A one-word edit to the copy can
+      # break the upload; this fails the build instead.
+      - name: Play listing within Console limits
+        run: cd android-app && node scripts/listing-check.mjs
 
   browser:
     name: browser (smoke + frame time)

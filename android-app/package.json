@@ -10,7 +10,7 @@
     "add:android": "npm run sync:web && cap add android",
     "build:web": "npm run sync:web",
     "open:android": "cap open android",
-    "test": "node src/test/ad-gate.test.mjs && node src/test/ads-consent.test.mjs && node src/test/monetisation.test.mjs"
+    "test": "node src/test/ad-gate.test.mjs && node src/test/ads-consent.test.mjs && node src/test/monetisation.test.mjs && node scripts/listing-check.mjs"
   },
   "dependencies": {
     "@capacitor-community/admob": "8.1.0",
