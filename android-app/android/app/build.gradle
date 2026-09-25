@@ -1,5 +1,52 @@
 apply plugin: 'com.android.application'
 
+/* ---------------------------------------------------------------- signing
+ * The UPLOAD key lives OUTSIDE the repo, and its passwords with it:
+ *
+ *   %USERPROFILE%\.skyhook\keystore.properties   (override: SKYHOOK_KEYSTORE_PROPERTIES)
+ *     storeFile=C:/Users/<you>/.skyhook/upload-keystore.jks
+ *     storePassword=...
+ *     keyAlias=skyhook-upload
+ *     keyPassword=...
+ *
+ * Nothing under android-app/ ever holds a password (see .gitignore: *.jks,
+ * *.keystore). With Play App Signing - which is mandatory for new apps -
+ * Google holds the real APP signing key; this key only signs what is
+ * UPLOADED, so if it is ever lost or leaked it can be reset from Play
+ * Console (Setup -> App signing -> request upload key reset) without
+ * stranding the installed base. That is why it is acceptable for it to live
+ * on one laptop rather than in a vault.
+ *
+ * Absent file  -> the build still succeeds, UNSIGNED, and says so loudly.
+ *                 CI, other machines and `gradlew assembleDebug` need no key.
+ * Present file -> it must be complete and the keystore must exist, or the
+ *                 build FAILS with a message that names the missing thing. A
+ *                 half-configured signing block that silently produced an
+ *                 unsigned AAB is how "why does Play reject my upload" starts.
+ */
+def skyhookKeystoreProps = null
+def skyhookKeystorePropsFile = file(System.getenv('SKYHOOK_KEYSTORE_PROPERTIES')
+        ?: "${System.getProperty('user.home')}/.skyhook/keystore.properties")
+if (skyhookKeystorePropsFile.exists()) {
+    def props = new Properties()
+    skyhookKeystorePropsFile.withInputStream { props.load(it) }
+    def missing = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].findAll { !props.getProperty(it)?.trim() }
+    if (!missing.isEmpty()) {
+        throw new GradleException("SKYHOOK signing: ${skyhookKeystorePropsFile} is missing ${missing.join(', ')}. " +
+            "Fill it in or delete the file to build unsigned.")
+    }
+    def ks = file(props.getProperty('storeFile'))
+    if (!ks.exists()) {
+        throw new GradleException("SKYHOOK signing: keystore ${ks} named in ${skyhookKeystorePropsFile} does not exist. " +
+            "Generate it (android-app/RELEASE-CHECKLIST.md section E) or delete the properties file to build unsigned.")
+    }
+    skyhookKeystoreProps = props
+    logger.lifecycle("SKYHOOK signing: release builds will be signed with ${ks} (alias ${props.getProperty('keyAlias')})")
+} else {
+    logger.warn("SKYHOOK signing: ${skyhookKeystorePropsFile} not found - release builds will be UNSIGNED " +
+        "(fine for CI / inspection; Play will reject the upload). See android-app/RELEASE-CHECKLIST.md section E.")
+}
+
 android {
     namespace = "com.leopechnicki.skyhook"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +54,13 @@ android {
         applicationId "com.leopechnicki.skyhook"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Bump BOTH for every upload: Play refuses a versionCode it has seen.
+        // 1 / "1.0" was the 2026-09-22 unsigned inspection build (never
+        // uploaded). 2 / "1.1.0" is the first Play-ready build: ship
+        // customiser (#30), account settings (#28), bot defence (#32),
+        // moderation (#33), ad-free.
+        versionCode 2
+        versionName "1.1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +68,22 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (skyhookKeystoreProps != null) {
+                storeFile file(skyhookKeystoreProps.getProperty('storeFile'))
+                storePassword skyhookKeystoreProps.getProperty('storePassword')
+                keyAlias skyhookKeystoreProps.getProperty('keyAlias')
+                keyPassword skyhookKeystoreProps.getProperty('keyPassword')
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // null when the properties file is absent -> unsigned, by design.
+            signingConfig skyhookKeystoreProps != null ? signingConfigs.release : null
         }
     }
 }

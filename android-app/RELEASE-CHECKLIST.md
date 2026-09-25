@@ -120,12 +120,38 @@ longer true and the whole section is now satisfied:
   transaction, derives entitlement from `store.owned()` (Play receipt, so it
   **survives reinstall**), and exposes `restore()` (`store.restorePurchases()`).
 
-## E. Signing (real keystore = release identity)
+## E. Signing - DONE (upload key generated 2026-09-25, no account needed)
 
-- [ ] Generate an upload **keystore** (`keytool -genkey ... -keystore skyhook.jks`).
-      Keep it secret; store passwords in the **payment/secret vault**, never in git.
-- [ ] Configure `android/app/build.gradle` `signingConfigs` (or use Play App
-      Signing - recommended). Build a signed **AAB**: `./gradlew bundleRelease`.
+- [x] **Upload keystore generated OUTSIDE the repo**:
+      `C:/Users/leops/.skyhook/upload-keystore.jks` (PKCS12, RSA 2048,
+      alias `skyhook-upload`, valid to 2054-02-10, self-signed
+      `CN=SKYHOOK upload key, O=Leonardo Pechnicki dos Santos, C=PL`).
+      Cert SHA-256
+      `E7:9B:25:8C:5E:69:77:59:BA:6F:98:1B:7E:A6:51:8B:B8:E2:79:59:79:0B:B5:B2:98:37:76:B8:55:B8:26:8D`.
+- [x] **Passwords** (random, 32 chars each) live only in
+      `C:/Users/leops/.skyhook/keystore.properties`. Not in git (`*.jks` is
+      ignored and the properties file is outside the tree), not in `.env`,
+      not in `config.json`.
+- [x] `android/app/build.gradle` reads that file (path overridable with
+      `SKYHOOK_KEYSTORE_PROPERTIES`). **Absent file = unsigned build + loud
+      warning** (CI and any other machine keep building), **present but
+      incomplete = build fails naming the missing key**. Both paths were
+      exercised on 2026-09-25 - see `PLAYSTORE_READY_REPORT.md`.
+- [x] `versionCode 2`, `versionName "1.1.0"`, `targetSdk 36` (Play's
+      requirement for new apps since 2026-08-31 is API 36 - verified on
+      support.google.com/googleplay/android-developer/answer/11926878).
+- [x] Signed AAB built and verified with `jarsigner -verify` and
+      `bundletool validate`; a universal APK was derived with `bundletool
+      build-apks --mode=universal` and installed on the emulator (section J).
+
+**Play App Signing (read this before worrying about the key):** Play App
+Signing is mandatory for new apps. Google generates and holds the **app
+signing key** - the one every installed copy is bound to. The key above is
+only the **upload key**: it proves an upload came from Leo. If it is ever lost
+or leaked, Play Console -> Setup -> App signing -> "Request upload key reset"
+issues a new one without stranding a single installed player. That is why it
+can live on one machine instead of a vault. Back it up anyway: copy the
+`.skyhook` folder somewhere private; do **not** commit it.
 
 ## F. Closed testing requirement (time + 12 real testers)
 
