@@ -223,9 +223,19 @@ live, so the account sign-up and "merge this PR" steps are gone.
    release notes from section 16 -> add `leopsantos@hotmail.com` as a tester
    -> Save and publish -> install from the opt-in link on your phone.
    **10 min**, plus Play's processing (minutes to a few hours).
-   Steps 3, 5 and 6 can be done by Crew instead if you fully close Chrome
-   first (so the profile is not locked) and say "go" - you would still tick
-   the step-3 declarations yourself.
+   Steps 5 and 6 can be done by Crew instead once step 3 is done - you tick
+   the step-3 declarations yourself either way.
+   **Update 2026-09-26 18:30Z (after Leo's "go"):** Crew did not reach the
+   Console. Chrome was still open (Leo was using it), so the profile-copy route
+   was not allowed. The Playwright extension bridge (installed and enabled in
+   the Default profile) never connected: Chrome ignores the extension's
+   `connect.html` page when it is opened from the command line, so no tab
+   appeared and the relay timed out. Nothing was created, uploaded, declared or
+   paid, and Chrome was not closed. It is unknown whether steps 2 and 3 are
+   done. To unblock Crew: finish steps 2 + 3, then fully close Chrome (all
+   windows, and the tray icon if "continue running background apps" is on)
+   and say "go". Crew then runs steps 4-6 on a copy of the profile. If you
+   would rather keep Chrome open, steps 4-6 have to be done by hand.
 7. **Back up `C:\Users\leops\.skyhook\`** (keystore + `keystore.properties`)
    somewhere private, not in any repo. **2 min.**
 8. **Start the closed test clock**: Play requires personal accounts created
