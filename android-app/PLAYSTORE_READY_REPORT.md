@@ -236,7 +236,7 @@ live, so the account sign-up and "merge this PR" steps are gone.
    windows, and the tray icon if "continue running background apps" is on)
    and say "go". Crew then runs steps 4-6 on a copy of the profile. If you
    would rather keep Chrome open, steps 4-6 have to be done by hand.
-   **Update 2026-09-26 23:40Z (after Leo's "Try to complete"):** Crew reached
+   **Update 2026-09-26 23:28Z (after Leo's "Try to complete"):** Crew reached
    the Console this time (Leo's Chrome was already closed; a copy of the
    profile was driven with Playwright, then deleted, and Chrome was relaunched
    with his last session). What the Console shows for account **Pechnicki**
@@ -261,4 +261,4 @@ live, so the account sign-up and "merge this PR" steps are gone.
    invite 12 people. **15 min** to set up; the 14 days run on their own.
 Total hands-on: roughly **70 minutes**; the 14-day closed test is the long pole.
 
-Crew Leo Agile dev team, 2026-09-25, updated 2026-09-26 23:40Z.
+Crew Leo Agile dev team, 2026-09-25, updated 2026-09-26 23:28Z.
