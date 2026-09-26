@@ -1,6 +1,7 @@
 # SKYHOOK - Google Play readiness report
 
-Branch `crew/feat/playstore-ready`, 2026-09-25. Everything that can be done
+Branch `crew/feat/playstore-ready`, 2026-09-25, updated 2026-09-26 for
+**vc3 / 1.1.1** (in-game account deletion). Everything that can be done
 for a Play release **without Leo's identity, Leo's money or a Google account**
 has been done and is verified below with the commands and their output. What
 is left is a short list at the very end, with a time estimate per item.
@@ -20,25 +21,38 @@ the upload keystore and its passwords live only in `C:\Users\leops\.skyhook\`
 | playstore-test | `e1e5a63` | release build run on an API 35 emulator, staging sign-in proven, WebView backdrop-tap bug fixed + regression test |
 | playstore-assets | `8c9ad4d` | icon, feature graphic, six real screenshots, listing copy, launcher art, `listing-check.mjs` in CI |
 | playstore-policy | `62acebe` | `privacy.html` on the site, `PLAY_CONSOLE_ANSWERS.md` |
-| playstore-report | this commit | this file + `RELEASE-CHECKLIST.md` brought up to date |
+| playstore-report | `0c1c992` | this file + `RELEASE-CHECKLIST.md` brought up to date |
+| android-finish-accountdelete | `9a2452b` | **in-game account deletion** (Play User Data policy): `delete_my_account()` RPC (schema.sql section 12; SECURITY DEFINER, pinned search_path, no argument, `auth.uid()` only, idempotent, admins refused), "Delete account" + confirm strip in the LEADERBOARD panel (never mid-run), `privacy.html` section 7 and the Data safety answer. Applied and proven end-to-end on **staging only** with a throwaway account (cleaned up) |
+| android-finish-rebuild | `4b2e32a` | versionCode **3** / versionName **1.1.1**, signed bundle, emulator smoke (`docs/EMULATOR_TEST_2026-09-26_vc3.md`) |
+| Kat design review | `79e82f3` | 5 nits fixed: 44px account links, future-tense confirm copy, panel locked while the delete is in flight, danger-tinted strip, actionable fallback text |
+| Axon review round 1 | next commit | privacy sections 1/6/7 match the code; the moderation log keeps the decision but blanks a deleted player's username; an expired sign-in gets "sign in again"; every doc points at the vc3 AAB |
 
 ## 2. The artefact
 
 | | |
 |---|---|
-| Upload this | `C:\Users\leops\.skyhook\out\skyhook-1.1.0-vc2-release-signed.aab` |
-| Size | 12,375,267 bytes |
-| sha256 | `2f2f13adcdd9e9172e15b931405831059441bacc1ea498167e11ed3d900e28f8` |
-| Same bytes as | `android-app/android/app/build/outputs/bundle/release/app-release.aab` (gitignored build output, built 2026-09-25 12:31 local from this branch's `www/`, after the WebView fix and the new launcher art) |
-| Package / version | `com.leopechnicki.skyhook`, versionCode **2**, versionName **1.1.0** |
+| Upload this | `C:\Users\leops\.skyhook\out\skyhook-1.1.1-vc3-release-signed.aab` |
+| Size | 12,377,704 bytes |
+| sha256 | `9ed8ca11195971d8a652451a8133e241bb82a9342bd0aa41c8be840b2f3adb97` |
+| Built | 2026-09-26 17:22 local from this branch's `www/` after `sync-web` + `cap sync` (log `~/.skyhook/build_signed_vc3b.log`); the bundled `assets/public` carries the delete-account UI and every review fix |
+| Package / version | `com.leopechnicki.skyhook`, versionCode **3**, versionName **1.1.1**, release name `1.1.1 (3)` |
 | SDKs | compileSdk 36, **targetSdk 36** (Play's requirement for new apps since 2026-08-31), minSdk 24 (Android 7.0) |
-| Universal APK (for sideloading / emulator only, not for upload) | `skyhook-1.1.0-vc2-release-universal.apk`, 12,716,937 bytes, sha256 `fa9525995de87f378282589dc88bd777676c2e8b66f66d3a4058a9400b06ca0c` |
+| Universal APK (for sideloading / emulator only, not for upload) | `skyhook-1.1.1-vc3-release-universal.apk`, 12,721,033 bytes, sha256 `e73b3b5f16a92d2a99af8e37927364bd12f13fb3a7a526971edca627f20cbdf2` |
+| Superseded, do NOT upload | `skyhook-1.1.0-vc2-release-signed.aab` (sha256 `2f2f13ad...e28f8`, no in-app deletion) and the first vc3 build of 16:59 (sha256 `850af818...280d`, before the review fixes; overwritten) |
 
-The AAB is about 4.6 MB larger than the first signed AAB from unit 3 because
-the launcher / splash art is now real PNG at all densities instead of the
-Capacitor placeholder.
+vc3 checks (2026-09-26): `jarsigner -verify` -> `jar verified.`;
+`bundletool validate` exit 0; manifest `versionCode="3" versionName="1.1.1"`,
+min 24 / target 36, permissions ACCESS_NETWORK_STATE, FOREGROUND_SERVICE,
+INTERNET, WAKE_LOCK and the app's own DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION,
+**0** matches for `AD_ID|BILLING|ADSERVICES`; universal APK `Verifies`, signer
+certificate SHA-256 `e79b258c...268d` (the upload key, same as vc2). Emulator
+(API 35): installs as vc3/1.1.1, production board as a guest, a live run,
+0 `FATAL EXCEPTION`.
 
-### Verification output (`~/.skyhook/verify_final.log`, 2026-09-25 13:08 UTC)
+The vc2 verification below is kept for the signing-key and negative-path
+evidence, which did not change.
+
+### vc2 verification output (`~/.skyhook/verify_final.log`, 2026-09-25 13:08 UTC)
 
 ```
 $ jarsigner -verify skyhook-1.1.0-vc2-release-signed.aab
@@ -149,15 +163,12 @@ saved, so merge before filling in the Console.
 
 ## 5. Follow-ups found on the way (not blockers for internal testing)
 
-1. **In-app account deletion.** Play's User Data policy expects an app that
-   creates accounts in-app to let the user delete the account in-app. Today
-   deletion is by email (privacy policy section 7, `#delete-account`), backed
-   by the owner-side `admin_delete_user()` RPC only. Crew should add a
-   `delete_my_account()` RPC (auth.uid()-scoped, deletes profile + scores,
-   then the auth user) and a confirmed "Delete account" button in the
-   leaderboard panel, then update `privacy.html` section 7 and the Data
-   safety answer. Recommended before the production track, not needed for
-   internal / closed testing.
+1. ~~In-app account deletion.~~ **Done in vc3** (`9a2452b` + review fixes):
+   LEADERBOARD -> Delete account -> Yes, backed by `delete_my_account()`;
+   the email route stays for players who cannot sign in. Still open: the
+   Android Back key with a panel open sends the app to the background (no
+   back handler exists, same in vc2) - a `@capacitor/app` `backButton`
+   listener is the next polish item.
 2. **Email links open the website, not the app.** Sign-up confirmation and
    password reset links go to `https://skyhookplay.com/` (the WebView serves
    from `https://localhost`). The account works in the app after confirming
@@ -204,8 +215,8 @@ Estimated hands-on minutes, excluding Google's own waiting time.
    questionnaire is all "No". **25 min.**
 6. **Upload the AAB to Internal testing**: Release -> Testing -> Internal
    testing -> Create release -> accept Play App Signing (Google-generated
-   key) -> upload `C:\Users\leops\.skyhook\out\skyhook-1.1.0-vc2-release-signed.aab`
-   -> paste the release notes from section 16 -> add your own Google account
+   key) -> upload `C:\Users\leops\.skyhook\out\skyhook-1.1.1-vc3-release-signed.aab`
+   (sha256 `9ed8ca11...adb97`, release name `1.1.1 (3)`) -> paste the release notes from section 16 -> add your own Google account
    as a tester -> Save and publish -> install from the opt-in link on your
    phone. **10 min**, plus Play's processing (minutes to a few hours).
 7. **Back up `C:\Users\leops\.skyhook\`** (keystore + `keystore.properties`)

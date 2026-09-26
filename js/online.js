@@ -1631,7 +1631,15 @@
         }
         return gone === true;
       }, function (err) {
-        throw playerError(err, 'Could not delete the account. Nothing was deleted.', 'deleteAccount');
+        /* An expired sign-in never reaches the function's own 42501: PostgREST
+           answers a dead JWT with 401 / PGRST301, and a refresh that the
+           server refused has already dropped the session. Both are "sign in
+           again", so they get that sentence rather than the generic one. */
+        var why = err;
+        if (!session || (err && (err.status === 401 || err.code === 'PGRST301'))) {
+          why = { code: '42501', status: err && err.status, message: err && err.message };
+        }
+        throw playerError(why, 'Could not delete the account. Nothing was deleted.', 'deleteAccount');
       });
     }
   };

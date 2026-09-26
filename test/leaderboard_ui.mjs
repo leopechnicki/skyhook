@@ -1384,6 +1384,17 @@ async function main() {
         !!(await dpage.evaluate('localStorage.getItem("skyhook.session")')));
       await dpage.screenshot({ path: path.join(HERE, 'screenshots', 'delete-03-refused.png') });
 
+      /* ---- a sign-in the server calls dead gets "sign in again", not a shrug ---- */
+      selfDeleteFailure = { status: 401, body: { code: 'PGRST301', message: 'JWT expired' } };
+      await dpage.locator('#ol-delete-account').click();
+      await wait(700);
+      await dpage.locator('#ol-delete-yes').click();
+      await wait(500);
+      check('an expired sign-in is told to sign in again, and that nothing was deleted',
+        /sign-in has expired/i.test(await dpage.locator('#ol-board-msg').textContent()) &&
+        /not deleted/i.test(await dpage.locator('#ol-board-msg').textContent()),
+        await dpage.locator('#ol-board-msg').textContent());
+
       /* ---- the real thing ---- */
       await dpage.evaluate(`localStorage.setItem('skyhook.pendingRun', JSON.stringify({ score: 999, hooks: 9, altitude: 90, durationMs: 20000 }))`);
       const sentBefore = delCalls().length;

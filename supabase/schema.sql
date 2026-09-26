@@ -1194,9 +1194,13 @@ grant  execute on function public.admin_board(integer) to authenticated;
 --     they with any other address, which is why a ban was never an identity
 --     wall; section 3b's review is what catches a returning bot.
 --
--- Nothing is written to admin_audit: this is not an admin action, and a row
--- keeping the username of somebody who asked to be forgotten would be the
--- opposite of what they asked for.
+-- Nothing NEW is written to admin_audit: this is not an admin action. Rows
+-- that are already there - a player who was once banned or unbanned - have
+-- no foreign key and would otherwise keep that player's username after they
+-- asked to be forgotten, so the username is blanked on them first. What stays
+-- is the moderation decision itself (who acted, what, why, when) against a
+-- uuid that no longer resolves to any account: the admin's record of their
+-- own action, with nothing left in it that names the player.
 create or replace function public.delete_my_account()
 returns boolean
 language plpgsql
@@ -1215,6 +1219,7 @@ begin
       using errcode = '22023';
   end if;
 
+  update public.admin_audit set target_username = null where target_id = me;
   delete from auth.users where id = me;
   get diagnostics gone = row_count;
   return gone > 0;

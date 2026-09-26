@@ -147,7 +147,8 @@ longer true and the whole section is now satisfied:
       warning** (CI and any other machine keep building), **present but
       incomplete = build fails naming the missing key**. Both paths were
       exercised on 2026-09-25 - see `PLAYSTORE_READY_REPORT.md`.
-- [x] `versionCode 2`, `versionName "1.1.0"`, `targetSdk 36` (Play's
+- [x] `versionCode 3`, `versionName "1.1.1"` (2026-09-26, adds in-game
+      account deletion; vc2 / 1.1.0 was never uploaded), `targetSdk 36` (Play's
       requirement for new apps since 2026-08-31 is API 36 - verified on
       support.google.com/googleplay/android-developer/answer/11926878).
 - [x] Signed AAB built and verified with `jarsigner -verify` and
@@ -171,9 +172,10 @@ can live on one machine instead of a vault. Back it up anyway: copy the
 
 ## G. Upload & release
 
-- [x] Signed AAB ready: `C:\Users\leops\.skyhook\out\skyhook-1.1.0-vc2-release-signed.aab`
-      (12,375,267 bytes, sha256 `2f2f13ad...e28f8`, verified in
-      `PLAYSTORE_READY_REPORT.md` section 2).
+- [x] Signed AAB ready: `C:\Users\leops\.skyhook\out\skyhook-1.1.1-vc3-release-signed.aab`
+      (12,377,704 bytes, sha256 `9ed8ca11...adb97`, verified in
+      `PLAYSTORE_READY_REPORT.md` section 2). The vc2 file is superseded -
+      it has no in-app deletion, which the Data safety form declares.
 - [ ] Upload it to a track (internal -> closed -> production). Bump
       `versionCode` in `android/app/build.gradle` before every further upload.
 - [ ] Complete pre-launch report review, roll out.
@@ -218,7 +220,8 @@ What still needs a real account:
 - [x] Signed release universal APK (derived from the Play AAB, production
       config) installed on a Pixel 6 / Android 15 (API 35) AVD: title, runs,
       game over, customiser and the guest leaderboard driven by real `adb`
-      taps; `dumpsys package` confirms versionCode 2, targetSdk 36, not
+      taps; `dumpsys package` confirms versionCode 2 (vc3 re-run on
+      2026-09-26: `docs/EMULATOR_TEST_2026-09-26_vc3.md`), targetSdk 36, not
       debuggable, only INTERNET / ACCESS_NETWORK_STATE / WAKE_LOCK /
       FOREGROUND_SERVICE.
 - [x] Sign-in, session persistence, score submit and `my_rank` proven inside

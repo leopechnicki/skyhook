@@ -6,8 +6,17 @@ repo in `~/.skyhook/shots/vc3/` (sha256 prefixes below).
 
 | Build | sha256 |
 |---|---|
-| `skyhook-1.1.1-vc3-release-signed.aab` (the Play upload) | `850af81841c7060cb779c77b70e5b9c7b5dc2ee5460ea0dfdec33f0f98ed280d` |
-| `skyhook-1.1.1-vc3-release-universal.apk` (bundletool `--mode=universal` from that AAB, same upload key) | `3dde6117824bd7eedda2973d13d6bcb6254e304c7566e94f15e203e0921e33d6` |
+| **Final** `skyhook-1.1.1-vc3-release-signed.aab` (17:22, after the Kat and Axon fixes - the Play upload) | `9ed8ca11195971d8a652451a8133e241bb82a9342bd0aa41c8be840b2f3adb97` |
+| Final `skyhook-1.1.1-vc3-release-universal.apk` (bundletool `--mode=universal` from that AAB, same upload key) | `e73b3b5f16a92d2a99af8e37927364bd12f13fb3a7a526971edca627f20cbdf2` |
+| First vc3 AAB (16:59, superseded, overwritten) | `850af81841c7060cb779c77b70e5b9c7b5dc2ee5460ea0dfdec33f0f98ed280d` |
+| First vc3 universal APK (16:59, superseded) | `3dde6117824bd7eedda2973d13d6bcb6254e304c7566e94f15e203e0921e33d6` |
+
+The frame table below is the first build. The final build was re-run the same
+way (`~/.skyhook/shots/vc3b/`): fresh install, `dumpsys` versionCode=3
+versionName=1.1.1, title `a266e4705a3d187d`, production board as a guest
+`f49471d4a3a139c3`, a live run (score 30, x2) `16c8bfe3a96758a4`, 0
+`FATAL EXCEPTION`. Build checks for it: `~/.skyhook/build_signed_vc3b.log`
+(same results as below).
 
 Build checks (`~/.skyhook/build_signed_vc3.log`): gradle `bundleRelease`
 BUILD SUCCESSFUL, signed with the upload key (cert SHA-256 `e79b258c...268d`,

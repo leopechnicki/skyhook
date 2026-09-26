@@ -1002,7 +1002,10 @@
          player is still signed in and the line can say so. */
       text(el['ol-board-msg'],
         safeMessage(err, 'Could not delete the account. Nothing was deleted.'), true);
-      try { el['ol-delete-account'].focus(); } catch (e) { /* ignore */ }
+      /* A failed refresh signs the player out on the way, and then the
+         delete link is hidden - send focus where the next step is. */
+      var next = Online.state().signedIn ? 'ol-delete-account' : 'ol-signin';
+      try { el[next].focus(); } catch (e) { /* ignore */ }
     });
   }
 

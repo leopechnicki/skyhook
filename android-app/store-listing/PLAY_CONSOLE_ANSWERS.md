@@ -229,10 +229,13 @@ manifest and this answer in step.
 ## 15. Testing tracks (what to do with the AAB)
 
 1. **Internal testing** first: Release > Testing > Internal testing > Create
-   release > upload `skyhook-1.1.0-vc2-release-signed.aab` (path and hashes
-   in `android-app/PLAYSTORE_READY_REPORT.md`). Play App Signing: accept
-   "Use Google-generated key" - Google creates the app signing key, the AAB
-   was signed with the upload key only. Release name `1.1.0 (2)`.
+   release > upload `skyhook-1.1.1-vc3-release-signed.aab` (sha256
+   `9ed8ca11195971d8a652451a8133e241bb82a9342bd0aa41c8be840b2f3adb97`; path
+   in `android-app/PLAYSTORE_READY_REPORT.md` section 2). It is the first
+   build with the in-game account deletion that section 9 declares - never
+   upload the older vc2 file. Play App Signing: accept "Use Google-generated
+   key" - Google creates the app signing key, the AAB was signed with the
+   upload key only. Release name `1.1.1 (3)`.
 2. Add tester emails (Leo's own Google account is enough for internal) and
    open the opt-in link on a phone.
 3. Only afterwards, **Closed testing**: Play requires new personal developer

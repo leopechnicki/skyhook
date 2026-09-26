@@ -140,8 +140,19 @@ async function main() {
   await submit(ALICE, 3100);
   await submit(BOB, 2000);
   await submit(BANNED, 1500);
+  /* Moderated through the real section-11 functions, so admin_audit holds
+     the rows a real moderated player would have: BANNED is banned, BOB was
+     banned and unbanned (and must keep his name in the log). */
+  await as(ADMIN);
+  await db.query(`select public.admin_ban_user($1, 'automated play')`, [BANNED]);
+  await db.query(`select public.admin_ban_user($1, 'mistake')`, [BOB]);
+  await db.query(`select public.admin_unban_user($1)`, [BOB]);
   await asOwner();
-  await db.query(`insert into public.bans (user_id, banned_by, reason) values ($1, $2, 'test')`, [BANNED, ADMIN]);
+  const auditOf = async (uid) => (await db.query(
+    `select action, target_username, reason from public.admin_audit where target_id = $1 order by id`, [uid])).rows;
+  check('setup: the moderated players have audit rows naming them',
+    (await auditOf(BANNED)).length === 1 && (await auditOf(BANNED))[0].target_username === 'ad_banned' &&
+    (await auditOf(BOB)).length === 2, JSON.stringify(await auditOf(BANNED)));
 
   /* ---- signed out ---- */
   await as(null);
@@ -180,6 +191,13 @@ async function main() {
   check('a banned player can delete their own account (the right to leave is not a privilege)',
     r.ok && r.rows[0].gone === true, r.message);
   check('...and the ban row goes with it', JSON.stringify(await leftOf(BANNED)) === NONE, JSON.stringify(await leftOf(BANNED)));
+  await asOwner();
+  const kept = await auditOf(BANNED);
+  check('...the moderation record stays, but no longer names the player',
+    kept.length === 1 && kept[0].action === 'ban' && kept[0].reason === 'automated play' &&
+    kept[0].target_username === null, JSON.stringify(kept));
+  check('...and the audit rows of other players are untouched',
+    (await auditOf(BOB)).every(x => x.target_username === 'ad_bob'), JSON.stringify(await auditOf(BOB)));
 
   /* ---- an admin cannot remove themselves in one tap ---- */
   await as(ADMIN);
