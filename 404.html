@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SKYHOOK has moved</title>
+
+<!-- SKYHOOK - GitHub Pages redirect stub, for every path that is not the root.
+     Source of truth: pages/404.html on main.
+
+     The `gh-pages` branch contains two files, so everything except `/` is a
+     Pages 404 and GitHub serves THIS. That is what catches an old deep link
+     like /skyhook/screenshot.png or a bookmark with a trailing path, and sends
+     it to its counterpart on the new origin rather than to a dead end.
+
+     The status code is still 404 - GitHub Pages will not let a branch-published
+     site return a 301, which is exactly why the whole stub is meta+JS rather
+     than a real redirect - but a browser runs the script regardless, so a human
+     following an old link never sees it. Crawlers see the 404 and drop the
+     retired URL, which for a retired mirror is the correct outcome.
+
+     The redirect logic below is a byte-for-byte copy of the one in
+     pages/index.html; test/pages_stub.mjs fails the build if they drift. -->
+
+<script>
+/* The other stub in pages/ carries this block verbatim. test/pages_stub.mjs
+   compares the two byte for byte and fails if they drift apart. */
+(function () {
+  var HOME = 'https://skyhookplay.com/';
+  var BASE = '/skyhook/';
+  try {
+    var l = window.location;
+    var path = l.pathname || '';
+    /* Everything after the project-pages base is a real subpath and belongs on
+       the new origin too, so an old deep link lands on its counterpart rather
+       than dumping everyone on the front page. */
+    var rest = path.indexOf(BASE) === 0 ? path.slice(BASE.length) : '';
+    l.replace(HOME + rest + (l.search || '') + (l.hash || ''));
+  } catch (e) {
+    window.location.href = HOME;
+  }
+})();
+</script>
+
+<meta http-equiv="refresh" content="0; url=https://skyhookplay.com/">
+<link rel="canonical" href="https://skyhookplay.com/">
+
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #060713;
+    color: #cfd6ff;
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 24px;
+  }
+  h1 { font-size: 20px; letter-spacing: .18em; color: #35e6ff; margin: 0 0 12px; }
+  a { color: #35e6ff; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>SKYHOOK HAS MOVED</h1>
+    <p>The game now lives at <a href="https://skyhookplay.com/">skyhookplay.com</a>.</p>
+    <p>Taking you there now. If nothing happens,
+       <a href="https://skyhookplay.com/">tap here</a>.</p>
+  </main>
+</body>
+</html>
