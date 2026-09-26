@@ -1,17 +1,18 @@
 # SKYHOOK - Google Play readiness report
 
-Branch `crew/feat/playstore-ready`, 2026-09-25, updated 2026-09-26 for
-**vc3 / 1.1.1** (in-game account deletion). Everything that can be done
+Written on branch `crew/feat/playstore-ready` on 2026-09-25; updated
+2026-09-26 for **vc3 / 1.1.1** (in-game account deletion) and merged to
+`main` through PR #34 after review. Everything that can be done
 for a Play release **without Leo's identity, Leo's money or a Google account**
 has been done and is verified below with the commands and their output. What
 is left is a short list at the very end, with a time estimate per item.
 
 Nothing was published, no account of any kind was created, no money was
-spent, `main` was not pushed to, `.env` / `config.json` were not touched, and
+spent, `main` only changed through reviewed PRs, `.env` / `config.json` were not touched, and
 the upload keystore and its passwords live only in `C:\Users\leops\.skyhook\`
 (outside every git tree).
 
-## 1. What is on this branch
+## 1. What was built (merged to `main` as `8b4943e`, PR #34)
 
 | Unit | Commit | What |
 |---|---|---|
@@ -25,7 +26,9 @@ the upload keystore and its passwords live only in `C:\Users\leops\.skyhook\`
 | android-finish-accountdelete | `9a2452b` | **in-game account deletion** (Play User Data policy): `delete_my_account()` RPC (schema.sql section 12; SECURITY DEFINER, pinned search_path, no argument, `auth.uid()` only, idempotent, admins refused), "Delete account" + confirm strip in the LEADERBOARD panel (never mid-run), `privacy.html` section 7 and the Data safety answer. Applied and proven end-to-end on **staging only** with a throwaway account (cleaned up) |
 | android-finish-rebuild | `4b2e32a` | versionCode **3** / versionName **1.1.1**, signed bundle, emulator smoke (`docs/EMULATOR_TEST_2026-09-26_vc3.md`) |
 | Kat design review | `79e82f3` | 5 nits fixed: 44px account links, future-tense confirm copy, panel locked while the delete is in flight, danger-tinted strip, actionable fallback text |
-| Axon review round 1 | next commit | privacy sections 1/6/7 match the code; the moderation log keeps the decision but blanks a deleted player's username; an expired sign-in gets "sign in again"; every doc points at the vc3 AAB |
+| Axon review round 1 | `0848b88` | privacy sections 1/6/7 match the code; the moderation log keeps the decision but blanks a deleted player's username; an expired sign-in gets "sign in again"; every doc points at the vc3 AAB |
+| android-finish-merge | `8b4943e` on `main` | Axon **APPROVE** (round 2) + CI green -> `delete_my_account()` applied to **production** first (rolled-back dry run, then applied; secdef, pinned search_path, no args, anon revoked; data counts unchanged; prod anon call answers 401/42501) -> PR #34 squash-merged 2026-09-26 15:30 UTC -> fly.io deploy succeeded; `https://skyhookplay.com/privacy.html` 200 with the new section 7 (effective 26 September 2026); live game boots, board loads, 0 page errors |
+| android-finish-playconsole | - (no code) | Play Console checked read-only with a copy of Leo's Chrome profile: a developer account **"Pechnicki"** exists under leopsantos@hotmail.com (account chooser, `crew/data/skyhook_playconsole_20260926/02-play-console.png`). Its verification state and app list could **not** be read: the running Chrome locks its cookie store, so the copy lost the Google session on the next load (redirect to the public google.play page). Stopped there - no app created, nothing uploaded, no declaration answered, nothing paid |
 
 ## 2. The artefact
 
@@ -191,42 +194,44 @@ saved, so merge before filling in the Console.
 
 ## 6. What only Leo can do (in this order)
 
-Estimated hands-on minutes, excluding Google's own waiting time.
+Estimated hands-on minutes, excluding Google's own waiting time. Updated
+2026-09-26: the developer account already exists and the privacy page is
+live, so the account sign-up and "merge this PR" steps are gone.
 
-1. **Create the Google Play Developer account** at
-   play.google.com/console/signup with the Google account that should own
-   the app. Pay the one-time **$25**, enter legal name and address, upload an
-   ID for identity verification. About **20 min** of form filling; Google's
-   verification usually completes within 1-3 days.
-2. **Create the app**: "Create app" -> name `SKYHOOK`, English (UK), Game,
-   Free, tick both declarations. **3 min.** (Section 1 of
+1. **Rotate the staging database password** (Supabase -> staging project ->
+   Database settings -> reset). Independent of everything below. **3 min.**
+2. **Open the developer account**: play.google.com/console in your Chrome ->
+   choose **Pechnicki** -> check the home page for any "verify your
+   identity / phone / device" task and finish it if one is open (Crew could
+   not see this page). **5 min**, plus Google's check if one was pending.
+3. **Create the app**: "Create app" -> name `SKYHOOK`, English (UK), Game,
+   Free, tick both declarations yourself. **3 min.** (Section 1 of
    `PLAY_CONSOLE_ANSWERS.md`.)
-3. **Merge this PR** (after Axon's review and green CI) so
-   `https://skyhookplay.com/privacy.html` is live, then check it opens in a
-   browser. **2 min.**
 4. **Create a reviewer account on production** for the "App access" answer:
    open the game at skyhookplay.com, sign up with a throwaway email, confirm
-   it, and paste that email + password into section 3 of
-   `PLAY_CONSOLE_ANSWERS.md` / the Console. **5 min.**
+   it, and paste that email + password into the Console (section 3 of
+   `PLAY_CONSOLE_ANSWERS.md`). **5 min.**
 5. **Fill the Store listing and App content pages** by pasting from
    `LISTING.md` and `PLAY_CONSOLE_ANSWERS.md` and uploading
    `icon-512.png`, `feature-graphic-1024x500.jpg` and the six screenshots
-   from `android-app/store-listing/`. Every answer is pre-written; the IARC
-   questionnaire is all "No". **25 min.**
+   from `android-app/store-listing/`. Privacy policy URL:
+   `https://skyhookplay.com/privacy.html` (live). **25 min.**
 6. **Upload the AAB to Internal testing**: Release -> Testing -> Internal
    testing -> Create release -> accept Play App Signing (Google-generated
    key) -> upload `C:\Users\leops\.skyhook\out\skyhook-1.1.1-vc3-release-signed.aab`
-   (sha256 `9ed8ca11...adb97`, release name `1.1.1 (3)`) -> paste the release notes from section 16 -> add your own Google account
-   as a tester -> Save and publish -> install from the opt-in link on your
-   phone. **10 min**, plus Play's processing (minutes to a few hours).
+   (sha256 `9ed8ca11...adb97`, release name `1.1.1 (3)`) -> paste the
+   release notes from section 16 -> add `leopsantos@hotmail.com` as a tester
+   -> Save and publish -> install from the opt-in link on your phone.
+   **10 min**, plus Play's processing (minutes to a few hours).
+   Steps 3, 5 and 6 can be done by Crew instead if you fully close Chrome
+   first (so the profile is not locked) and say "go" - you would still tick
+   the step-3 declarations yourself.
 7. **Back up `C:\Users\leops\.skyhook\`** (keystore + `keystore.properties`)
    somewhere private, not in any repo. **2 min.**
 8. **Start the closed test clock**: Play requires personal accounts created
    after Nov 2023 to run a closed test with **12 testers for 14 days** before
    production access. Promote the internal release to Closed testing and
    invite 12 people. **15 min** to set up; the 14 days run on their own.
+Total hands-on: roughly **70 minutes**; the 14-day closed test is the long pole.
 
-Total hands-on: roughly **80 minutes**, spread over the days Google takes to
-verify the account and process the first upload.
-
-Crew Leo Agile dev team, 2026-09-25.
+Crew Leo Agile dev team, 2026-09-25, updated 2026-09-26.
