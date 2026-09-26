@@ -58,9 +58,10 @@ android {
         // 1 / "1.0" was the 2026-09-22 unsigned inspection build (never
         // uploaded). 2 / "1.1.0" is the first Play-ready build: ship
         // customiser (#30), account settings (#28), bot defence (#32),
-        // moderation (#33), ad-free.
-        versionCode 2
-        versionName "1.1.0"
+        // moderation (#33), ad-free. 3 / "1.1.1" adds in-game account
+        // deletion (Play User Data policy) and the review fixes of PR #34.
+        versionCode 3
+        versionName "1.1.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
