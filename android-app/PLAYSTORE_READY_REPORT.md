@@ -236,6 +236,23 @@ live, so the account sign-up and "merge this PR" steps are gone.
    windows, and the tray icon if "continue running background apps" is on)
    and say "go". Crew then runs steps 4-6 on a copy of the profile. If you
    would rather keep Chrome open, steps 4-6 have to be done by hand.
+   **Update 2026-09-26 23:40Z (after Leo's "Try to complete"):** Crew reached
+   the Console this time (Leo's Chrome was already closed; a copy of the
+   profile was driven with Playwright, then deleted, and Chrome was relaunched
+   with his last session). What the Console shows for account **Pechnicki**
+   (ID 7567282736873588679): *"Your developer profile and all apps were
+   removed from Google Play on 22 September 2026"*, with two "Action
+   required" issues - (a) **Google Play could not verify your identity**
+   (fix: upload a new document addressing the problems described in the
+   e-mails from payments-noreply@google.com), and (b) **contact phone number
+   not verified** (only possible after (a) is approved: Account details ->
+   Verify -> SMS/call code). "Create app" is locked until both are done, so
+   nothing could be created, filled, declared or uploaded. Both fixes need
+   Leo's own ID document and phone, which Crew must never touch. Screenshots:
+   `crew/data/skyhook_playconsole_20260926/complete_0[1-5]_*.png` in
+   leo-agents-v2. Everything else is ready and unchanged (signed vc3 AAB,
+   listing, answers, reviewer account) - once Google re-approves the account
+   and the phone is verified, say "go" and Crew reruns steps 3-6 as they are.
 7. **Back up `C:\Users\leops\.skyhook\`** (keystore + `keystore.properties`)
    somewhere private, not in any repo. **2 min.**
 8. **Start the closed test clock**: Play requires personal accounts created
@@ -244,4 +261,4 @@ live, so the account sign-up and "merge this PR" steps are gone.
    invite 12 people. **15 min** to set up; the 14 days run on their own.
 Total hands-on: roughly **70 minutes**; the 14-day closed test is the long pole.
 
-Crew Leo Agile dev team, 2026-09-25, updated 2026-09-26.
+Crew Leo Agile dev team, 2026-09-25, updated 2026-09-26 23:40Z.
