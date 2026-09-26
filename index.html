@@ -80,14 +80,28 @@
         <p id="ol-account" class="ol-account"></p>
         <!-- The account line said "Signed in as leo" and stopped there, so
              the only thing a signed-in player could do with their account was
-             leave it. These two are the way in to changing the name on the
-             board and the password behind it. They are hidden by
+             leave it. These are the way in to changing the name on the
+             board and the password behind it, and to deleting the account
+             (Google Play requires that in-app). They are hidden by
              js/ui_online.js whenever they would not work - signed out, and
              during a run - because a link that cannot do its job should not
              be drawn. -->
         <div class="ol-account-links" id="ol-account-links" hidden>
           <button type="button" id="ol-edit-name" class="ol-link">Change username</button>
           <button type="button" id="ol-edit-password" class="ol-link">Change password</button>
+          <button type="button" id="ol-delete-account" class="ol-link is-danger">Delete account</button>
+        </div>
+        <!-- "Delete account" only opens this question; nothing is sent until
+             the red button is pressed (Google Play's in-app deletion rule,
+             supabase/schema.sql section 12). -->
+        <div id="ol-delete-confirm" class="ol-modbar ol-delete-confirm" role="group"
+             aria-labelledby="ol-delete-q" hidden>
+          <p id="ol-delete-q" class="ol-modq">Delete your account for good? Your
+            username, your sign-in and every score you have on the board are
+            deleted now. Your best score and ship paint on this device stay.
+            This cannot be undone.</p>
+          <button type="button" id="ol-delete-keep" class="ol-modbtn">KEEP MY ACCOUNT</button>
+          <button type="button" id="ol-delete-yes" class="ol-modbtn is-danger">YES, DELETE MY ACCOUNT</button>
         </div>
         <ol id="ol-list" class="ol-list"></ol>
         <p id="ol-board-msg" class="ol-msg" role="status" aria-live="polite"></p>

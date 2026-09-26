@@ -202,6 +202,11 @@ body {
   min-height: 40px;
   font-size: 12px;
 }
+/* The one irreversible account action is drawn in the danger colour the
+   admin Delete already uses, so it never reads as a peer of the two edits. */
+.ol-account-links .ol-link.is-danger { color: #ff8ca3; }
+.ol-account-links .ol-link.is-danger:hover { color: #ffb3c2; }
+.ol-delete-confirm { margin: -4px 0 12px; }
 
 /* ---- the board ---- */
 .ol-list {

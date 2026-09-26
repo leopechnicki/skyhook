@@ -138,21 +138,20 @@ would then have to flip (only matters once ads exist).
 |---|---|
 | Does your app collect or share any of the required user data types? | **Yes** (only if the player creates the optional leaderboard account) |
 | Is all of the user data collected by your app encrypted in transit? | **Yes** - every request goes to `https://ievfcqnyrekdixxbsite.supabase.co` over TLS; the WebView loads the game from the app's own assets and makes no plain-HTTP request. |
-| Do you provide a way for users to request that their data is deleted? | **Yes** |
+| Do you provide a way for users to request that their data is deleted? | **Yes** - in the app (LEADERBOARD -> Delete account, immediate) and by email via the deletion URL below |
 | Does your app allow users to create an account? | **Yes** (email + password, optional) |
 | Account deletion URL | `https://skyhookplay.com/privacy.html#delete-account` |
 | Can users request deletion of some data without deleting the account? | **No** - a run cannot stay on the board without the account it belongs to; deletion is all-or-nothing. |
 
-**Honest caveat, for Leo:** Play's User Data policy asks apps that let users
-create an account in-app to also let them **delete it in-app**. Today the game
-has no self-service delete button - only the owner-side
-`admin_delete_user()` in `supabase/schema.sql` - so the deletion route is the
-email address on the policy page (which satisfies the form's URL requirement).
-This is enough to upload to internal testing. Crew should add a
-`delete_my_account()` RPC plus a confirmed "Delete account" button in the
-leaderboard panel before production; it is listed as a follow-up in
-`PLAYSTORE_READY_REPORT.md`. When it lands, update section 7 of
-`privacy.html` and this table.
+**In-app deletion (Play User Data policy): done.** Signed-in players delete
+their own account from the game itself: LEADERBOARD -> "Delete account" ->
+"Yes, delete my account". It calls the `delete_my_account()` RPC
+(`supabase/schema.sql` section 12), which deletes the auth user and, by
+cascade, the profile (username, ship colours), every run and any ban row,
+immediately; `privacy.html` section 7 describes both routes. The deletion URL
+above still matters: it is where a player who can no longer sign in (or who
+uninstalled the app) asks by email, and it is the web resource the Console
+form requires.
 
 ### Data types (tick exactly these; everything else stays unticked)
 

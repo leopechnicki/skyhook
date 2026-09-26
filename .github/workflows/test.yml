@@ -99,6 +99,13 @@ jobs:
       - name: Moderation (admin ban / unban / delete on Postgres)
         run: node test/moderation_db.mjs
 
+      # A player deleting their OWN account (schema.sql section 12, Google
+      # Play's in-app deletion rule), on the same PGlite stand-in: own account
+      # only, no argument to tamper with, everything cascades, idempotent,
+      # anon and admins refused.
+      - name: Self-service account deletion on Postgres
+        run: node test/account_delete_db.mjs
+
       # The one canonical origin, both halves of it. index.html has to DECLARE
       # https://skyhookplay.com rather than have nginx correct it on the way
       # out, and pages/ has to redirect the retired GitHub Pages URL there

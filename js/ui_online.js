@@ -42,7 +42,8 @@
   var SOFT_IDS = ['ol-email-label', 'ol-email-hint', 'ol-username-label',
     'ol-username-hint', 'ol-forgot', 'ol-email-field', 'ol-password-field',
     'ol-password-label', 'ol-account-links', 'ol-edit-name', 'ol-edit-password',
-    'ol-password2-field', 'ol-password2', 'ol-password2-label'];
+    'ol-password2-field', 'ol-password2', 'ol-password2-label',
+    'ol-delete-account', 'ol-delete-confirm', 'ol-delete-yes', 'ol-delete-keep'];
 
   function collect() {
     for (var i = 0; i < IDS.length; i++) {
@@ -504,11 +505,15 @@
     if (el['ol-edit-password']) {
       el['ol-edit-password'].hidden = !el['ol-password2'];
     }
+    if (el['ol-delete-account']) {
+      el['ol-delete-account'].hidden = !(el['ol-delete-confirm'] && el['ol-delete-yes'] && el['ol-delete-keep']);
+    }
   }
 
   /* ------------------------------------------------------------ the views */
 
   function showBoard(notice) {
+    closeDeleteConfirm();
     boardNotice = notice || '';
     el['ol-board'].hidden = false;
     el['ol-auth'].hidden = true;
@@ -640,6 +645,7 @@
     if (!wired || !open) return;
     open = false;
     downOnBackdrop = false;
+    closeDeleteConfirm();
     el.ol.hidden = true;
     el.ol.setAttribute('aria-hidden', 'true');
     el['ol-password'].value = '';
@@ -915,6 +921,81 @@
       true);
   }
 
+  /* DELETING THE ACCOUNT (Google Play's in-app deletion requirement; the
+   * server half is supabase/schema.sql section 12).
+   *
+   * Two taps, never one: "Delete account" only opens a strip under the
+   * account line that says what goes and what stays, and nothing is sent
+   * until "Yes, delete my account" is pressed. That button renders where the
+   * link was just tapped, so - like the admin delete above - it wakes up
+   * after a beat and focus starts on the safe choice: a double tap or a held
+   * Enter cannot answer the question.
+   *
+   * Same door rule as the other account actions: canEditAccount() is checked
+   * when the strip opens AND again when "Yes" is pressed, because a run can
+   * start in between and SK.UI.open() is a public handle. */
+  var deleteTimer = null;
+
+  /* Returns whether a strip was actually open, so Escape knows whether it
+     consumed the key. */
+  function closeDeleteConfirm() {
+    if (deleteTimer) { clearTimeout(deleteTimer); deleteTimer = null; }
+    var box = el['ol-delete-confirm'];
+    if (!box || box.hidden) return false;
+    box.hidden = true;
+    if (el['ol-account-links']) el['ol-account-links'].hidden = !canEditAccount();
+    return true;
+  }
+
+  function onDeleteAccount() {
+    if (busy) return;
+    if (!canEditAccount()) { closeDeleteConfirm(); refuseAccountEdit(); return; }
+    var box = el['ol-delete-confirm'];
+    var yes = el['ol-delete-yes'];
+    var keep = el['ol-delete-keep'];
+    if (!box || !yes || !keep) return;
+    text(el['ol-board-msg'], '');
+    if (el['ol-account-links']) el['ol-account-links'].hidden = true;
+    box.hidden = false;
+    keep.disabled = false;
+    yes.disabled = true;
+    if (deleteTimer) clearTimeout(deleteTimer);
+    deleteTimer = setTimeout(function () { deleteTimer = null; yes.disabled = false; }, 600);
+    try { keep.focus(); } catch (e) { /* ignore */ }
+  }
+
+  function onDeleteKeep() {
+    if (busy) return;
+    closeDeleteConfirm();
+    try { el['ol-delete-account'].focus(); } catch (e) { /* ignore */ }
+  }
+
+  function onDeleteYes() {
+    if (busy) return;
+    if (!canEditAccount()) { closeDeleteConfirm(); refuseAccountEdit(); return; }
+    setBusy(true);
+    el['ol-delete-yes'].disabled = true;
+    el['ol-delete-keep'].disabled = true;
+    text(el['ol-board-msg'], 'Deleting your account...');
+    Online.deleteMyAccount().then(function () {
+      setBusy(false);
+      el['ol-delete-keep'].disabled = false;
+      syncGame();
+      showBoard('Your account is deleted: your name, your sign-in and every score ' +
+        'you had on the board are gone. You are playing as a guest.');
+      try { el['ol-signin'].focus(); } catch (e) { /* ignore */ }
+    }, function (err) {
+      setBusy(false);
+      el['ol-delete-keep'].disabled = false;
+      closeDeleteConfirm();
+      /* Online.deleteMyAccount changed nothing locally on failure, so the
+         player is still signed in and the line can say so. */
+      text(el['ol-board-msg'],
+        safeMessage(err, 'Could not delete the account. Nothing was deleted.'), true);
+      try { el['ol-delete-account'].focus(); } catch (e) { /* ignore */ }
+    });
+  }
+
   function onSignOut() {
     Online.signOut().then(function () {
       syncGame();
@@ -1006,6 +1087,11 @@
     el['ol-signout'].addEventListener('click', onSignOut);
     if (el['ol-edit-name']) el['ol-edit-name'].addEventListener('click', onEditName);
     if (el['ol-edit-password']) el['ol-edit-password'].addEventListener('click', onEditPassword);
+    if (el['ol-delete-account'] && el['ol-delete-yes'] && el['ol-delete-keep']) {
+      el['ol-delete-account'].addEventListener('click', onDeleteAccount);
+      el['ol-delete-yes'].addEventListener('click', onDeleteYes);
+      el['ol-delete-keep'].addEventListener('click', onDeleteKeep);
+    }
 
     /* Google is an extra opt-in in the Supabase dashboard, not something a
        project has by default - docs/LEADERBOARD_SETUP.md step 3 is a whole
@@ -1084,6 +1170,11 @@
       if (e.key === 'Escape') {
         /* An open moderation strip is the innermost thing - close that. */
         if (modOpen) { closeMod(); return; }
+        /* ...and so is the delete-account question: Escape answers "keep". */
+        if (!busy && closeDeleteConfirm()) {
+          try { el['ol-delete-account'].focus(); } catch (err) { /* ignore */ }
+          return;
+        }
         closeOverlay();
         return;
       }

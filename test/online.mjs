@@ -869,17 +869,25 @@ const WRONG = 'the-one-somebody-else-guessed';
   check('the public view selects no email column',
     !/create or replace view public\.leaderboard[\s\S]*?;/i.test(sql) ||
     !/create or replace view public\.leaderboard[\s\S]*?;/i.exec(sql)[0].toLowerCase().includes('email'));
-  /* The one statement allowed to name auth.users is the admin account delete
-     (section 11): it removes a row and returns nothing, so it exposes no
-     column. Comments are stripped first, and it must be exactly that one
-     statement - any other SELECT, JOIN or second delete still fails this. */
+  /* The only statements allowed to name auth.users are the two account
+     deletes: the admin's (section 11) and the player's own (section 12). Each
+     removes a row and returns nothing, so neither exposes a column. Comments
+     are stripped first, and each must appear exactly once - any other SELECT,
+     JOIN or extra delete still fails this. */
   {
     const ADMIN_DELETE = 'delete from auth.users where id = target;';
+    const SELF_DELETE = 'delete from auth.users where id = me;';
     const code = sql.replace(/--[^\n]*/g, '').replace(/\s+/g, ' ').toLowerCase();
-    const deletes = code.split(ADMIN_DELETE).length - 1;
+    const admin = code.split(ADMIN_DELETE).length - 1;
+    const self = code.split(SELF_DELETE).length - 1;
+    const rest = code.split(ADMIN_DELETE).join('').split(SELF_DELETE).join('');
     check('no view or function anywhere exposes auth.users columns to the client',
-      deletes === 1 && !/(from|join) auth\.users/.test(code.split(ADMIN_DELETE).join('')),
-      'admin deletes: ' + deletes);
+      admin === 1 && self === 1 && !/(from|join) auth\.users/.test(rest),
+      'admin deletes: ' + admin + ', self deletes: ' + self);
+    check('the self-service delete takes no argument, reads auth.uid() and is closed to anon',
+      code.includes('create or replace function public.delete_my_account()') &&
+      code.includes('me uuid := auth.uid();') &&
+      code.includes('revoke execute on function public.delete_my_account() from public, anon;'));
   }
   check('the username shape is enforced in the database, not only in the form',
     norm.includes("username ~ '^[a-za-z0-9_]{3,16}$'"));

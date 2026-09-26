@@ -16,9 +16,9 @@
      template: js/online.js (what is sent), supabase/schema.sql (what is
      stored), js/utils.js + js/ship.js (what stays on the device) and
      android-app/src/native/monetisation.mjs (no ads, no ad SDK started).
-     Account deletion is by email: supabase/schema.sql has an owner-only
-     admin_delete_user() and no self-service RPC, so this page must not
-     promise an in-game button until one exists.
+     Account deletion: in the game via delete_my_account()
+     (supabase/schema.sql section 12, button in js/ui_online.js), and by
+     email for anyone who can no longer sign in. Section 7 describes both.
      If any of those change, change this page in the same pull request. -->
 <style>
   html, body { margin: 0; background: #060713; color: #cfe9ff;
@@ -45,7 +45,7 @@
 <body>
 <main>
   <h1>SKYHOOK - PRIVACY POLICY</h1>
-  <p class="meta">Effective 25 September 2026. Applies to the SKYHOOK game on
+  <p class="meta">Effective 26 September 2026. Applies to the SKYHOOK game on
     the web (skyhookplay.com) and the SKYHOOK Android app
     (<code>com.leopechnicki.skyhook</code>). Developer: Leonardo Pechnicki dos
     Santos, Krakow, Poland.</p>
@@ -152,18 +152,23 @@
     reviewed.</p>
 
   <h2 id="delete-account">7. Deleting your account and data</h2>
-  <p>Email
+  <p><strong>In the game (app or web):</strong> sign in, open
+    <em>LEADERBOARD</em>, tap <em>Delete account</em> under "Signed in as
+    ...", then confirm with <em>Yes, delete my account</em>. The deletion
+    happens immediately, on our server, while you watch: your email address,
+    your username, every run you submitted and your saved ship colours are
+    removed permanently, and every sign-in session of the account on any
+    device ends. The game then shows you as a guest. The button is not
+    available during a run; finish or quit the run first.</p>
+  <p><strong>By email, if you cannot sign in any more:</strong> write to
     <a href="mailto:leopsantos@hotmail.com?subject=SKYHOOK%20account%20deletion">leopsantos@hotmail.com</a>
     from the address you signed up with, with the subject
     "SKYHOOK account deletion". We delete the account within 14 days and
-    confirm by email. Deleting the account removes your email address, your
-    username, every run you submitted and your saved ship colours from our
-    server, permanently. There is no partial deletion: the runs cannot stay
-    on the board without the account they belong to. You do not need to
-    delete the app first, and you can create a new account afterwards.</p>
-  <p>The game does not yet have a delete-account button of its own. When it
-    does, this section will describe it; the email route above stays
-    available either way.</p>
+    confirm by email.</p>
+  <p>Either way there is no partial deletion: the runs cannot stay on the
+    board without the account they belong to, and nothing about the account
+    is kept afterwards. You do not need to delete the app first, and you can
+    create a new account afterwards.</p>
   <p>To remove the device-local data in section 2, uninstall the app or clear
     the site's storage in your browser.</p>
 

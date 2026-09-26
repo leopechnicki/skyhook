@@ -175,6 +175,12 @@ let recoverFailure = null;
 /* True only while section B3 provokes an admin refusal on purpose. */
 let moderationArmed = false;
 
+/* SELF-SERVICE DELETE (supabase/schema.sql section 12). Set to
+   { status, body } to make the next delete_my_account() call fail the way
+   PostgREST really answers; the mock counts every call so "nothing was sent
+   before the confirm" is a number, not an impression. */
+let selfDeleteFailure = null;
+
 function handleApi(req, res, body) {
   const url = req.url.replace(/^\/api/, '');
   let parsed = null;
@@ -226,6 +232,14 @@ function handleApi(req, res, body) {
   if (url.startsWith('/rest/v1/leaderboard')) return json(200, BOARD);
   if (url.startsWith('/rest/v1/rpc/my_rank')) return json(200, [{ rank: 2, score: 1840, username: 'leo' }]);
   if (url.startsWith('/rest/v1/rpc/is_admin')) return json(200, adminMode);
+  if (url.startsWith('/rest/v1/rpc/delete_my_account')) {
+    if (selfDeleteFailure) {
+      const f = selfDeleteFailure;
+      selfDeleteFailure = null;
+      return json(f.status, f.body);
+    }
+    return json(200, true);
+  }
   if (url.startsWith('/rest/v1/rpc/admin_')) {
     /* The mock enforces what the database enforces: not an admin, 42501. */
     const denied = { code: '42501', message: 'not allowed: admins only' };
@@ -379,6 +393,9 @@ function attachLogs(page, bucket, label, opts = {}) {
       provoked.add(r.url());
     }
     if (r.status() >= 400 && r.url().includes('/rest/v1/rpc/admin_') && moderationArmed) {
+      provoked.add(r.url());
+    }
+    if (r.status() >= 400 && r.url().includes('/rest/v1/rpc/delete_my_account')) {
       provoked.add(r.url());
     }
   });
@@ -1269,6 +1286,146 @@ async function main() {
         alogs.join(' | '));
 
       await actx.close();
+    }
+
+    /* ==================================================================
+     * B2b. DELETE MY ACCOUNT - Google Play's in-app deletion requirement.
+     *
+     * The server half (supabase/schema.sql section 12) is proven on a real
+     * Postgres by test/account_delete_db.mjs. This proves the half a person
+     * touches: the link is there only for a signed-in player between runs,
+     * one tap only ASKS, the destructive button cannot be hit by a double
+     * tap, a failure leaves the player signed in and says so, and a success
+     * really leaves this device as a guest - session and parked run gone.
+     * Phone-sized viewport on purpose: that is where the app runs.
+     * ================================================================ */
+    {
+      const dctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      const dpage = await dctx.newPage();
+      const dlogs = [];
+      attachLogs(dpage, dlogs, 'self-delete');
+      const before = api.length;
+      const delCalls = () => api.slice(before).filter(c => c.url.startsWith('/rest/v1/rpc/delete_my_account'));
+      const signIn = async () => {
+        await dpage.evaluate(`window.SK.UI.open('auth')`);
+        await wait(200);
+        await dpage.locator('#ol-email').fill('leo@example.com');
+        await dpage.locator('#ol-password').fill('hunter2hunter2');
+        await dpage.locator('#ol-submit').click();
+        await dpage.waitForFunction('window.__SKYHOOK.game.online.signedIn === true', null, { timeout: 8000 });
+        await wait(400);
+      };
+
+      await dpage.goto(base + 'online/', { waitUntil: 'load' });
+      await dpage.waitForFunction('!!window.__SKYHOOK', null, { timeout: 8000 });
+      await wait(400);
+
+      await dpage.evaluate(`window.SK.UI.open('board')`);
+      await wait(300);
+      check('a guest is not offered "Delete account"',
+        (await dpage.locator('#ol-delete-account').isVisible()) === false);
+      await dpage.evaluate('window.SK.UI.close()');
+
+      await signIn();
+      check('a signed-in player between runs sees "Delete account" with the other account actions',
+        (await dpage.locator('#ol-delete-account').isVisible()) === true &&
+        (await dpage.locator('#ol-edit-name').isVisible()) === true);
+      await dpage.screenshot({ path: path.join(HERE, 'screenshots', 'delete-01-links.png') });
+
+      /* ---- one tap only asks ---- */
+      await dpage.locator('#ol-delete-account').click();
+      await wait(100);
+      check('"Delete account" opens a question and sends nothing',
+        (await dpage.locator('#ol-delete-confirm').isVisible()) === true && delCalls().length === 0,
+        'calls=' + delCalls().length);
+      check('...the question says what goes and that it cannot be undone',
+        /every score/i.test(await dpage.locator('#ol-delete-q').textContent()) &&
+        /cannot be undone/i.test(await dpage.locator('#ol-delete-q').textContent()));
+      check('...focus starts on the safe choice',
+        (await dpage.evaluate('document.activeElement && document.activeElement.id')) === 'ol-delete-keep');
+      check('...and the destructive button is asleep for a beat (no double-tap answer)',
+        (await dpage.locator('#ol-delete-yes').isDisabled()) === true);
+      await wait(700);
+      await dpage.screenshot({ path: path.join(HERE, 'screenshots', 'delete-02-confirm.png') });
+      await dpage.locator('#ol-delete-keep').click();
+      await wait(100);
+      check('"Keep my account" closes the question, sends nothing, and gives the links back',
+        (await dpage.locator('#ol-delete-confirm').isVisible()) === false &&
+        (await dpage.locator('#ol-delete-account').isVisible()) === true && delCalls().length === 0);
+
+      /* ---- Escape answers "keep", and the panel stays ---- */
+      await dpage.locator('#ol-delete-account').click();
+      await dpage.keyboard.press('Escape');
+      await wait(100);
+      check('Escape closes only the question, not the panel',
+        (await dpage.locator('#ol-delete-confirm').isVisible()) === false &&
+        (await dpage.locator('#ol').isVisible()) === true && delCalls().length === 0);
+
+      /* ---- the server refuses: still signed in, and told so ---- */
+      selfDeleteFailure = { status: 404, body: { code: 'PGRST202', message: 'Could not find the function public.delete_my_account' } };
+      await dpage.locator('#ol-delete-account').click();
+      await wait(700);
+      await dpage.locator('#ol-delete-yes').click();
+      await wait(500);
+      check('a refused delete is shown, in words, saying the account is still there',
+        /not deleted/i.test(await dpage.locator('#ol-board-msg').textContent()),
+        await dpage.locator('#ol-board-msg').textContent());
+      check('...and the player is still signed in, session kept',
+        (await dpage.evaluate('window.__SKYHOOK.game.online.signedIn')) === true &&
+        !!(await dpage.evaluate('localStorage.getItem("skyhook.session")')));
+      await dpage.screenshot({ path: path.join(HERE, 'screenshots', 'delete-03-refused.png') });
+
+      /* ---- the real thing ---- */
+      await dpage.evaluate(`localStorage.setItem('skyhook.pendingRun', JSON.stringify({ score: 999, hooks: 9, altitude: 90, durationMs: 20000 }))`);
+      const sentBefore = delCalls().length;
+      await dpage.locator('#ol-delete-account').click();
+      await wait(700);
+      await dpage.locator('#ol-delete-yes').click();
+      await dpage.waitForFunction('window.__SKYHOOK.game.online.signedIn === false', null, { timeout: 8000 });
+      await wait(400);
+      const sent = delCalls().slice(sentBefore);
+      check('confirming sends exactly one delete_my_account call',
+        sent.length === 1, 'calls=' + sent.length);
+      check('...carrying the player\'s own token and NO account id',
+        sent.length === 1 && sent[0].headers.authorization === 'Bearer ' + SESSION.access_token &&
+        JSON.stringify(sent[0].body || {}) === '{}',
+        sent.length ? JSON.stringify(sent[0].body) : '');
+      check('after a delete this device is a guest, and says what happened',
+        /guest/i.test(await dpage.locator('#ol-account').textContent()) &&
+        /deleted/i.test(await dpage.locator('#ol-board-msg').textContent()),
+        await dpage.locator('#ol-board-msg').textContent());
+      check('...the stored session is gone',
+        !(await dpage.evaluate('localStorage.getItem("skyhook.session")')));
+      check('...and so is the parked run, which would otherwise go up under the next account',
+        !(await dpage.evaluate('localStorage.getItem("skyhook.pendingRun")')));
+      check('...and no account action is left to take',
+        (await dpage.locator('#ol-account-links').isVisible()) === false &&
+        (await dpage.locator('#ol-delete-confirm').isVisible()) === false);
+      await dpage.screenshot({ path: path.join(HERE, 'screenshots', 'delete-04-done.png') });
+
+      /* ---- NOT WHILE A RUN IS IN PROGRESS ---- */
+      await dpage.evaluate('window.SK.UI.close()');
+      await signIn();
+      await dpage.evaluate('window.SK.UI.close()');
+      await wait(200);
+      await dpage.evaluate(`(() => { const g = window.__SKYHOOK.game; g.skipTutorial(true); g.start(4242); })()`);
+      await dpage.evaluate('window.SK.UI.open("board")');
+      await wait(300);
+      check('mid-run "Delete account" is not drawn',
+        (await dpage.locator('#ol-delete-account').isVisible()) === false &&
+        (await dpage.evaluate('window.__SKYHOOK.game.state')) === 'playing');
+      const midBefore = delCalls().length;
+      await dpage.evaluate(`document.getElementById('ol-delete-account').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+      await dpage.evaluate(`document.getElementById('ol-delete-yes').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+      await wait(300);
+      check('firing it anyway mid-run is refused in words, no question drawn, nothing sent',
+        /run is in progress/i.test(await dpage.locator('#ol-board-msg').textContent()) &&
+        (await dpage.locator('#ol-delete-confirm').isVisible()) === false &&
+        delCalls().length === midBefore,
+        await dpage.locator('#ol-board-msg').textContent());
+
+      check('the delete-account flow raised no page errors', dlogs.length === 0, dlogs.join(' | '));
+      await dctx.close();
     }
 
     /* ==================================================================
