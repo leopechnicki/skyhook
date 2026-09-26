@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="SKYHOOK privacy policy - what the game stores, what it sends, and how to delete your account.">
+<link rel="canonical" href="https://skyhookplay.com/privacy.html">
+<title>SKYHOOK - Privacy Policy</title>
+<!-- SKYHOOK privacy policy.
+     Served by nginx from the same image as the game (Dockerfile COPYs it;
+     deploy.yml checks it is reachable). Linked from the Google Play listing
+     and from android-app/store-listing/PLAY_CONSOLE_ANSWERS.md, so the URL
+     https://skyhookplay.com/privacy.html must keep resolving.
+
+     Every claim below was written by reading the code, not by copying a
+     template: js/online.js (what is sent), supabase/schema.sql (what is
+     stored), js/utils.js + js/ship.js (what stays on the device) and
+     android-app/src/native/monetisation.mjs (no ads, no ad SDK started).
+     Account deletion: in the game via delete_my_account()
+     (supabase/schema.sql section 12, button in js/ui_online.js), and by
+     email for anyone who can no longer sign in. Section 7 describes both.
+     If any of those change, change this page in the same pull request. -->
+<style>
+  html, body { margin: 0; background: #060713; color: #cfe9ff;
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 22px 64px; line-height: 1.55; font-size: 16px; }
+  h1 { color: #fff; font-size: 30px; letter-spacing: 2px; margin: 0 0 4px; }
+  h2 { color: #35e6ff; font-size: 19px; margin: 34px 0 8px; }
+  p, li { color: #cfe9ff; }
+  .meta { color: #8fb6d4; font-size: 14px; margin-bottom: 26px; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; margin: 8px 0 4px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid rgba(53,230,255,0.18); }
+  th { color: #fff; font-weight: 700; }
+  code { color: #ffd75e; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
+  a { color: #35e6ff; }
+  .back { display: inline-block; margin-top: 40px; padding: 10px 22px; border-radius: 12px;
+    border: 2px solid rgba(53,230,255,0.55); background: rgba(53,230,255,0.10);
+    color: #fff; text-decoration: none; font-weight: 800; letter-spacing: 1px; }
+  @media (max-width: 480px) {
+    main { padding: 24px 14px 48px; }
+    th, td { padding: 6px 5px; font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>SKYHOOK - PRIVACY POLICY</h1>
+  <p class="meta">Effective 26 September 2026. Applies to the SKYHOOK game on
+    the web (skyhookplay.com) and the SKYHOOK Android app
+    (<code>com.leopechnicki.skyhook</code>). Developer: Leonardo Pechnicki dos
+    Santos, Krakow, Poland.</p>
+
+  <p>SKYHOOK is a one-touch arcade game. It is fully playable without an
+    account, without an internet connection, and without telling us anything.
+    This page lists exactly what the game keeps on your device, what it sends
+    to our server if you choose to create an account, and how to delete it
+    all.</p>
+
+  <h2>1. The short version</h2>
+  <ul>
+    <li><strong>No ads, no ad networks, no trackers, no analytics.</strong>
+      The Android app shows no advertisements and does not start any
+      advertising SDK. It does not read your advertising ID.</li>
+    <li><strong>No account is required.</strong> Your high score and your
+      ship colours are saved only on your device.</li>
+    <li><strong>If you create an account</strong> we store your email address,
+      a password hash, the public username you choose, and your runs
+      (score, hooks, altitude, duration and the input timing of each run,
+      which is used only to detect bots on the leaderboard).</li>
+    <li><strong>We never sell or share</strong> any of it. The only third
+      party that processes it is our database host, Supabase.</li>
+    <li><strong>You can delete your account yourself, in the game</strong>
+      (LEADERBOARD, then Delete account), or by email if you cannot sign in
+      (section 7). The account, the username, the runs and the ship colours
+      saved to the account all go with it; the best score and ship paint
+      kept in this device's own storage (section 2) stay until you clear
+      them.</li>
+  </ul>
+
+  <h2>2. Data that stays on your device</h2>
+  <p>The game uses the browser's (or the Android WebView's) local storage
+    for:</p>
+  <table>
+    <tr><th>What</th><th>Why</th></tr>
+    <tr><td>Your best score</td><td>So the title screen can show it.</td></tr>
+    <tr><td>Your ship colours (nose, window, body, fire)</td><td>So your paint job survives a restart. Stored as four colour codes.</td></tr>
+    <tr><td>Whether sound is muted, and whether you have finished the tutorial</td><td>So the game does not ask again.</td></tr>
+    <tr><td>Your sign-in session, if you signed in</td><td>So you stay signed in. Removed when you sign out.</td></tr>
+    <tr><td>A run waiting to be submitted, if you were offline</td><td>So a score is not lost when the network is. Sent the next time you are online and signed in.</td></tr>
+  </table>
+  <p>None of this is sent to us. If you have Android's app backup switched
+    on, Android may include the app's local data in your own Google backup,
+    as it does for any app that allows backup; we never see that backup.
+    Uninstalling the app or clearing the site's data removes all of it.</p>
+
+  <h2>3. Data sent to our server (only with an account)</h2>
+  <p>The optional global leaderboard is hosted on
+    <a href="https://supabase.com/privacy" rel="noopener">Supabase</a>
+    (project region: EU, Frankfurt). No personal data is sent until you tap
+    <em>Sign in / create account</em>. Opening the leaderboard as a guest
+    only requests the public top list from that server; like any web
+    request it shows the server your IP address for the moment it is served,
+    and the game stores nothing about it.</p>
+  <table>
+    <tr><th>Data</th><th>When</th><th>What it is used for</th></tr>
+    <tr><td>Email address and password</td><td>Creating an account or signing in</td>
+      <td>Signing you in and sending the confirmation and password-reset emails. The password is stored only as a hash by Supabase Auth. The email is never shown to other players and is not copied into any other table.</td></tr>
+    <tr><td>Username (3-16 letters, digits or underscore)</td><td>Creating an account, or renaming</td>
+      <td>Your public name on the leaderboard. It is visible to everyone. We also keep when you last renamed and how many times, to rate-limit renames.</td></tr>
+    <tr><td>Each finished run: score, number of hooks, altitude, duration</td><td>At the end of a run, if you are signed in</td>
+      <td>Ranking you on the board.</td></tr>
+    <tr><td>Run telemetry: the count and timing offsets (in game ticks) of your releases</td><td>With each run</td>
+      <td>Automated bot detection. Runs that look machine-driven are held for review instead of shown. This is not behavioural profiling; it is only compared against what a human can physically do with a touchscreen.</td></tr>
+    <tr><td>Ship colours</td><td>When you change them while signed in</td>
+      <td>So your ship looks the same on another device, and so the gold "crown" ship follows the current #1 player.</td></tr>
+  </table>
+  <p>Like any web server, Supabase's infrastructure records the IP address of
+    each request in short-lived operational logs. We do not use those logs to
+    identify players.</p>
+
+  <h2>4. What we do not collect</h2>
+  <ul>
+    <li>No advertising identifier, no device identifier, no fingerprinting.</li>
+    <li>No analytics or crash-reporting SDK. No Google Analytics, no Firebase.</li>
+    <li>No location, contacts, camera, microphone, photos or files. The
+      Android app declares <code>INTERNET</code> (the leaderboard) and
+      <code>ACCESS_NETWORK_STATE</code>, plus
+      <code>WAKE_LOCK</code> and <code>FOREGROUND_SERVICE</code>, which are
+      pulled in by a bundled Google library that the game never starts. None
+      of these is a runtime permission and none gives access to your
+      data.</li>
+    <li>No purchases. The app contains no in-app products.</li>
+    <li>No data from anyone who does not create an account, beyond the
+      device-local items in section 2.</li>
+  </ul>
+
+  <h2>5. Children</h2>
+  <p>SKYHOOK is a general-audience game with no violence, no chat between
+    players and no ads. It is not directed at children under 13, and we do not
+    knowingly collect personal data from them. Creating an account requires an
+    email address; if a child has created one, the parent or guardian can
+    delete it as described in section 7 and we will remove it.</p>
+
+  <h2>6. Sharing and retention</h2>
+  <p>Account data is stored by Supabase on our behalf and by nobody else. We
+    do not sell, rent or share it with advertisers or data brokers. The
+    leaderboard shows only usernames and scores. Data is kept for as long as
+    your account exists and is deleted with it. A run held for bot review is
+    kept in the ledger and simply not shown on the public board until it is
+    cleared. The developer may suspend or delete an account that breaks the
+    leaderboard rules (for example, automated play); such actions are
+    recorded in an audit log with the username and reason so they can be
+    reviewed. If you later delete your own account, your username is removed
+    from those entries (section 7).</p>
+
+  <h2 id="delete-account">7. Deleting your account and data</h2>
+  <p><strong>In the game (app or web):</strong> sign in, open
+    <em>LEADERBOARD</em>, tap <em>Delete account</em> under "Signed in as
+    ...", then confirm with <em>Yes, delete my account</em>. The deletion
+    happens immediately, on our server, while you watch: your email address,
+    your username, every run you submitted and your saved ship colours are
+    removed permanently, and every sign-in session of the account on any
+    device ends. The game then shows you as a guest. The button is not
+    available during a run; finish or quit the run first.</p>
+  <p><strong>By email, if you cannot sign in any more:</strong> write to
+    <a href="mailto:leopsantos@hotmail.com?subject=SKYHOOK%20account%20deletion">leopsantos@hotmail.com</a>
+    from the address you signed up with, with the subject
+    "SKYHOOK account deletion". We delete the account within 14 days and
+    confirm by email.</p>
+  <p>Either way there is no partial deletion: the runs cannot stay on the
+    board without the account they belong to. The one thing kept is the
+    moderation log of section 6, if an admin ever acted on the account:
+    the entry (the action, the reason and when) stays so the decision can
+    still be reviewed, but your username is removed from it and the account
+    identifier in it no longer points at anything. You do not need to delete the app first, and you can
+    create a new account afterwards.</p>
+  <p>To remove the device-local data in section 2, uninstall the app or clear
+    the site's storage in your browser.</p>
+
+  <h2>8. Your rights</h2>
+  <p>If you are in the EU/EEA or UK you have the right to access, correct,
+    export and erase your personal data, and to object to or restrict its
+    processing. Email the address in section 7. Our legal basis for
+    processing account data is the contract you enter by creating the
+    account; for the bot-detection telemetry it is our legitimate interest in
+    keeping the leaderboard honest.</p>
+
+  <h2>9. Changes</h2>
+  <p>If this policy changes, the new version is published at this address
+    with a new effective date. The source of this page lives in the game's
+    public repository next to the code it describes.</p>
+
+  <h2>10. Contact</h2>
+  <p>Leonardo Pechnicki dos Santos -
+    <a href="mailto:leopsantos@hotmail.com">leopsantos@hotmail.com</a></p>
+
+  <a class="back" href="/">BACK TO THE GAME</a>
+</main>
+</body>
+</html>

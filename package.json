@@ -24,12 +24,13 @@
     "test:online": "node test/online.mjs",
     "test:botdef": "node test/botdef.mjs",
     "test:moderation": "node test/moderation_db.mjs",
+    "test:account-delete": "node test/account_delete_db.mjs",
     "test:pages": "node test/pages_stub.mjs",
     "test:staging": "node test/staging.mjs",
     "test:leaderboard": "node test/leaderboard_ui.mjs",
     "test:rocket": "node test/rocket_shots.mjs",
     "shots": "node test/shipping_shots.mjs",
-    "test:ci": "node test/world.mjs && node test/balance.mjs --ci && node test/latency.mjs && node test/online.mjs && node test/botdef.mjs && node test/moderation_db.mjs && node test/pages_stub.mjs && node test/staging.mjs && node test/ship.mjs && node test/ship_ui.mjs && node test/ship_access.mjs && node test/smoke.mjs && node test/sprites.mjs && node test/leaderboard_ui.mjs && node test/perf.mjs"
+    "test:ci": "node test/world.mjs && node test/balance.mjs --ci && node test/latency.mjs && node test/online.mjs && node test/botdef.mjs && node test/moderation_db.mjs && node test/account_delete_db.mjs && node test/pages_stub.mjs && node test/staging.mjs && node test/ship.mjs && node test/ship_ui.mjs && node test/ship_access.mjs && node test/smoke.mjs && node test/sprites.mjs && node test/leaderboard_ui.mjs && node test/perf.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

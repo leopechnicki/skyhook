@@ -1163,6 +1163,72 @@ $$;
 revoke execute on function public.admin_board(integer) from public, anon;
 grant  execute on function public.admin_board(integer) to authenticated;
 
+-- ---------------------------------------------------------------------------
+-- 12. delete_my_account() - a player deletes their own account, in the game
+-- ---------------------------------------------------------------------------
+-- Google Play's User Data policy: an app that lets people create an account
+-- in the app must let them delete it in the app. This is that door, and it is
+-- built the way admin_delete_user() above is built, for the same reasons: a
+-- SECURITY DEFINER function with a pinned search_path, so no service key is
+-- ever deployed or exposed, and no Edge Function exists to hold one.
+--
+-- What makes it safe to hand to every player:
+--   * It takes NO argument. The account it deletes is auth.uid(), read from
+--     the caller's own verified JWT inside this call. There is nothing to
+--     tamper with - no id in the request body that could name somebody else.
+--   * It deletes the ACCOUNT, and only the account. The profile, every score
+--     and any ban row go with it by the foreign keys' ON DELETE CASCADE, the
+--     same path admin_delete_user() takes: the scores ledger still has no
+--     DELETE statement aimed at it anywhere in this file (test/online.mjs
+--     holds that). The auth tables hanging off auth.users (identities,
+--     sessions, refresh tokens) cascade the same way, so every session the
+--     account had anywhere is dead the moment this returns.
+--   * Idempotent: it returns true when an account was deleted and false when
+--     there was nothing left to delete - a retry after a dropped response
+--     (the player's access token outlives the account by up to an hour) is
+--     an honest "already gone", not an error.
+--   * An admin is refused, by the rule section 11 already applies to delete:
+--     removing an owner is never one tap. Demote in the SQL editor first.
+--   * A banned player is NOT refused. Leaving is not a privilege a ban takes
+--     away. They could sign up again with the same address - but so could
+--     they with any other address, which is why a ban was never an identity
+--     wall; section 3b's review is what catches a returning bot.
+--
+-- Nothing NEW is written to admin_audit: this is not an admin action. Rows
+-- that are already there - a player who was once banned or unbanned - have
+-- no foreign key and would otherwise keep that player's username after they
+-- asked to be forgotten, so the username is blanked on them first. What stays
+-- is the moderation decision itself (who acted, what, why, when) against a
+-- uuid that no longer resolves to any account: the admin's record of their
+-- own action, with nothing left in it that names the player.
+create or replace function public.delete_my_account()
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  me   uuid := auth.uid();
+  gone integer;
+begin
+  if me is null then
+    raise exception 'sign in first' using errcode = '42501';
+  end if;
+  if exists (select 1 from public.admins a where a.user_id = me) then
+    raise exception 'an admin account cannot delete itself - remove it from admins first'
+      using errcode = '22023';
+  end if;
+
+  update public.admin_audit set target_username = null where target_id = me;
+  delete from auth.users where id = me;
+  get diagnostics gone = row_count;
+  return gone > 0;
+end;
+$$;
+
+revoke execute on function public.delete_my_account() from public, anon;
+grant  execute on function public.delete_my_account() to authenticated;
+
 -- ===========================================================================
 -- Verification - run these after the script and read the answers.
 --

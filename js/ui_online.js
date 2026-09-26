@@ -42,7 +42,8 @@
   var SOFT_IDS = ['ol-email-label', 'ol-email-hint', 'ol-username-label',
     'ol-username-hint', 'ol-forgot', 'ol-email-field', 'ol-password-field',
     'ol-password-label', 'ol-account-links', 'ol-edit-name', 'ol-edit-password',
-    'ol-password2-field', 'ol-password2', 'ol-password2-label'];
+    'ol-password2-field', 'ol-password2', 'ol-password2-label',
+    'ol-delete-account', 'ol-delete-confirm', 'ol-delete-yes', 'ol-delete-keep'];
 
   function collect() {
     for (var i = 0; i < IDS.length; i++) {
@@ -188,6 +189,10 @@
   /* ---------------------------------------------------------------- state */
   var game = null;
   var open = false;
+  /* Backdrop-dismiss guard, see the pointerdown/click wiring below. Reset
+     on every open/close so a pointerdown that never got its click (Escape,
+     pointercancel) cannot arm the next open. */
+  var downOnBackdrop = false;
   var mode = 'signin';        // a key of MODES
   var busy = false;
   var lastFocus = null;
@@ -500,11 +505,15 @@
     if (el['ol-edit-password']) {
       el['ol-edit-password'].hidden = !el['ol-password2'];
     }
+    if (el['ol-delete-account']) {
+      el['ol-delete-account'].hidden = !(el['ol-delete-confirm'] && el['ol-delete-yes'] && el['ol-delete-keep']);
+    }
   }
 
   /* ------------------------------------------------------------ the views */
 
   function showBoard(notice) {
+    closeDeleteConfirm();
     boardNotice = notice || '';
     el['ol-board'].hidden = false;
     el['ol-auth'].hidden = true;
@@ -601,6 +610,7 @@
   function openOverlay(view) {
     if (!wired || open) return;
     open = true;
+    downOnBackdrop = false;
     lastFocus = doc.activeElement;
     el.ol.hidden = false;
     el.ol.setAttribute('aria-hidden', 'false');
@@ -632,8 +642,10 @@
   }
 
   function closeOverlay() {
-    if (!wired || !open) return;
+    if (!wired || !open || deleting) return;
     open = false;
+    downOnBackdrop = false;
+    closeDeleteConfirm();
     el.ol.hidden = true;
     el.ol.setAttribute('aria-hidden', 'true');
     el['ol-password'].value = '';
@@ -909,7 +921,96 @@
       true);
   }
 
+  /* DELETING THE ACCOUNT (Google Play's in-app deletion requirement; the
+   * server half is supabase/schema.sql section 12).
+   *
+   * Two taps, never one: "Delete account" only opens a strip under the
+   * account line that says what goes and what stays, and nothing is sent
+   * until "Yes, delete my account" is pressed. That button renders where the
+   * link was just tapped, so - like the admin delete above - it wakes up
+   * after a beat and focus starts on the safe choice: a double tap or a held
+   * Enter cannot answer the question.
+   *
+   * Same door rule as the other account actions: canEditAccount() is checked
+   * when the strip opens AND again when "Yes" is pressed, because a run can
+   * start in between and SK.UI.open() is a public handle. */
+  var deleteTimer = null;
+  /* True only while the delete request is in flight. It is the one state
+     that must not be exitable: the X, a backdrop tap, Escape and SIGN OUT
+     would let the player leave while the server is still deciding, and the
+     answer - "deleted" or "not deleted" - would land in a hidden panel. */
+  var deleting = false;
+
+  function setDeleting(on) {
+    deleting = on;
+    setBusy(on);
+    el['ol-delete-yes'].disabled = on;
+    el['ol-delete-keep'].disabled = on;
+    el['ol-close'].disabled = on;
+    if (el['ol-signout']) el['ol-signout'].disabled = on;
+  }
+
+  /* Returns whether a strip was actually open, so Escape knows whether it
+     consumed the key. */
+  function closeDeleteConfirm() {
+    if (deleteTimer) { clearTimeout(deleteTimer); deleteTimer = null; }
+    var box = el['ol-delete-confirm'];
+    if (!box || box.hidden) return false;
+    box.hidden = true;
+    if (el['ol-account-links']) el['ol-account-links'].hidden = !canEditAccount();
+    return true;
+  }
+
+  function onDeleteAccount() {
+    if (busy) return;
+    if (!canEditAccount()) { closeDeleteConfirm(); refuseAccountEdit(); return; }
+    var box = el['ol-delete-confirm'];
+    var yes = el['ol-delete-yes'];
+    var keep = el['ol-delete-keep'];
+    if (!box || !yes || !keep) return;
+    text(el['ol-board-msg'], '');
+    if (el['ol-account-links']) el['ol-account-links'].hidden = true;
+    box.hidden = false;
+    keep.disabled = false;
+    yes.disabled = true;
+    if (deleteTimer) clearTimeout(deleteTimer);
+    deleteTimer = setTimeout(function () { deleteTimer = null; yes.disabled = false; }, 600);
+    try { keep.focus(); } catch (e) { /* ignore */ }
+  }
+
+  function onDeleteKeep() {
+    if (busy) return;
+    closeDeleteConfirm();
+    try { el['ol-delete-account'].focus(); } catch (e) { /* ignore */ }
+  }
+
+  function onDeleteYes() {
+    if (busy) return;
+    if (!canEditAccount()) { closeDeleteConfirm(); refuseAccountEdit(); return; }
+    setDeleting(true);
+    text(el['ol-board-msg'], 'Deleting your account...');
+    Online.deleteMyAccount().then(function () {
+      setDeleting(false);
+      syncGame();
+      showBoard('Your account is deleted: your name, your sign-in and every score ' +
+        'you had on the board are gone. You are playing as a guest.');
+      try { el['ol-signin'].focus(); } catch (e) { /* ignore */ }
+    }, function (err) {
+      setDeleting(false);
+      closeDeleteConfirm();
+      /* Online.deleteMyAccount changed nothing locally on failure, so the
+         player is still signed in and the line can say so. */
+      text(el['ol-board-msg'],
+        safeMessage(err, 'Could not delete the account. Nothing was deleted.'), true);
+      /* A failed refresh signs the player out on the way, and then the
+         delete link is hidden - send focus where the next step is. */
+      var next = Online.state().signedIn ? 'ol-delete-account' : 'ol-signin';
+      try { el[next].focus(); } catch (e) { /* ignore */ }
+    });
+  }
+
   function onSignOut() {
+    if (deleting) return;
     Online.signOut().then(function () {
       syncGame();
       showBoard();
@@ -1000,6 +1101,11 @@
     el['ol-signout'].addEventListener('click', onSignOut);
     if (el['ol-edit-name']) el['ol-edit-name'].addEventListener('click', onEditName);
     if (el['ol-edit-password']) el['ol-edit-password'].addEventListener('click', onEditPassword);
+    if (el['ol-delete-account'] && el['ol-delete-yes'] && el['ol-delete-keep']) {
+      el['ol-delete-account'].addEventListener('click', onDeleteAccount);
+      el['ol-delete-yes'].addEventListener('click', onDeleteYes);
+      el['ol-delete-keep'].addEventListener('click', onDeleteKeep);
+    }
 
     /* Google is an extra opt-in in the Supabase dashboard, not something a
        project has by default - docs/LEADERBOARD_SETUP.md step 3 is a whole
@@ -1052,15 +1158,38 @@
 
     /* Clicking the darkened area outside the panel closes, the way every
        other dialog on the web does. */
+    /* Backdrop tap closes - but only a tap that STARTED on the backdrop.
+       On Android (Chromium WebView, real touch) the click synthesised after
+       a tap is targeted at whatever is under the finger when it fires, not
+       at what was there on pointerdown. The LEADERBOARD button on the
+       game-over screen sits below the panel, so the tap that opened the
+       overlay (pointerdown on the canvas -> openOverlay) was followed ~20 ms
+       later by a click on the now-visible backdrop, which closed it again:
+       the board could not be opened by touch at all. Playwright's mouse
+       click keeps the target the pointer went down on, so no browser test
+       saw it; the emulator did (android-app/PLAYSTORE_READY_REPORT.md). */
+    /* Without Pointer Events (WebView < Chromium 55, old Safari) nothing
+       would ever arm the guard, so fall back to the plain click there. */
+    var hasPointerEvents = (typeof PointerEvent === 'function');
+    el.ol.addEventListener('pointerdown', function (e) { downOnBackdrop = (e.target === el.ol); });
+    el.ol.addEventListener('pointercancel', function () { downOnBackdrop = false; });
     el.ol.addEventListener('click', function (e) {
-      if (e.target === el.ol) closeOverlay();
+      var armed = downOnBackdrop || !hasPointerEvents;
+      downOnBackdrop = false;
+      if (e.target === el.ol && armed) closeOverlay();
     });
 
     doc.addEventListener('keydown', function (e) {
       if (!open) return;
       if (e.key === 'Escape') {
+        if (deleting) return;
         /* An open moderation strip is the innermost thing - close that. */
         if (modOpen) { closeMod(); return; }
+        /* ...and so is the delete-account question: Escape answers "keep". */
+        if (!busy && closeDeleteConfirm()) {
+          try { el['ol-delete-account'].focus(); } catch (err) { /* ignore */ }
+          return;
+        }
         closeOverlay();
         return;
       }

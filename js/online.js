@@ -240,6 +240,18 @@
       /* Worse here than on the reset request: the player has a live recovery
          session that expires, so "try again" has to mean NOW, not later. */
       network: 'Cannot reach the server. Check your connection and try again.'
+    },
+    /* The player deleting their own account (schema.sql section 12). Every
+       line ends by saying the account is still there, because that is the
+       one fact a failed delete must never leave in doubt. */
+    deleteAccount: {
+      '42501': 'Your sign-in has expired. Sign in again, then delete. Your account was not deleted.',
+      '22023': 'An admin account cannot be deleted from the game. Your account was not deleted.',
+      /* A backend whose schema predates section 12: PostgREST answers 404
+         PGRST202 for the missing function. The policy page has the email
+         route for exactly this case. */
+      PGRST202: 'Deleting from the game is not available right now. Email leopsantos@hotmail.com to delete it. Your account was not deleted.',
+      network: 'Cannot reach the server. Your account was not deleted.'
     }
   };
 
@@ -1590,6 +1602,45 @@
     },
     deleteUser: function (userId) {
       return moderate('admin_delete_user', { target: String(userId || '') });
+    },
+
+    /* ------------------------------------------------------ own account ---
+     * The player deletes their OWN account (supabase/schema.sql section 12,
+     * Google Play's in-app deletion requirement). The request carries no id:
+     * the server deletes whoever the token belongs to, so there is nothing
+     * here that could name another account.
+     *
+     * On success - true (deleted now) or false (already gone, a retry after a
+     * dropped response) - this device stops being that account: the session
+     * is dropped, and so is any parked run, which would otherwise be sent
+     * under the NEXT account to sign in here. Local-only data (best score,
+     * ship paint) stays: it was never the account's, it is the device's.
+     * On failure nothing local changes, so the player is still signed in and
+     * the message can truthfully say nothing was deleted. */
+    deleteMyAccount: function () {
+      if (!cfg || !session) return Promise.reject(new Error('Sign in first - there is no account to delete.'));
+      var id = session.user && session.user.id;
+      return withToken(function (token) {
+        return request('/rest/v1/rpc/delete_my_account', { method: 'POST', token: token, body: {} });
+      }).then(function (gone) {
+        if (session && session.user && session.user.id === id) {
+          recovering = false;
+          adminFor = null;
+          clearKey(K_PENDING);
+          setSession(null);
+        }
+        return gone === true;
+      }, function (err) {
+        /* An expired sign-in never reaches the function's own 42501: PostgREST
+           answers a dead JWT with 401 / PGRST301, and a refresh that the
+           server refused has already dropped the session. Both are "sign in
+           again", so they get that sentence rather than the generic one. */
+        var why = err;
+        if (!session || (err && (err.status === 401 || err.code === 'PGRST301'))) {
+          why = { code: '42501', status: err && err.status, message: err && err.message };
+        }
+        throw playerError(why, 'Could not delete the account. Nothing was deleted.', 'deleteAccount');
+      });
     }
   };
 

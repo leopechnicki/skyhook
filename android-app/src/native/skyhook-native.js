@@ -3,8 +3,15 @@
  *
  * Loaded as <script type="module"> and injected into www/index.html at sync
  * time by scripts/sync-web.mjs. It is NEVER present in the web version - the
- * game's own repo assets are untouched, so github.io keeps working exactly as
- * before. This file is the ONLY glue between the game and native services.
+ * game's own repo assets are untouched, so skyhookplay.com keeps working
+ * exactly as before. This file is the ONLY glue between the game and native
+ * services.
+ *
+ * v1 is AD-FREE (Leo, 2026-09-22). ADS_ENABLED in monetisation.mjs is false,
+ * so createMonetisation() returns an inert object: no AdMob, no UMP consent
+ * form, no Play Billing - none of it is even constructed. The wiring stays in
+ * the tree for the day ads are switched on (as a once-per-run rewarded
+ * continue, not the interstitial cadence ad-gate.mjs still implements).
  *
  * How it detects game-over WITHOUT editing the game:
  *   main.js exposes window.__SKYHOOK.game. Its .state field moves
@@ -15,6 +22,7 @@
 import { createAdGate } from './ad-gate.mjs';
 import { createAds } from './ads.mjs';
 import { createBilling } from './billing.mjs';
+import { ADS_ENABLED, createMonetisation } from './monetisation.mjs';
 
 (function () {
   'use strict';
@@ -23,48 +31,32 @@ import { createBilling } from './billing.mjs';
     try { console.log.apply(console, ['[skyhook-native]'].concat([].slice.call(arguments))); } catch (e) {}
   }
 
-  var ads = createAds({ log: log });
-  var billing = createBilling({
-    log: log,
-    onEntitlementChange: function (adFree) {
-      log('entitlement changed: adFree =', adFree);
-    }
-  });
-
-  var adGate = createAdGate({
+  var monetisation = createMonetisation({
+    adsEnabled: ADS_ENABLED,
     interval: 5,
-    isAdFree: function () { return billing.isAdFree(); },
-    showInterstitial: function () { ads.showInterstitial(); },
-    onError: function (e) { log('adGate error:', e); }
+    log: log,
+    createAds: createAds,
+    createBilling: createBilling,
+    createAdGate: createAdGate
   });
 
   // Expose for the on-device manual test harness / debugging.
   window.__SKYHOOK_NATIVE = {
-    adGate: adGate,
-    ads: ads,
-    billing: billing,
-    buyRemoveAds: function () { return billing.buyRemoveAds(); },
-    restore: function () { return billing.restore(); }
+    adsEnabled: monetisation.enabled,
+    monetisation: monetisation,
+    adGate: monetisation.adGate,
+    ads: monetisation.ads,
+    billing: monetisation.billing,
+    buyRemoveAds: function () {
+      return monetisation.billing ? monetisation.billing.buyRemoveAds() : Promise.resolve(false);
+    },
+    restore: function () {
+      return monetisation.billing ? monetisation.billing.restore() : Promise.resolve(true);
+    }
   };
 
   function initNative() {
-    /* Restore entitlement, THEN init ads.
-     *
-     * The comment here used to claim "billing first so isAdFree() is correct
-     * before the first possible game-over" while actually firing both
-     * initialize() calls concurrently - the stated invariant was never
-     * enforced. Chain them so it is. An owner must never watch an ad load
-     * because the receipt query had not come back yet. */
-    billing.initialize()
-      .then(function (adFree) {
-        log('billing initialized, adFree =', adFree);
-        if (adFree) {
-          log('ads: skipping AdMob init entirely - user owns remove-ads');
-          return false;
-        }
-        return ads.initialize();
-      })
-      .then(function (ok) { log('ads initialized, available =', ok); })
+    monetisation.initialize()
       .catch(function (e) { log('initNative failed', e); });
   }
 
@@ -73,18 +65,18 @@ import { createBilling } from './billing.mjs';
    * Without this the entitlement was only ever read at cold boot, so a purchase
    * made on another device, a purchase that completed while the app was
    * backgrounded, or a refund would keep showing (or keep hiding) ads until the
-   * process was killed and relaunched.
+   * process was killed and relaunched. A no-op in the ad-free build.
    *
    * Deliberately uses visibilitychange rather than @capacitor/app's
    * appStateChange: it fires on WebView foreground just the same, and it needs
    * no extra Capacitor plugin dependency - so this stays a zero-new-dependency
    * fix and keeps working in a plain browser. */
   function watchForeground() {
+    if (!monetisation.enabled) return;
     if (typeof document === 'undefined' || !document.addEventListener) return;
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
-      if (!billing.isAvailable()) return;
-      billing.restore()
+      monetisation.restoreOnForeground()
         .then(function (adFree) { log('foreground entitlement re-check, adFree =', adFree); })
         .catch(function (e) { log('foreground restore failed', e); });
     });
@@ -99,7 +91,7 @@ import { createBilling } from './billing.mjs';
       var isOver = (g.state === 'over');
       if (isOver && !wasOver) {
         // finished a game
-        try { adGate.onGameOver(); } catch (e) { log('onGameOver error', e); }
+        try { monetisation.onGameOver(); } catch (e) { log('onGameOver error', e); }
       }
       wasOver = isOver;
       requestAnimationFrame(tick);
@@ -110,7 +102,7 @@ import { createBilling } from './billing.mjs';
   function boot() {
     // Only meaningful inside the Capacitor native runtime; harmless otherwise.
     var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-    log('boot, isNativePlatform =', isNative);
+    log('boot, isNativePlatform =', isNative, 'adsEnabled =', monetisation.enabled);
     initNative();
     watchForeground();
     watchGameOver();

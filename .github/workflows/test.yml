@@ -99,6 +99,13 @@ jobs:
       - name: Moderation (admin ban / unban / delete on Postgres)
         run: node test/moderation_db.mjs
 
+      # A player deleting their OWN account (schema.sql section 12, Google
+      # Play's in-app deletion rule), on the same PGlite stand-in: own account
+      # only, no argument to tamper with, everything cascades, idempotent,
+      # anon and admins refused.
+      - name: Self-service account deletion on Postgres
+        run: node test/account_delete_db.mjs
+
       # The one canonical origin, both halves of it. index.html has to DECLARE
       # https://skyhookplay.com rather than have nginx correct it on the way
       # out, and pages/ has to redirect the retired GitHub Pages URL there
@@ -147,8 +154,19 @@ jobs:
       # interrupted, and the consent path is the difference between a compliant
       # ad request and a policy strike. Neither should be able to regress
       # silently just because the native build is not run in CI.
-      - name: Android wrapper logic (ad cadence + consent)
-        run: node android-app/src/test/ad-gate.test.mjs && node android-app/src/test/ads-consent.test.mjs
+      #
+      # monetisation.test.mjs pins the v1 decision itself: ADS_ENABLED is
+      # false and, while it is, the shipped bridge never constructs AdMob,
+      # UMP consent or Play Billing at all. Flipping the flag fails this step
+      # until the test is updated deliberately - which is the point.
+      - name: Android wrapper logic (ad cadence + consent + ad-free switch)
+        run: node android-app/src/test/ad-gate.test.mjs && node android-app/src/test/ads-consent.test.mjs && node android-app/src/test/monetisation.test.mjs
+      # The Play listing copy and art have hard limits (title 30, short
+      # description 80, full description 4000, icon 512x512, feature graphic
+      # 1024x500, 2-8 phone screenshots). A one-word edit to the copy can
+      # break the upload; this fails the build instead.
+      - name: Play listing within Console limits
+        run: cd android-app && node scripts/listing-check.mjs
 
   browser:
     name: browser (smoke + frame time)

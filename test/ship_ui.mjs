@@ -164,6 +164,35 @@ async function main() {
     check('the four-part paint survives a reload',
       JSON.stringify(await saved(page)) === JSON.stringify(want), JSON.stringify(await saved(page)));
 
+    /* --- backdrop dismiss, Android WebView order (see js/ui_ship.js) ---
+       The click the WebView synthesises after the opening tap lands on the
+       backdrop with no pointerdown of its own: the panel must stay. */
+    const synthClick = (p) => p.evaluate(() => {
+      document.getElementById('sh').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    await synthClick(page);
+    await page.waitForTimeout(150);
+    check('a click synthesised onto the backdrop right after opening does not close the panel',
+      (await page.locator('#sh').isVisible()) === true);
+    /* A pointerdown on the backdrop whose click never comes (Escape closes
+       first) must not stay armed and close the NEXT open on its own. */
+    await page.evaluate(() => {
+      document.getElementById('sh').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#sh[hidden]', { state: 'attached' });
+    await openPanel(page);
+    await synthClick(page);
+    await page.waitForTimeout(150);
+    check('a stale backdrop pointerdown from before an Escape does not close the next open',
+      (await page.locator('#sh').isVisible()) === true);
+    /* ...and a tap that genuinely starts on the backdrop still closes it. */
+    await page.locator('#sh').click({ position: { x: 5, y: 5 } });
+    await page.waitForTimeout(200);
+    check('a tap that starts on the backdrop still closes the panel',
+      (await page.locator('#sh').isVisible()) === false);
+    await openPanel(page);
+
     /* --- the crown preview --- */
     const gold = await ctx.newPage();
     gold.on('pageerror', e => errors.push(e.message));

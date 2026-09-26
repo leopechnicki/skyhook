@@ -61,7 +61,7 @@ async function main() {
   }
 
   // 2. native bridge modules
-  for (const f of ['skyhook-native.js', 'ad-gate.mjs', 'ads.mjs', 'billing.mjs']) {
+  for (const f of ['skyhook-native.js', 'monetisation.mjs', 'ad-gate.mjs', 'ads.mjs', 'billing.mjs']) {
     await fs.copyFile(path.join(nativeDir, f), path.join(wwwDir, f));
   }
 
