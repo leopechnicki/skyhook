@@ -60,6 +60,7 @@ function pngSize(file) {
    screenshot that has an alpha channel, so those must be 2. */
 function pngColourType(file) {
   const b = fs.readFileSync(file);
+  if (b.length < 26) return -1;
   return b.readUInt8(25);
 }
 
@@ -108,16 +109,16 @@ for (const [file, { size: [w, h], alpha }] of Object.entries(IMAGES)) {
 }
 
 const shotsDir = path.join(LISTING, 'screenshots');
-const shots = fs.existsSync(shotsDir) ? fs.readdirSync(shotsDir).filter(f => /^phone-\d\d-.*\.png$/.test(f)) : [];
+const shots = fs.existsSync(shotsDir) ? fs.readdirSync(shotsDir).filter(f => /^phone-\d\d-.*\.(png|jpe?g)$/i.test(f)) : [];
 check('at least 2 and at most 8 phone screenshots', shots.length >= 2 && shots.length <= 8, shots.length + ' found');
 check('at least 4 phone screenshots (Play promotion eligibility)', shots.length >= 4, shots.length + ' found');
 for (const f of shots) {
   const p = path.join(shotsDir, f);
-  const s = pngSize(p);
+  const s = imageSize(p);
   const ok = s && s[0] >= 320 && s[0] <= 3840 && s[1] >= 320 && s[1] <= 3840 && Math.max(s[0], s[1]) / Math.min(s[0], s[1]) <= 2;
-  check('screenshot ' + f + ' within Play bounds', ok, s ? s.join('x') : 'not a PNG');
-  check('screenshot ' + f + ' is 9:16 at >= 1080x1920 (promotion eligible)', !!s && s[0] >= 1080 && s[1] * 9 === s[0] * 16, s ? s.join('x') : 'not a PNG');
-  check('screenshot ' + f + ' has no alpha channel (24-bit PNG)', pngColourType(p) === 2, 'colour type ' + pngColourType(p));
+  check('screenshot ' + f + ' within Play bounds', ok, s ? s.join('x') : 'not a readable PNG/JPEG');
+  check('screenshot ' + f + ' is 9:16 at >= 1080x1920 (promotion eligible)', !!s && s[0] >= 1080 && s[1] * 9 === s[0] * 16, s ? s.join('x') : 'unreadable');
+  if (/\.png$/i.test(f)) check('screenshot ' + f + ' has no alpha channel (24-bit PNG)', pngColourType(p) === 2, 'colour type ' + pngColourType(p));
   check('screenshot ' + f + ' under 8 MB', fs.statSync(p).size < 8 * 1024 * 1024, fs.statSync(p).size + ' bytes');
 }
 

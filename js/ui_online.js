@@ -188,6 +188,10 @@
   /* ---------------------------------------------------------------- state */
   var game = null;
   var open = false;
+  /* Backdrop-dismiss guard, see the pointerdown/click wiring below. Reset
+     on every open/close so a pointerdown that never got its click (Escape,
+     pointercancel) cannot arm the next open. */
+  var downOnBackdrop = false;
   var mode = 'signin';        // a key of MODES
   var busy = false;
   var lastFocus = null;
@@ -601,6 +605,7 @@
   function openOverlay(view) {
     if (!wired || open) return;
     open = true;
+    downOnBackdrop = false;
     lastFocus = doc.activeElement;
     el.ol.hidden = false;
     el.ol.setAttribute('aria-hidden', 'false');
@@ -634,6 +639,7 @@
   function closeOverlay() {
     if (!wired || !open) return;
     open = false;
+    downOnBackdrop = false;
     el.ol.hidden = true;
     el.ol.setAttribute('aria-hidden', 'true');
     el['ol-password'].value = '';
@@ -1062,10 +1068,13 @@
        the board could not be opened by touch at all. Playwright's mouse
        click keeps the target the pointer went down on, so no browser test
        saw it; the emulator did (android-app/PLAYSTORE_READY_REPORT.md). */
-    var downOnBackdrop = false;
+    /* Without Pointer Events (WebView < Chromium 55, old Safari) nothing
+       would ever arm the guard, so fall back to the plain click there. */
+    var hasPointerEvents = (typeof PointerEvent === 'function');
     el.ol.addEventListener('pointerdown', function (e) { downOnBackdrop = (e.target === el.ol); });
+    el.ol.addEventListener('pointercancel', function () { downOnBackdrop = false; });
     el.ol.addEventListener('click', function (e) {
-      var armed = downOnBackdrop;
+      var armed = downOnBackdrop || !hasPointerEvents;
       downOnBackdrop = false;
       if (e.target === el.ol && armed) closeOverlay();
     });

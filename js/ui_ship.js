@@ -64,6 +64,9 @@
   var game = null;
   var open = false;
   var wired = false;
+  /* Backdrop-dismiss guard (see the click wiring); reset on open/close so a
+     pointerdown that never got its click cannot arm the next open. */
+  var downOnBackdrop = false;
   var lastFocus = null;
   var part = 'body';         // the part the swatch grid is currently painting
   var tabs = [];             // one per part
@@ -400,6 +403,7 @@
   function openPanel() {
     if (!wired || open) return;
     open = true;
+    downOnBackdrop = false;
     lastFocus = doc.activeElement;
     el.sh.hidden = false;
     el.sh.setAttribute('aria-hidden', 'false');
@@ -414,6 +418,7 @@
   function closePanel() {
     if (!wired || !open) return;
     open = false;
+    downOnBackdrop = false;
     el.sh.hidden = true;
     el.sh.setAttribute('aria-hidden', 'true');
     try { if (lastFocus && lastFocus.focus) lastFocus.focus(); } catch (e) { /* ignore */ }
@@ -519,10 +524,11 @@
        panel is targeted at whatever is under the finger by then. Today the
        panel covers every CUSTOMISE button, so that click lands on the panel
        and is ignored; the guard keeps it that way when the layout moves. */
-    var downOnBackdrop = false;
+    var hasPointerEvents = (typeof PointerEvent === 'function');
     el.sh.addEventListener('pointerdown', function (e) { downOnBackdrop = (e.target === el.sh); });
+    el.sh.addEventListener('pointercancel', function () { downOnBackdrop = false; });
     el.sh.addEventListener('click', function (e) {
-      var armed = downOnBackdrop;
+      var armed = downOnBackdrop || !hasPointerEvents;
       downOnBackdrop = false;
       if (e.target === el.sh && armed) closePanel();
     });

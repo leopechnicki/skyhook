@@ -36,6 +36,10 @@
   .back { display: inline-block; margin-top: 40px; padding: 10px 22px; border-radius: 12px;
     border: 2px solid rgba(53,230,255,0.55); background: rgba(53,230,255,0.10);
     color: #fff; text-decoration: none; font-weight: 800; letter-spacing: 1px; }
+  @media (max-width: 480px) {
+    main { padding: 24px 14px 48px; }
+    th, td { padding: 6px 5px; font-size: 14px; }
+  }
 </style>
 </head>
 <body>
@@ -83,14 +87,19 @@
     <tr><td>Your sign-in session, if you signed in</td><td>So you stay signed in. Removed when you sign out.</td></tr>
     <tr><td>A run waiting to be submitted, if you were offline</td><td>So a score is not lost when the network is. Sent the next time you are online and signed in.</td></tr>
   </table>
-  <p>None of this leaves the device unless you sign in. Uninstalling the app
-    or clearing the site's data removes all of it.</p>
+  <p>None of this is sent to us. If you have Android's app backup switched
+    on, Android may include the app's local data in your own Google backup,
+    as it does for any app that allows backup; we never see that backup.
+    Uninstalling the app or clearing the site's data removes all of it.</p>
 
   <h2>3. Data sent to our server (only with an account)</h2>
   <p>The optional global leaderboard is hosted on
     <a href="https://supabase.com/privacy" rel="noopener">Supabase</a>
-    (project region: EU, Frankfurt). Nothing is sent until you tap
-    <em>Sign in / create account</em>.</p>
+    (project region: EU, Frankfurt). No personal data is sent until you tap
+    <em>Sign in / create account</em>. Opening the leaderboard as a guest
+    only requests the public top list from that server; like any web
+    request it shows the server your IP address for the moment it is served,
+    and the game stores nothing about it.</p>
   <table>
     <tr><th>Data</th><th>When</th><th>What it is used for</th></tr>
     <tr><td>Email address and password</td><td>Creating an account or signing in</td>
@@ -113,8 +122,8 @@
     <li>No advertising identifier, no device identifier, no fingerprinting.</li>
     <li>No analytics or crash-reporting SDK. No Google Analytics, no Firebase.</li>
     <li>No location, contacts, camera, microphone, photos or files. The
-      Android app declares <code>INTERNET</code> and
-      <code>ACCESS_NETWORK_STATE</code> (the leaderboard), plus
+      Android app declares <code>INTERNET</code> (the leaderboard) and
+      <code>ACCESS_NETWORK_STATE</code>, plus
       <code>WAKE_LOCK</code> and <code>FOREGROUND_SERVICE</code>, which are
       pulled in by a bundled Google library that the game never starts. None
       of these is a runtime permission and none gives access to your

@@ -77,7 +77,7 @@ input.
 | `12-staging-run` | `0a0a8e3ca1d9121d` (`staging_06_run_mid.png`) | Mid-run with the yellow RELEASE cue and the launch line. |
 | `13-staging-game-over` | `36c2d0174f7c5009` (`staging_09_gameover.png`) | Game over, guest. |
 | `14-staging-auth-form` | `09a83eaecd2a43d0` (`staging_13_auth_form.png`) | LEADERBOARD -> SIGN IN opens the email + password form inside the WebView. |
-| `15-staging-auth-filled` | `26087e8c5456c965` (`staging_14_auth_filled.png`) | Fields filled with the staging test user (`playtest_droid`, created on staging for this run; the credentials live in `~/.skyhook/staging_test_user.txt`, outside the repo). |
+| `15-staging-auth-filled` | frame withheld from the repo (it showed the test account's email; original `staging_14_auth_filled.png`, `26087e8c5456c965`) | Fields filled with the staging test user (`playtest_droid`, created on staging for this run; the credentials live in `~/.skyhook/staging_test_user.txt`, outside the repo). |
 | `16-staging-signed-in` | `71d249dcd0043965` (`staging_15_signed_in.png`) | Submit -> "Signed in as playtest_droid", Change username / Change password links, SIGN OUT. `game.online.signedIn === true` read over CDP. |
 | `17-staging-signed-run` | `39505676cc9271d3` (`staging_16_signed_run.png`) | A run while signed in. |
 | `18-staging-board-signed-in` | `91af0154ae3527f7` (`staging_18_board_signed.png`) | After that run the board shows `#2 playtest_droid 136` under `#1 leo 1800`, "Your best: #2 with 136" - the run was submitted from the WebView and ranked by the server. |

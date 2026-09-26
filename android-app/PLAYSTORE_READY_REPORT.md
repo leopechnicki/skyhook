@@ -16,7 +16,7 @@ the upload keystore and its passwords live only in `C:\Users\leops\.skyhook\`
 |---|---|---|
 | playstore-sync | `0be41a5` | `www/` and `assets/public/` rebuilt from the current game (`scripts/sync-web.mjs`), `game.js` in the wrapper byte-identical to the web game |
 | playstore-adfree | `790ea7a` | v1 ad-free: `ADS_ENABLED = false`, AdMob / Billing wiring inert, `AD_ID`, `ADSERVICES`, `BILLING` permissions removed from the merged manifest |
-| playstore-signing | `ce0e906` | upload keystore outside the repo, `build.gradle` signs when the properties file exists, versionCode 2 / 1.1.0, targetSdk 36 |
+| playstore-signing | `ce0e906` | upload keystore outside the repo, `build.gradle` signs when the properties file exists, versionCode 2 / 1.1.0; targetSdk 36 (already set on main) re-checked against Play's new-app requirement |
 | playstore-test | `e1e5a63` | release build run on an API 35 emulator, staging sign-in proven, WebView backdrop-tap bug fixed + regression test |
 | playstore-assets | `8c9ad4d` | icon, feature graphic, six real screenshots, listing copy, launcher art, `listing-check.mjs` in CI |
 | playstore-policy | `62acebe` | `privacy.html` on the site, `PLAY_CONSOLE_ANSWERS.md` |
@@ -44,6 +44,7 @@ Capacitor placeholder.
 $ jarsigner -verify skyhook-1.1.0-vc2-release-signed.aab
 jar verified.
 The signer certificate will expire on 2054-02-10.
+   (also a "signatures that do not include a timestamp" warning - harmless, Play does not need one)
    (plus informational "Entry ... is signed in JarFile but is not signed in JarInputStream"
     lines for the .properties resources the Play Services libraries ship - harmless,
     and the same lines appear for every AAB that bundles them)
@@ -166,7 +167,16 @@ saved, so merge before filling in the Console.
    new AAB needs `versionCode` incremented in `android/app/build.gradle`
    before `./gradlew bundleRelease`.
 4. **Rewarded-continue ads** stay unbuilt per the monetisation decision in
-   `RELEASE-CHECKLIST.md`; the AdMob wiring is inert and tested.
+   `RELEASE-CHECKLIST.md`; the AdMob wiring is inert and tested. The Google
+   Mobile Ads SDK is still bundled (with the test app id), so Play's SDK
+   index will list it; "contains ads = No" stays correct because no ad is
+   ever requested and `AD_ID` is removed.
+5. **Two things for Leo to confirm in dashboards, not in code:** the
+   production Supabase project's region (the policy says EU, Frankfurt -
+   check Project Settings), and whether Android Auto Backup should stay on
+   (`android:allowBackup="true"`, Capacitor's default; the policy now says
+   local data may be in the player's own Google backup). Setting it to
+   false would also drop the local best score on reinstall.
 
 ## 6. What only Leo can do (in this order)
 

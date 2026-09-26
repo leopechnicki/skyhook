@@ -19,13 +19,13 @@ production config, no staging banner) on the API 35 Pixel 6 emulator
 
 ## Full description (max 4000)
 
-    SKYHOOK is a one-touch arcade climber. Your rocket is tethered to a planet and swinging around it. Tap to fire the thruster and let go: you fly straight, and the next planet or star you pass near catches you. Release at the right moment to line up the next hook. Miss everything and you drift out of the column - that is the only way a run ends.
+    SKYHOOK is a one-touch arcade climber. Your rocket is tethered to a planet and swinging around it. Tap to fire the thruster and let go: you fly straight, and the next planet or star you pass near catches you. Release at the right moment to line up the next hook. Miss everything and you drift out of the column - or, higher up, clip a meteoroid - and the run ends.
 
     ONE INPUT, REAL ORBITS
     Every body has its own mass and radius, and your orbit follows Kepler's laws from them. A star spins you faster and slings you almost twice as far as a small planet, so the same tap does very different things depending on what you are holding. The tighter you catch a body, the faster it spins you. The hull always points where you will fly, so the launch line is readable off the ship itself.
 
     CLIMB
-    The camera only ever goes up. Every hook raises the floor beneath you, and the sky gets heavier the higher you go: more stars, tighter release windows, amber planets that crumble under you after a moment, and tumbling meteoroids from the twelfth body up. Idling on an orbit is always safe. There is no timer. Only sloppy releases end a run.
+    The camera only ever goes up. Every hook raises the floor beneath you, and the sky gets heavier the higher you go: more stars, tighter release windows, amber planets that crumble under you after a moment, and tumbling meteoroids from the twelfth body up. Idling on an orbit is always safe. There is no timer. Only a sloppy release or a meteoroid ends a run.
 
     SCORE
     Tight hooks score more and build a combo multiplier up to x9. Gold shards drift between bodies for the brave. Your best score is saved on your device.

@@ -1,7 +1,7 @@
 # SKYHOOK - Android (Capacitor wrapper)
 
 Wraps the SKYHOOK web game (in the parent folder, live at
-https://leopechnicki.github.io/skyhook/) as an Android app, adding:
+https://skyhookplay.com/) as an Android app, adding:
 
 - **v1 is AD-FREE** (Leo, 2026-09-22). `src/native/monetisation.mjs` has
   `ADS_ENABLED = false`, and while it does the bridge never constructs AdMob,
