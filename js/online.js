@@ -250,7 +250,7 @@
       /* A backend whose schema predates section 12: PostgREST answers 404
          PGRST202 for the missing function. The policy page has the email
          route for exactly this case. */
-      PGRST202: 'Deleting from the game is not available yet - see the privacy policy to ask by email. Your account was not deleted.',
+      PGRST202: 'Deleting from the game is not available right now. Email leopsantos@hotmail.com to delete it. Your account was not deleted.',
       network: 'Cannot reach the server. Your account was not deleted.'
     }
   };

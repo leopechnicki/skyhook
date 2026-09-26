@@ -180,6 +180,9 @@ let moderationArmed = false;
    PostgREST really answers; the mock counts every call so "nothing was sent
    before the confirm" is a number, not an impression. */
 let selfDeleteFailure = null;
+/* Milliseconds to hold the next successful delete, so a test can act while
+   the request is in flight. */
+let selfDeleteDelayMs = 0;
 
 function handleApi(req, res, body) {
   const url = req.url.replace(/^\/api/, '');
@@ -237,6 +240,12 @@ function handleApi(req, res, body) {
       const f = selfDeleteFailure;
       selfDeleteFailure = null;
       return json(f.status, f.body);
+    }
+    if (selfDeleteDelayMs) {
+      const ms = selfDeleteDelayMs;
+      selfDeleteDelayMs = 0;
+      setTimeout(() => json(200, true), ms);
+      return;
     }
     return json(200, true);
   }
@@ -1378,9 +1387,23 @@ async function main() {
       /* ---- the real thing ---- */
       await dpage.evaluate(`localStorage.setItem('skyhook.pendingRun', JSON.stringify({ score: 999, hooks: 9, altitude: 90, durationMs: 20000 }))`);
       const sentBefore = delCalls().length;
+      selfDeleteDelayMs = 1500;
       await dpage.locator('#ol-delete-account').click();
       await wait(700);
       await dpage.locator('#ol-delete-yes').click();
+      await wait(200);
+      /* While the server is deciding, every way out is shut: the answer
+         must not land in a hidden panel. */
+      await dpage.keyboard.press('Escape');
+      await dpage.evaluate(`document.getElementById('ol-close').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+      await dpage.evaluate(`document.getElementById('ol-signout').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+      await dpage.evaluate('window.SK.UI.close()');
+      await wait(100);
+      check('while the delete is in flight the panel cannot be left (Escape, X, sign out, SK.UI.close)',
+        (await dpage.locator('#ol').isVisible()) === true &&
+        (await dpage.locator('#ol-close').isDisabled()) === true &&
+        (await dpage.locator('#ol-delete-keep').isDisabled()) === true &&
+        /Deleting your account/.test(await dpage.locator('#ol-board-msg').textContent()));
       await dpage.waitForFunction('window.__SKYHOOK.game.online.signedIn === false', null, { timeout: 8000 });
       await wait(400);
       const sent = delCalls().slice(sentBefore);

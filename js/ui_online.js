@@ -642,7 +642,7 @@
   }
 
   function closeOverlay() {
-    if (!wired || !open) return;
+    if (!wired || !open || deleting) return;
     open = false;
     downOnBackdrop = false;
     closeDeleteConfirm();
@@ -935,6 +935,20 @@
    * when the strip opens AND again when "Yes" is pressed, because a run can
    * start in between and SK.UI.open() is a public handle. */
   var deleteTimer = null;
+  /* True only while the delete request is in flight. It is the one state
+     that must not be exitable: the X, a backdrop tap, Escape and SIGN OUT
+     would let the player leave while the server is still deciding, and the
+     answer - "deleted" or "not deleted" - would land in a hidden panel. */
+  var deleting = false;
+
+  function setDeleting(on) {
+    deleting = on;
+    setBusy(on);
+    el['ol-delete-yes'].disabled = on;
+    el['ol-delete-keep'].disabled = on;
+    el['ol-close'].disabled = on;
+    if (el['ol-signout']) el['ol-signout'].disabled = on;
+  }
 
   /* Returns whether a strip was actually open, so Escape knows whether it
      consumed the key. */
@@ -973,20 +987,16 @@
   function onDeleteYes() {
     if (busy) return;
     if (!canEditAccount()) { closeDeleteConfirm(); refuseAccountEdit(); return; }
-    setBusy(true);
-    el['ol-delete-yes'].disabled = true;
-    el['ol-delete-keep'].disabled = true;
+    setDeleting(true);
     text(el['ol-board-msg'], 'Deleting your account...');
     Online.deleteMyAccount().then(function () {
-      setBusy(false);
-      el['ol-delete-keep'].disabled = false;
+      setDeleting(false);
       syncGame();
       showBoard('Your account is deleted: your name, your sign-in and every score ' +
         'you had on the board are gone. You are playing as a guest.');
       try { el['ol-signin'].focus(); } catch (e) { /* ignore */ }
     }, function (err) {
-      setBusy(false);
-      el['ol-delete-keep'].disabled = false;
+      setDeleting(false);
       closeDeleteConfirm();
       /* Online.deleteMyAccount changed nothing locally on failure, so the
          player is still signed in and the line can say so. */
@@ -997,6 +1007,7 @@
   }
 
   function onSignOut() {
+    if (deleting) return;
     Online.signOut().then(function () {
       syncGame();
       showBoard();
@@ -1168,6 +1179,7 @@
     doc.addEventListener('keydown', function (e) {
       if (!open) return;
       if (e.key === 'Escape') {
+        if (deleting) return;
         /* An open moderation strip is the innermost thing - close that. */
         if (modOpen) { closeMod(); return; }
         /* ...and so is the delete-account question: Escape answers "keep". */
