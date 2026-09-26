@@ -1,13 +1,14 @@
 # SKYHOOK - Google Play readiness report
 
-Branch `crew/feat/playstore-ready`, 2026-09-25, updated 2026-09-26 for
-**vc3 / 1.1.1** (in-game account deletion). Everything that can be done
+Written on branch `crew/feat/playstore-ready` on 2026-09-25; updated
+2026-09-26 for **vc3 / 1.1.1** (in-game account deletion) and merged to
+`main` through PR #34 after review. Everything that can be done
 for a Play release **without Leo's identity, Leo's money or a Google account**
 has been done and is verified below with the commands and their output. What
 is left is a short list at the very end, with a time estimate per item.
 
 Nothing was published, no account of any kind was created, no money was
-spent, `main` was not pushed to, `.env` / `config.json` were not touched, and
+spent, `main` only changed through reviewed PRs, `.env` / `config.json` were not touched, and
 the upload keystore and its passwords live only in `C:\Users\leops\.skyhook\`
 (outside every git tree).
 
@@ -197,45 +198,40 @@ Estimated hands-on minutes, excluding Google's own waiting time. Updated
 2026-09-26: the developer account already exists and the privacy page is
 live, so the account sign-up and "merge this PR" steps are gone.
 
-1. **Open the developer account**: play.google.com/console in your Chrome ->
+1. **Rotate the staging database password** (Supabase -> staging project ->
+   Database settings -> reset). Independent of everything below. **3 min.**
+2. **Open the developer account**: play.google.com/console in your Chrome ->
    choose **Pechnicki** -> check the home page for any "verify your
    identity / phone / device" task and finish it if one is open (Crew could
    not see this page). **5 min**, plus Google's check if one was pending.
-2. **Create the app**: "Create app" -> name `SKYHOOK`, English (UK), Game,
+3. **Create the app**: "Create app" -> name `SKYHOOK`, English (UK), Game,
    Free, tick both declarations yourself. **3 min.** (Section 1 of
    `PLAY_CONSOLE_ANSWERS.md`.)
-3. **Create a reviewer account on production** for the "App access" answer:
+4. **Create a reviewer account on production** for the "App access" answer:
    open the game at skyhookplay.com, sign up with a throwaway email, confirm
    it, and paste that email + password into the Console (section 3 of
    `PLAY_CONSOLE_ANSWERS.md`). **5 min.**
-4. **Fill the Store listing and App content pages** by pasting from
+5. **Fill the Store listing and App content pages** by pasting from
    `LISTING.md` and `PLAY_CONSOLE_ANSWERS.md` and uploading
    `icon-512.png`, `feature-graphic-1024x500.jpg` and the six screenshots
    from `android-app/store-listing/`. Privacy policy URL:
    `https://skyhookplay.com/privacy.html` (live). **25 min.**
-5. **Upload the AAB to Internal testing**: Release -> Testing -> Internal
+6. **Upload the AAB to Internal testing**: Release -> Testing -> Internal
    testing -> Create release -> accept Play App Signing (Google-generated
    key) -> upload `C:\Users\leops\.skyhook\out\skyhook-1.1.1-vc3-release-signed.aab`
    (sha256 `9ed8ca11...adb97`, release name `1.1.1 (3)`) -> paste the
    release notes from section 16 -> add `leopsantos@hotmail.com` as a tester
    -> Save and publish -> install from the opt-in link on your phone.
    **10 min**, plus Play's processing (minutes to a few hours).
-   Steps 2, 4 and 5 can be done by Crew instead if you fully close Chrome
+   Steps 3, 5 and 6 can be done by Crew instead if you fully close Chrome
    first (so the profile is not locked) and say "go" - you would still tick
-   the step-2 declarations yourself.
-6. **Back up `C:\Users\leops\.skyhook\`** (keystore + `keystore.properties`)
+   the step-3 declarations yourself.
+7. **Back up `C:\Users\leops\.skyhook\`** (keystore + `keystore.properties`)
    somewhere private, not in any repo. **2 min.**
-7. **Start the closed test clock**: Play requires personal accounts created
+8. **Start the closed test clock**: Play requires personal accounts created
    after Nov 2023 to run a closed test with **12 testers for 14 days** before
    production access. Promote the internal release to Closed testing and
    invite 12 people. **15 min** to set up; the 14 days run on their own.
-8. **Rotate the staging database password** (Supabase -> staging project
-   `qlaenczyhzjkmqkraiup` -> Database settings -> reset password, then put
-   the new one in `scout/data/skyhook_staging_supabase.json`): on
-   2026-09-26 a diagnostic printed the staging connection string into a
-   local Crew log. Nothing was committed or sent anywhere; production was
-   not affected. **3 min.**
-
 Total hands-on: roughly **70 minutes**; the 14-day closed test is the long pole.
 
 Crew Leo Agile dev team, 2026-09-25, updated 2026-09-26.
