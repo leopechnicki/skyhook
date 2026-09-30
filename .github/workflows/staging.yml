@@ -136,7 +136,7 @@ jobs:
             || { echo "FAIL: $cfg pairs project '$stag_ref' with an anon key for '$key_ref'"; exit 1; }
           echo "OK: '$BRANCH' builds against staging's own project, not production's"
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (== v1 == 1.6) as of 2026-04-08 - see deploy.yml for why
 
       # --ha=false: one machine. From zero, a deploy creates the machines it
       # needs; without this flag Fly creates two for redundancy nobody testing
@@ -271,7 +271,7 @@ jobs:
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_STAGING_API_TOKEN }}
     steps:
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (== v1 == 1.6) as of 2026-04-08 - see deploy.yml for why
 
       # Zero machines. The app, its IPs, its certificate and its release
       # history stay, so `up` needs nothing recreated.

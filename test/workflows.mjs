@@ -11,8 +11,9 @@
  *
  * WHAT IS ACTUALLY AT STAKE
  * -------------------------
- * `deploy` is the only job that can read FLY_API_TOKEN, and that token can
- * deploy, scale, read secrets from and destroy every app in the Fly org. A
+ * `deploy` (with `preflight`) is the only job that can read FLY_API_TOKEN, and
+ * that token can deploy, scale, read secrets from and destroy every app in the
+ * Fly org; staging.yml's `up`/`down` hold FLY_STAGING_API_TOKEN likewise. A
  * third-party action referenced by a MUTABLE ref (a branch, or a tag - tags
  * can be force-pushed to a different commit) is arbitrary code that the
  * upstream owner may change at any time, running in the same job as that
@@ -131,28 +132,74 @@ for (const file of files) {
   }
 }
 
-/* ------------------------------------------------------------- 4. the token
- * The specific thing this whole file is defending. If FLY_API_TOKEN ever
- * appears in a job other than `deploy`, the blast radius of every action in
- * that job just became the Fly org. */
-{
-  const deploy = strip(fs.readFileSync(path.join(DIR, 'deploy.yml'), 'utf8'));
-  /* Jobs are the 2-space keys under `jobs:`. */
-  const body = deploy.slice(deploy.search(/^jobs:\s*$/m));
-  const jobs = [...body.matchAll(/^ {2}([A-Za-z0-9_-]+):\s*$/gm)].map(m => m[1]);
-  const at = name => body.search(new RegExp(`^ {2}${name}:\s*$`, 'm'));
+/* ------------------------------------------------------------- 4. the tokens
+ * The specific thing this whole file is defending. Each Fly token may be read
+ * only by the jobs listed here, in the workflow listed here. If one ever
+ * appears anywhere else, the blast radius of every action in that job just
+ * became a Fly org. Every workflow is scanned, not just the ones named, so a
+ * NEW workflow that reaches for a Fly secret fails until it is added here on
+ * purpose.
+ *
+ *   deploy.yml  - `preflight` only tests FLY_API_TOKEN for emptiness to decide
+ *                 whether to deploy at all; `deploy` hands it to flyctl.
+ *   staging.yml - `up` and `down` both drive flyctl against skyhook-staging,
+ *                 with a separate FLY_STAGING_API_TOKEN (never production's).
+ */
+const TOKEN_READERS = {
+  FLY_API_TOKEN:         { 'deploy.yml':  ['preflight', 'deploy'] },
+  FLY_STAGING_API_TOKEN: { 'staging.yml': ['up', 'down'] },
+};
 
-  const holders = jobs.filter(name => {
-    const start = at(name);
-    const next = jobs.map(at).filter(i => i > start).sort((a, b) => a - b)[0] ?? body.length;
-    return /secrets\.FLY_API_TOKEN/.test(body.slice(start, next));
-  });
+/* Jobs are the 2-space keys under `jobs:`; returns [{name, text}]. */
+const jobsOf = src => {
+  const at = src.search(/^jobs:\s*$/m);
+  if (at < 0) return [];
+  const body = src.slice(at);
+  const heads = [...body.matchAll(/^ {2}([A-Za-z0-9_-]+):\s*$/gm)];
+  return heads.map((m, i) => ({
+    name: m[1],
+    text: body.slice(m.index, i + 1 < heads.length ? heads[i + 1].index : body.length),
+  }));
+};
 
-  /* `preflight` only tests the secret for emptiness to decide whether to
-     deploy at all; `deploy` is the one that hands it to flyctl. */
-  check('FLY_API_TOKEN is read only by preflight and deploy',
-    holders.length > 0 && holders.every(j => j === 'preflight' || j === 'deploy'),
+for (const [secret, allowed] of Object.entries(TOKEN_READERS)) {
+  const re = new RegExp(`secrets\\.${secret}\\b`);
+  const holders = [];
+  for (const file of files) {
+    const src = strip(fs.readFileSync(path.join(DIR, file), 'utf8'));
+    for (const job of jobsOf(src)) if (re.test(job.text)) holders.push(`${file}:${job.name}`);
+    /* A secret read at workflow level (top-level env:) would hand it to
+       every job at once - outside any job, so jobsOf never sees it. */
+    const head = src.slice(0, Math.max(0, src.search(/^jobs:\s*$/m)));
+    if (re.test(head)) holders.push(`${file}:(workflow-level)`);
+  }
+  const ok = holders.length > 0 &&
+    holders.every(h => { const [f, j] = h.split(':'); return (allowed[f] || []).includes(j); });
+  const want = Object.entries(allowed).map(([f, js]) => js.map(j => `${f}:${j}`).join(', ')).join(', ');
+  check(`${secret} is read only by ${want}`, ok,
     `jobs reading it: ${holders.join(', ') || '(none - did the secret name change?)'}`);
+}
+
+/* ------------------------------------------------------ 5. one pin, not two
+ * The same third-party action is used in more than one workflow (setup-flyctl
+ * is in deploy.yml AND staging.yml). A deliberate bump that re-resolves one
+ * and forgets the other leaves two different commits of the same code
+ * holding two different Fly tokens - still "pinned", so check 1 stays green.
+ * Every use of a given third-party action must name the same SHA. */
+{
+  const byAction = new Map();
+  for (const file of files) {
+    const src = strip(fs.readFileSync(path.join(DIR, file), 'utf8'));
+    for (const m of src.matchAll(/^\s*(?:-\s+)?uses:\s*([^@\s]+)@(\S+)/gm)) {
+      const [action, ref] = [m[1], m[2]];
+      if (action.startsWith('./') || FIRST_PARTY.has(action.split('/')[0])) continue;
+      if (!byAction.has(action)) byAction.set(action, new Set());
+      byAction.get(action).add(ref);
+    }
+  }
+  for (const [action, refs] of byAction)
+    check(`${action}: every workflow pins the same commit`, refs.size === 1,
+      `refs in use: ${[...refs].join(', ')}`);
 }
 
 console.log(fails ? `\n${fails} FAILED` : '\nall workflow supply-chain checks passed');
