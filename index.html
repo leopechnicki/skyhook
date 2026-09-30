@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SKYHOOK has moved</title>
+
+<!-- SKYHOOK - GitHub Pages redirect stub.
+     Source of truth: pages/index.html on main. Published from the `gh-pages`
+     branch; see docs/DEPLOY.md "Retiring the Pages mirror".
+
+     This file is NOT the game. The game lives at https://skyhookplay.com/ and
+     is served by Fly. This exists only so that every link already shared as
+     https://leopechnicki.github.io/skyhook/ keeps working forever.
+
+     Three redirect mechanisms, in the order they fire, because no single one
+     covers every case:
+
+       1. The inline script below. It is the only one that PRESERVES the query
+          string and the hash, so ?seed=123 still starts that world and a
+          Supabase auth callback (#access_token=... or ?code=...) still lands
+          in the game's own handler instead of being silently dropped on the
+          floor. location.replace, not location.href, so the stub does not
+          become a back-button trap.
+       2. <meta http-equiv="refresh"> - the no-JavaScript fallback. It CANNOT
+          carry the query or the hash. That is an accepted loss: the game does
+          not run without JavaScript either, so a client that ignores the
+          script was never going to play the seed it asked for.
+       3. <link rel="canonical"> plus the visible link - what a crawler that
+          executes neither reads, and what consolidates the search ranking of
+          the old URL onto the new one instead of splitting it.
+
+     The script is placed BEFORE the meta refresh deliberately: a synchronous
+     inline script runs while the parser is still ahead of the meta tag, so the
+     query-preserving path wins the race in every JS-enabled browser. Reorder
+     these two and ?seed= starts silently disappearing. -->
+
+<script>
+/* The other stub in pages/ carries this block verbatim. test/pages_stub.mjs
+   compares the two byte for byte and fails if they drift apart. */
+(function () {
+  var HOME = 'https://skyhookplay.com/';
+  var BASE = '/skyhook/';
+  try {
+    var l = window.location;
+    var path = l.pathname || '';
+    /* Everything after the project-pages base is a real subpath and belongs on
+       the new origin too, so an old deep link lands on its counterpart rather
+       than dumping everyone on the front page. */
+    var rest = path.indexOf(BASE) === 0 ? path.slice(BASE.length) : '';
+    l.replace(HOME + rest + (l.search || '') + (l.hash || ''));
+  } catch (e) {
+    window.location.href = HOME;
+  }
+})();
+</script>
+
+<meta http-equiv="refresh" content="0; url=https://skyhookplay.com/">
+<link rel="canonical" href="https://skyhookplay.com/">
+
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #060713;
+    color: #cfd6ff;
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 24px;
+  }
+  h1 { font-size: 20px; letter-spacing: .18em; color: #35e6ff; margin: 0 0 12px; }
+  a { color: #35e6ff; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>SKYHOOK HAS MOVED</h1>
+    <p>The game now lives at <a href="https://skyhookplay.com/">skyhookplay.com</a>.</p>
+    <p>Taking you there now. If nothing happens,
+       <a href="https://skyhookplay.com/">tap here</a>.</p>
+  </main>
+</body>
+</html>
