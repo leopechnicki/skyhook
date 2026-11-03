@@ -11,13 +11,18 @@ Credentials are never stored in this repo. The script wants:
 
     SUPABASE_PAT        a personal access token (sbp_...) with write access to
                         this project's auth config
-    SUPABASE_PROJECT_REF  the project ref
+    SUPABASE_PROJECT_REF  the project ref (optional, but checked - see --ref)
 
 Either from the environment, or from a key=value file pointed at by
 SKYHOOK_SECRETS (Leo's machine: C:/Users/leops/skyhook_supabase.local.txt).
 
-    python supabase/templates/apply.py            # apply, then read back
-    python supabase/templates/apply.py --check    # read back only, change nothing
+    python supabase/templates/apply.py --ref <ref>          # apply, then read back
+    python supabase/templates/apply.py --ref <ref> --check  # read back only, change nothing
+
+--ref is required. Production and staging are separate Supabase projects
+(docs/STAGING.md), so the target is typed on the command line, never taken
+silently from a secrets file. If the environment or the file also names a
+ref, the two must agree, or the script refuses before it sends anything.
 
 Both modes end by printing the live auth config and exit 0 only if the mail a
 player would receive right now is the one in this repo. Exit 1 means it is not
@@ -39,8 +44,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 API = "https://api.supabase.com/v1/projects/{ref}/config/auth"
 
 
-def load_secrets():
-    """Environment first, then the local key=value file. Never the repo."""
+def load_secrets(target):
+    """Environment first, then the local key=value file. Never the repo.
+
+    `target` is the --ref typed on the command line. A ref in the credentials
+    must match it: a secrets file left pointing at production must never turn
+    a staging run into a production PATCH, or the other way round.
+    """
     pat = os.environ.get("SUPABASE_PAT")
     ref = os.environ.get("SUPABASE_PROJECT_REF")
     path = os.environ.get("SKYHOOK_SECRETS", "C:/Users/leops/skyhook_supabase.local.txt")
@@ -53,13 +63,19 @@ def load_secrets():
             )
         pat = pat or kv.get("SUPABASE_PAT", "").strip()
         ref = ref or kv.get("PROJECT_REF", "").strip()
-    if not pat or not ref:
+    if not pat:
         sys.exit(
-            "Need SUPABASE_PAT and SUPABASE_PROJECT_REF (env, or a key=value file "
-            "at $SKYHOOK_SECRETS). Mint a token at "
-            "https://supabase.com/dashboard/account/tokens - do not commit it."
+            "Need SUPABASE_PAT (env, or a key=value file at $SKYHOOK_SECRETS). "
+            "Mint a token at https://supabase.com/dashboard/account/tokens - "
+            "do not commit it."
         )
-    return pat, ref
+    if ref and ref != target:
+        sys.exit(
+            "--ref %s does not match the project ref in the credentials (%s) - "
+            "refusing. Production and staging are separate projects; fix the "
+            "--ref or the credentials." % (target, ref)
+        )
+    return pat, target
 
 
 def body_to_send(html):
@@ -156,6 +172,11 @@ def report_live(cfg, subject, sending):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="read back only, change nothing")
+    ap.add_argument(
+        "--ref",
+        required=True,
+        help="the Supabase project to act on (staging first, then production)",
+    )
     args = ap.parse_args()
 
     with open(os.path.join(HERE, "recovery.html"), encoding="utf-8") as fh:
@@ -168,7 +189,8 @@ def main():
     if not validate(sending, subject):
         sys.exit("template failed validation - not sending")
 
-    pat, ref = load_secrets()
+    pat, ref = load_secrets(args.ref)
+    print("project: %s" % ref)
 
     if not args.check:
         status, _ = api(

@@ -12,9 +12,15 @@ The mail a player gets when they use `Forgot password?`.
 ## Applying it
 
 ```
-python supabase/templates/apply.py          # push, then read back
-python supabase/templates/apply.py --check  # read the live values, change nothing
+python supabase/templates/apply.py --ref <ref>          # push, then read back
+python supabase/templates/apply.py --ref <ref> --check  # read the live values, change nothing
 ```
+
+`--ref` is required. Production (`ievfcqnyrekdixxbsite`) and staging
+(`qlaenczyhzjkmqkraiup`) are separate projects (see `docs/STAGING.md`): apply to
+staging first, send yourself a reset mail there, then apply to production. If
+the credentials also name a ref and it is not the `--ref`, the script refuses
+before it sends anything.
 
 `--check` prints the live auth config - SMTP, rate limit, subject, body size -
 and exits `0` only when the mail a player receives is the one in this repo.
@@ -119,7 +125,8 @@ the current limit and below Resend's daily cap.
 ### Step 3 - push the template
 
 ```
-python supabase/templates/apply.py
+python supabase/templates/apply.py --ref qlaenczyhzjkmqkraiup   # staging first
+python supabase/templates/apply.py --ref ievfcqnyrekdixxbsite   # then production
 ```
 
 The PATCH that returned 400 above now succeeds, and `--check` flips to

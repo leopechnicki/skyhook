@@ -57,10 +57,12 @@ check('raw link is also printed as visible text (the plain-text fallback)',
   />\s*\{\{ \.ConfirmationURL \}\}\s*</.test(sent));
 check('no other auth endpoint is linked by hand',
   !/supabase\.co\/auth\/v1/.test(sent));
-check('no stale GitHub Pages URL', !sent.includes('leopechnicki.github.io'));
+check('no stale GitHub Pages URL', !/leopechnicki\.github\.io/i.test(sent));
+/* Compare the parsed host, not a substring: `includes('skyhookplay.com')`
+ * would also pass https://evil.example/?skyhookplay.com. */
+const hrefs = [...sent.matchAll(/href="(https?:\/\/[^"]+)"/g)].map(m => m[1]);
 check('the only non-template link is the live site',
-  (sent.match(/href="https?:\/\/[^"]+"/g) || []).every(h => h.includes('skyhookplay.com')),
-  (sent.match(/href="https?:\/\/[^"]+"/g) || []).join(' '));
+  hrefs.every(h => new URL(h).hostname === 'skyhookplay.com'), hrefs.join(' '));
 
 /* --------------------------------------------------- survives a mail client */
 check('no <script>', !/<script/i.test(sent));
